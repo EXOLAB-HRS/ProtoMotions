@@ -280,6 +280,9 @@ def main():
         accelerator=accelerator,
         devices=1,
         num_nodes=1,
+        # Single-device inference must not spin up a DDP/NCCL process group
+        # (the FabricConfig default is DDPStrategy). "auto" -> SingleDeviceStrategy.
+        strategy="auto",
         loggers=[],  # No loggers needed for inference
         callbacks=[],  # No callbacks needed for inference
     )
