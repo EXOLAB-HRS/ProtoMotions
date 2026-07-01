@@ -1031,6 +1031,8 @@ class IsaacLabSimulator(Simulator):
             return
         rgb = pv.get_rgb()
         if rgb is None:
+            # Annotator not yet populated (warm-up on the first render tick).
+            # Skip; the next frame captures normally.
             return
         imageio.imwrite(file_name, rgb)
 

@@ -139,6 +139,8 @@ class PerspectiveViewer(object):
         data = self.rgb_annotator.get_data()
         arr = np.asarray(data)
         if arr.size == 0:
+            # The RGB annotator buffer is empty until replicator has populated
+            # it once (typically only the very first render tick after attach).
             return None
         if arr.ndim == 3 and arr.shape[2] == 4:
             arr = arr[:, :, :3]
