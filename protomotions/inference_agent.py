@@ -135,6 +135,13 @@ AppLauncher = import_simulator_before_torch(args.simulator)
 import logging  # noqa: E402
 from pathlib import Path  # noqa: E402
 import torch  # noqa: E402
+
+# Opt-in cuDNN disable for GPUs whose driver is too old for the bundled
+# cuDNN (e.g. CUDA 12.8 wheels on a 535 driver). Convolutions then fall back
+# to native CUDA kernels. Set PROTOMOTIONS_DISABLE_CUDNN=1 to enable.
+import os as _os  # noqa: E402
+if _os.environ.get("PROTOMOTIONS_DISABLE_CUDNN", "0") == "1":
+    torch.backends.cudnn.enabled = False
 from protomotions.utils.hydra_replacement import get_class  # noqa: E402
 from protomotions.utils.fabric_config import FabricConfig  # noqa: E402
 from lightning.fabric import Fabric  # noqa: E402
