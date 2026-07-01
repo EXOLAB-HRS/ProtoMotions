@@ -300,6 +300,9 @@ def main():
     simulator_extra_params = {}
     if args.simulator == "isaaclab":
         app_launcher_flags = {"headless": args.headless, "device": str(fabric.device)}
+        # Offscreen recording needs the camera/replicator extensions loaded.
+        if getattr(simulator_config, "record_viewer", False):
+            app_launcher_flags["enable_cameras"] = True
         app_launcher = AppLauncher(app_launcher_flags)
         simulator_extra_params["simulation_app"] = app_launcher.app
 
