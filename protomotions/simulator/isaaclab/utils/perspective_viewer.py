@@ -23,9 +23,13 @@ class PerspectiveViewer(object):
     def __init__(self):
         self.viewport_api = None
         self.get_viewport_api()
-        _ = rep.create.render_product(
+        # Keep the render-product handle and attach an RGB annotator so we
+        # can read rendered pixels synchronously in headless mode.
+        self.render_product = rep.create.render_product(
             "/OmniverseKit_Persp", resolution=(500, 500)
-        )  # Lower resolution
+        )
+        self.rgb_annotator = rep.AnnotatorRegistry.get_annotator("rgb")
+        self.rgb_annotator.attach([self.render_product])
 
         # Disable advanced rendering features
         self.disable_advanced_rendering()
@@ -127,3 +131,15 @@ class PerspectiveViewer(object):
         camera_state.set_target_world(
             Gf.Vec3d(camera_target[0], camera_target[1], camera_target[2]), True
         )
+
+    def get_rgb(self):
+        """Return the latest rendered RGB frame as HxWx3 uint8, or None."""
+        import numpy as np
+
+        data = self.rgb_annotator.get_data()
+        arr = np.asarray(data)
+        if arr.size == 0:
+            return None
+        if arr.ndim == 3 and arr.shape[2] == 4:
+            arr = arr[:, :, :3]
+        return np.ascontiguousarray(arr).astype(np.uint8)

@@ -1024,21 +1024,15 @@ class IsaacLabSimulator(Simulator):
         Parameters:
             file_name (str): The filename for the saved image.
         """
-        import os
-        from omni.kit.viewport.utility import (
-            get_active_viewport,
-            capture_viewport_to_file,
-        )
+        import imageio.v2 as imageio
 
-        vp_api = get_active_viewport()
-        capture_viewport_to_file(vp_api, file_name)
-        # In headless scripted mode the app is not continuously rendering, so
-        # the asynchronous viewport capture never flushes to disk. Pump the
-        # app until the file has actually been written (bounded).
-        for _ in range(10):
-            self._simulation_app.update()
-            if os.path.exists(file_name):
-                break
+        pv = getattr(self, "_perspective_view", None)
+        if pv is None:
+            return
+        rgb = pv.get_rgb()
+        if rgb is None:
+            return
+        imageio.imwrite(file_name, rgb)
 
     def close(self) -> None:
         """
