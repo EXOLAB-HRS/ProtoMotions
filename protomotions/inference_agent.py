@@ -303,6 +303,13 @@ def main():
         # Offscreen recording needs the camera/replicator extensions loaded.
         if getattr(simulator_config, "record_viewer", False):
             app_launcher_flags["enable_cameras"] = True
+            # Bypass the RTX/iray driver allowlist so the scene renderer
+            # initializes on capable GPUs whose driver isn't allowlisted
+            # (e.g. a newer 535.x than the recommended 535.161).
+            app_launcher_flags["kit_args"] = (
+                "--/rtx/verifyDriverVersion/enabled=false "
+                "--/iray/verifyDriverVersion/enabled=false"
+            )
         app_launcher = AppLauncher(app_launcher_flags)
         simulator_extra_params["simulation_app"] = app_launcher.app
 
