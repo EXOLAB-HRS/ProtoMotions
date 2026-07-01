@@ -70,6 +70,16 @@ class RecordingMixin:
         # Last markers state for recording (set each step)
         self._last_markers_state: Optional[Dict[str, MarkerState]] = None
 
+        # Headless offscreen recording: when `record_viewer` is set we start
+        # recording immediately (no interactive 'L' key) and, if
+        # `viewer_record_max_frames` > 0, finalize + stop after that many frames.
+        self._headless_record_max_frames = int(
+            getattr(self.config, "viewer_record_max_frames", 0)
+        )
+        if getattr(self.config, "record_viewer", False):
+            self._user_is_recording = True
+            self._user_recording_state_change = True
+
     # -------------------------
     # Recording state control
     # -------------------------
@@ -267,7 +277,21 @@ class RecordingMixin:
         3. Video compilation when recording ends
         4. Cleanup of temporary image files
         """
-        if not self.headless:
+        record_active = (not self.headless) or getattr(
+            self.config, "record_viewer", False
+        )
+        _cap = getattr(self, "_headless_record_max_frames", 0)
+        _cap_reached = (
+            self._user_is_recording
+            and _cap > 0
+            and self._user_recording_frame >= _cap
+        )
+        if record_active:
+            if _cap_reached:
+                # Reached the requested frame budget: flip recording off so the
+                # state-change block below finalizes and encodes the MP4.
+                self._user_is_recording = False
+                self._user_recording_state_change = True
             # Handle recording state transitions
             if self._user_recording_state_change:
                 if self._user_is_recording:
@@ -466,3 +490,11 @@ class RecordingMixin:
                 os.removedirs(self._curr_user_recording_name)
                 self._delete_user_viewer_recordings = False
                 self._recorded_motion = None
+
+            if _cap_reached:
+                # Video has been finalized above; interrupt the (otherwise
+                # unbounded) headless eval loop cleanly.
+                raise KeyboardInterrupt(
+                    "Headless recording complete: "
+                    f"{self._user_recording_frame} frames"
+                )

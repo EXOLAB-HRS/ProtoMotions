@@ -589,6 +589,16 @@ class SimulatorConfig:
         default="output/recordings/viewer",
         metadata={"help": "Directory for viewer recordings."},
     )
+    viewer_record_max_frames: int = field(
+        default=0,
+        metadata={
+            "help": (
+                "If >0 and record_viewer is set, automatically finalize the "
+                "headless recording (encode the MP4) and stop after this many "
+                "captured frames. 0 = unlimited (interactive/GUI use)."
+            )
+        },
+    )
     domain_randomization: Optional[DomainRandomizationConfig] = field(
         default=None,
         metadata={

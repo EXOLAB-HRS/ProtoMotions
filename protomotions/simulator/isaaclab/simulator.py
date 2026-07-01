@@ -550,7 +550,10 @@ class IsaacLabSimulator(Simulator):
             self._apply_control()
             self._scene.write_data_to_sim()
             self._sim.step(render=False)
-            if (idx + 1) % self.decimation == 0 and not self.headless:
+            if (idx + 1) % self.decimation == 0 and (
+                not self.headless
+                or getattr(self.config, "record_viewer", False)
+            ):
                 self._sim.render()
             self._scene.update(dt=self._sim.get_physics_dt())
 
@@ -953,7 +956,7 @@ class IsaacLabSimulator(Simulator):
         """
         Render the simulation view. Initializes or updates the camera if the simulator is not in headless mode.
         """
-        if not self.headless:
+        if not self.headless or getattr(self.config, "record_viewer", False):
             if not hasattr(self, "_perspective_view"):
                 from protomotions.simulator.isaaclab.utils.perspective_viewer import (
                     PerspectiveViewer,
