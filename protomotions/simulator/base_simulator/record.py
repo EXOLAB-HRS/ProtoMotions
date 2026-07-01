@@ -76,6 +76,9 @@ class RecordingMixin:
         self._headless_record_max_frames = int(
             getattr(self.config, "viewer_record_max_frames", 0)
         )
+        # Initialized here (not only in the recording-start branch) so the
+        # frame-cap check at the top of render() is always safe.
+        self._user_recording_frame = 0
         if getattr(self.config, "record_viewer", False):
             self._user_is_recording = True
             self._user_recording_state_change = True
