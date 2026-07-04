@@ -190,6 +190,37 @@ class MLPWithConcatConfig(NormObsBaseConfig):
 
 
 @dataclass
+class RecurrentMLPWithConcatConfig(MLPWithConcatConfig):
+    """Config for the GRU-over-history actor core (RecurrentMLPWithConcat).
+
+    Same fields as MLPWithConcatConfig (num_out/layers describe the MLP HEAD that runs
+    after the GRU; in_keys/out_keys/normalize_obs identical), plus the recurrence spec.
+    `history_key` must be one of `in_keys`; its flat dim must be divisible by
+    `num_history_steps`. The GRU unrolls that key's [T, F] sequence; its final hidden
+    state (size `gru_hidden_size`) is concatenated with the other (normalized) obs and fed
+    to the head.
+    """
+
+    _target_: str = "protomotions.agents.common.recurrent.RecurrentMLPWithConcat"
+    history_key: str = field(
+        default="historical_max_coords_obs",
+        metadata={"help": "in_keys entry whose flat vector is reshaped to [T, F] for the GRU."},
+    )
+    num_history_steps: int = field(
+        default=8,
+        metadata={"help": "Number of history steps T packed in history_key (F = dim // T).", "min": 1},
+    )
+    gru_hidden_size: int = field(
+        default=256,
+        metadata={"help": "GRU hidden state size (the recurrent M1 state dimension).", "min": 1},
+    )
+    gru_num_layers: int = field(
+        default=1,
+        metadata={"help": "Number of stacked GRU layers.", "min": 1},
+    )
+
+
+@dataclass
 class ModuleContainerConfig:
     """Configuration for a container of modules that are executed sequentially.
     
