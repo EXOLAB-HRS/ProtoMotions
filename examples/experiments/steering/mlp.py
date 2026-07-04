@@ -220,7 +220,7 @@ def agent_config(
         "historical_max_coords_obs": MdpComponent(
             compute_func=compute_historical_max_coords_from_motion_lib,
             dynamic_vars={},  # All parameters injected by agent
-            static_params={"history_steps": 8},  # Matches num_state_history_steps
+            static_params={"num_state_history_steps": 8},  # Matches env_cfg.num_state_history_steps (buffer depth); history_steps=None uses all 8
         ),
     }
 
