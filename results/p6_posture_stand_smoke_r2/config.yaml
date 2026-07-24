@@ -1,0 +1,22 @@
+{
+  "robot_name": "smpl",
+  "simulator": "isaaclab",
+  "num_envs": 1024,
+  "batch_size": 4096,
+  "motion_file": "data/motion_for_trackers/accad_smpl/accad_smpl_posture_static_v1.pt",
+  "experiment_path": "examples/experiments/steering/mlp_posture_stand_push_residual.py",
+  "experiment_name": "p6_posture_stand_smoke_r2",
+  "scenes_file": null,
+  "checkpoint": "/home/jimin/human-controller/ProtoMotions/results/p3_locomotion_omni_uniform_speed_s80_task70_foot05_v2lateral/epoch_1465_final.ckpt",
+  "use_wandb": false,
+  "use_slurm": false,
+  "ngpu": 1,
+  "nodes": 1,
+  "headless": true,
+  "seed": 0,
+  "torch_deterministic": false,
+  "training_max_steps": 194020480,
+  "overrides": [],
+  "create_config_only": false,
+  "wandb_id": null
+}
