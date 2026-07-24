@@ -20,7 +20,7 @@ The target direction and speed change periodically to encourage versatile locomo
 """
 
 from dataclasses import dataclass
-from typing import Dict, Any, Tuple, TYPE_CHECKING
+from typing import Dict, Any, Optional, Tuple, TYPE_CHECKING
 
 import numpy as np
 import torch
@@ -49,6 +49,9 @@ class SteeringControlConfig(ControlComponentConfig):
         heading_change_steps_min: Minimum steps between heading changes.
         heading_change_steps_max: Maximum steps between heading changes.
         random_heading_probability: Probability of fully random heading vs incremental change.
+        random_speed_probability: Probability of sampling speed uniformly over the
+            full range.  ``None`` preserves the legacy coupling to
+            ``random_heading_probability``.
         standard_heading_change: Maximum incremental heading change (radians).
         standard_speed_change: Maximum incremental speed change.
         stop_probability: Probability of setting speed to zero.
@@ -62,6 +65,7 @@ class SteeringControlConfig(ControlComponentConfig):
     heading_change_steps_min: int = 50
     heading_change_steps_max: int = 150
     random_heading_probability: float = 0.1
+    random_speed_probability: Optional[float] = None
     standard_heading_change: float = 0.5  # radians
     standard_speed_change: float = 0.5
     stop_probability: float = 0.1
@@ -130,6 +134,13 @@ class SteeringControl(ControlComponent):
         # Per-environment sampling: which envs get random heading vs incremental
         rand_probs = torch.ones(n, device=device) * self.config.random_heading_probability
         use_random = torch.bernoulli(rand_probs).bool()
+        if self.config.random_speed_probability is None:
+            # Backward-compatible legacy behavior: random speed was coupled to
+            # the random-heading decision.
+            use_random_speed = use_random
+        else:
+            speed_rand_probs = torch.ones(n, device=device) * self.config.random_speed_probability
+            use_random_speed = torch.bernoulli(speed_rand_probs).bool()
 
         # Fully random heading and speed (for envs with use_random=True)
         rand_dir_theta = 2 * np.pi * torch.rand(n, device=device) - np.pi
@@ -158,7 +169,7 @@ class SteeringControl(ControlComponent):
 
         # Select per-environment based on use_random mask
         dir_theta = torch.where(use_random, rand_dir_theta, inc_dir_theta)
-        tar_speed = torch.where(use_random, rand_tar_speed, inc_tar_speed)
+        tar_speed = torch.where(use_random_speed, rand_tar_speed, inc_tar_speed)
 
         tar_dir = torch.stack([torch.cos(dir_theta), torch.sin(dir_theta)], dim=-1)
 
@@ -284,4 +295,3 @@ class SteeringControl(ControlComponent):
                 orientation=facing_rot.view(self.env.num_envs, -1, 4),
             ),
         }
-

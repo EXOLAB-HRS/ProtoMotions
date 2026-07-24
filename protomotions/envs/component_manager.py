@@ -24,6 +24,7 @@ This module handles:
 """
 
 import logging
+import os
 import sys
 from typing import Any, Callable, Dict, TYPE_CHECKING
 
@@ -37,7 +38,15 @@ if TYPE_CHECKING:
     from protomotions.envs.mdp_component import MdpComponent
 
 # torch.compile unavailable on Python 3.8 (IsaacGym)
-TORCH_COMPILE_AVAILABLE = hasattr(torch, "compile") and sys.version_info >= (3, 9)
+# Long training runs amortise Inductor compilation, whereas one-off evaluation
+# processes often spend more time compiling small observation/reward kernels
+# than rolling out.  Keep compile as the default and offer an explicit eager
+# switch for deterministic short evaluations.
+TORCH_COMPILE_AVAILABLE = (
+    hasattr(torch, "compile")
+    and sys.version_info >= (3, 9)
+    and os.environ.get("PROTOMOTIONS_DISABLE_TORCH_COMPILE", "0") != "1"
+)
 
 
 class ComponentManager:

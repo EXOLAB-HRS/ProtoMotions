@@ -60,6 +60,7 @@ def compute_heading_velocity_rew(
     tar_speed: Tensor,
     tar_face_dir: Tensor,
     dt: float,
+    vel_err_scale: float = 0.25,
 ) -> Tensor:
     """Reward for moving in target direction at target speed while facing that direction.
 
@@ -80,7 +81,10 @@ def compute_heading_velocity_rew(
         Reward [num_envs] in range [0, 1].
     """
 
-    vel_err_scale = 0.25
+    # vel_err_scale controls how sharply speed error is penalized; the default (0.25) is soft
+    # (a 0.4 m/s undershoot costs only ~4% reward), which lets the policy quantize to the
+    # reference gaits instead of tracking commanded speed. Raise it (via the reward component's
+    # static_params) to make speed tracking a real gradient. See mlp_speed.py.
     tangent_err_w = 0.1
 
     dir_reward_w = 0.7
@@ -118,6 +122,115 @@ def compute_heading_velocity_rew(
     reward = dir_reward_w * dir_reward + facing_reward_w * facing_reward
 
     return reward
+
+
+def compute_split_heading_velocity_rew(
+    root_pos: Tensor,
+    prev_root_pos: Tensor,
+    root_rot: Tensor,
+    tar_dir: Tensor,
+    tar_speed: Tensor,
+    tar_face_dir: Tensor,
+    dt: float,
+    speed_err_scale: float = 0.5,
+    tangent_err_scale: float = 0.025,
+    speed_reward_w: float = 0.35,
+    direction_reward_w: float = 0.35,
+    facing_reward_w: float = 0.30,
+    upright_reward_w: float = 0.0,
+    upright_height_min: float = 0.5,
+    upright_height_margin: float = 0.4,
+) -> Tensor:
+    """Steering reward with independently tunable speed and direction channels.
+
+    Unlike :func:`compute_heading_velocity_rew`, sharpening speed tracking here does
+    not also sharpen the tangent-velocity penalty.  This is intended for curriculum
+    fine-tuning of an already stable steering policy.
+    """
+    delta_root_pos = root_pos - prev_root_pos
+    root_vel = delta_root_pos / dt
+    projected_speed = torch.sum(tar_dir * root_vel[..., :2], dim=-1)
+
+    projected_velocity = projected_speed.unsqueeze(-1) * tar_dir
+    tangent_velocity = root_vel[..., :2] - projected_velocity
+    tangent_error = torch.sum(torch.square(tangent_velocity), dim=-1)
+
+    speed_error = tar_speed - projected_speed
+    speed_reward = torch.exp(-speed_err_scale * torch.square(speed_error))
+    direction_reward = torch.exp(-tangent_err_scale * tangent_error)
+
+    # Moving opposite the command must not earn speed/direction credit.
+    forward_mask = projected_speed > 0
+    speed_reward = speed_reward * forward_mask
+    direction_reward = direction_reward * forward_mask
+
+    heading_rot = calc_heading_quat(root_rot, w_last=True)
+    facing_dir = torch.zeros_like(root_pos)
+    facing_dir[..., 0] = 1.0
+    facing_dir = quat_rotate(heading_rot, facing_dir, w_last=True)
+    facing_alignment = torch.sum(tar_face_dir * facing_dir[..., 0:2], dim=-1)
+    facing_reward = torch.clamp_min(facing_alignment, 0.0)
+
+    motion_reward = (
+        speed_reward_w * speed_reward
+        + direction_reward_w * direction_reward
+        + facing_reward_w * facing_reward
+    )
+
+    # The evaluation stability gate defines upright as root height > 0.5 m.
+    # A short linear margin supplies a useful gradient above that boundary while
+    # keeping upright_reward_w=0 exactly backward-compatible with older configs.
+    upright_reward = torch.clamp(
+        (root_pos[..., 2] - upright_height_min) / upright_height_margin,
+        min=0.0,
+        max=1.0,
+    )
+    return (1.0 - upright_reward_w) * motion_reward + upright_reward_w * upright_reward
+
+
+def compute_foot_plant_rew(
+    rigid_body_pos: Tensor,
+    rigid_body_vel: Tensor,
+    foot_body_ids: Tensor,
+    contact_height: float = 0.12,
+    contact_margin: float = 0.04,
+    velocity_scale: float = 4.0,
+    aggregation: str = "mean",
+) -> Tensor:
+    """Reward stationary feet only while they are near the flat ground.
+
+    A soft height mask avoids requiring expensive contact sensors during
+    training.  Swinging feet receive no penalty: when no selected foot body is
+    near the ground, the component returns the neutral reward one.  This kernel
+    is intended for the locomotion experiments, whose terrain is explicitly
+    flat at z=0.
+    """
+    foot_pos = torch.index_select(rigid_body_pos, 1, foot_body_ids)
+    foot_vel = torch.index_select(rigid_body_vel, 1, foot_body_ids)
+
+    # 1 below contact_height, linearly fading to 0 over contact_margin.
+    near_ground = torch.clamp(
+        (contact_height + contact_margin - foot_pos[..., 2]) / contact_margin,
+        min=0.0,
+        max=1.0,
+    )
+    horizontal_speed_sq = torch.sum(torch.square(foot_vel[..., :2]), dim=-1)
+    stationary = torch.exp(-velocity_scale * horizontal_speed_sq)
+
+    mask_sum = torch.sum(near_ground, dim=-1)
+    if aggregation == "mean":
+        planted_reward = torch.sum(near_ground * stationary, dim=-1) / torch.clamp_min(
+            mask_sum, 1.0e-6
+        )
+    elif aggregation == "strict_min":
+        # A mean lets one stationary ankle/toe hide another contact body's
+        # skating.  Softly blend non-contact bodies toward neutral one, then
+        # score the worst likely-contact body.  The height mask remains smooth.
+        effective_stationary = 1.0 - near_ground * (1.0 - stationary)
+        planted_reward = torch.min(effective_stationary, dim=-1).values
+    else:
+        raise ValueError(f"unsupported foot-plant aggregation: {aggregation!r}")
+    return torch.where(mask_sum > 0.0, planted_reward, torch.ones_like(planted_reward))
 
 
 # =============================================================================
@@ -166,5 +279,6 @@ def compute_path_following_rew(
 
 __all__ = [
     "compute_heading_velocity_rew",
+    "compute_split_heading_velocity_rew",
     "compute_path_following_rew",
 ]
