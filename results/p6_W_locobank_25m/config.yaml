@@ -1,0 +1,22 @@
+{
+  "robot_name": "smpl",
+  "simulator": "isaaclab",
+  "num_envs": 1024,
+  "batch_size": 4096,
+  "motion_file": "data/motion_for_trackers/accad_smpl/accad_smpl_standing_sway_v1.pt",
+  "experiment_path": "../experiments/posture/mlp_posture_free.py",
+  "experiment_name": "p6_W_locobank_25m",
+  "scenes_file": null,
+  "checkpoint": null,
+  "use_wandb": false,
+  "use_slurm": false,
+  "ngpu": 1,
+  "nodes": 1,
+  "headless": true,
+  "seed": 1,
+  "torch_deterministic": false,
+  "training_max_steps": 25000000,
+  "overrides": [],
+  "create_config_only": false,
+  "wandb_id": null
+}
