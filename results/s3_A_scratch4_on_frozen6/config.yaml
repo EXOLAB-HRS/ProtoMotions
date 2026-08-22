@@ -1,0 +1,22 @@
+{
+  "robot_name": "smpl",
+  "simulator": "isaaclab",
+  "num_envs": 4096,
+  "batch_size": 16384,
+  "motion_file": "data/motion_for_trackers/accad_smpl/accad_smpl_locomotion_v1.pt",
+  "experiment_path": "examples/experiments/steering/mlp_locomotion_on_frozen_posture.py",
+  "experiment_name": "s3_A_scratch4_on_frozen6",
+  "scenes_file": null,
+  "checkpoint": null,
+  "use_wandb": false,
+  "use_slurm": false,
+  "ngpu": 1,
+  "nodes": 1,
+  "headless": true,
+  "seed": 0,
+  "torch_deterministic": false,
+  "training_max_steps": 172174592,
+  "overrides": [],
+  "create_config_only": false,
+  "wandb_id": null
+}
