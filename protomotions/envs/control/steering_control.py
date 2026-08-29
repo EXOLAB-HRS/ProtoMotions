@@ -49,6 +49,8 @@ class SteeringControlConfig(ControlComponentConfig):
         heading_change_steps_min: Minimum steps between heading changes.
         heading_change_steps_max: Maximum steps between heading changes.
         random_heading_probability: Probability of fully random heading vs incremental change.
+        random_heading_min: Lower bound for fully random heading samples.
+        random_heading_max: Upper bound for fully random heading samples.
         random_speed_probability: Probability of sampling speed uniformly over the
             full range.  ``None`` preserves the legacy coupling to
             ``random_heading_probability``.
@@ -65,6 +67,8 @@ class SteeringControlConfig(ControlComponentConfig):
     heading_change_steps_min: int = 50
     heading_change_steps_max: int = 150
     random_heading_probability: float = 0.1
+    random_heading_min: float = -np.pi
+    random_heading_max: float = np.pi
     random_speed_probability: Optional[float] = None
     standard_heading_change: float = 0.5  # radians
     standard_speed_change: float = 0.5
@@ -87,6 +91,8 @@ class SteeringControl(ControlComponent):
     def __init__(self, config: SteeringControlConfig, env: "BaseEnv"):
         super().__init__(config, env)
         self.config: SteeringControlConfig = config
+        if config.random_heading_max <= config.random_heading_min:
+            raise ValueError("random_heading_max must exceed random_heading_min")
 
         # Task state buffers
         self._heading_change_steps = torch.zeros(
@@ -143,7 +149,9 @@ class SteeringControl(ControlComponent):
             use_random_speed = torch.bernoulli(speed_rand_probs).bool()
 
         # Fully random heading and speed (for envs with use_random=True)
-        rand_dir_theta = 2 * np.pi * torch.rand(n, device=device) - np.pi
+        rand_dir_theta = (
+            self.config.random_heading_max - self.config.random_heading_min
+        ) * torch.rand(n, device=device) + self.config.random_heading_min
         rand_tar_speed = (
             self.config.tar_speed_max - self.config.tar_speed_min
         ) * torch.rand(n, device=device) + self.config.tar_speed_min
