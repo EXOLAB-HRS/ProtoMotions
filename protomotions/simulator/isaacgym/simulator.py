@@ -17,6 +17,7 @@ import logging
 import sys
 from dataclasses import asdict
 from isaacgym import gymapi, gymtorch, gymutil  # type: ignore[misc]
+from protomotions.simulator.isaacgym.env_layout import actor_start_offset
 import torch
 
 log = logging.getLogger(__name__)
@@ -783,7 +784,10 @@ class IsaacGymSimulator(Simulator):
         segmentation_id = 0
 
         start_pose = gymapi.Transform()
-        start_offset = [env_id, env_id, env_id]
+        start_offset = actor_start_offset(
+            env_id,
+            default_root_height=self.robot_config.default_root_height,
+        )
         start_pose.p = gymapi.Vec3(*start_offset)
         start_pose.r = gymapi.Quat(0.0, 0.0, 0.0, 1.0)
 
