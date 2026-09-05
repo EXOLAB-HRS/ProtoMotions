@@ -1,0 +1,22 @@
+{
+  "robot_name": "smpl",
+  "simulator": "isaaclab",
+  "num_envs": 1024,
+  "batch_size": 4096,
+  "motion_file": "data/motion_for_trackers/accad_smpl/accad_smpl_posture_neutral_v2.pt",
+  "experiment_path": "../experiments/posture/mlp_posture_foundation.py",
+  "experiment_name": "p6_posture_foundation_v7_zero_center_c0_3k",
+  "scenes_file": null,
+  "checkpoint": null,
+  "use_wandb": false,
+  "use_slurm": false,
+  "ngpu": 1,
+  "nodes": 1,
+  "headless": true,
+  "seed": 0,
+  "torch_deterministic": false,
+  "training_max_steps": 12288000,
+  "overrides": [],
+  "create_config_only": false,
+  "wandb_id": null
+}
