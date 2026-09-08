@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Derive joint-only MJCF/USD assets locally; never rewrite upstream geometry."""
+"""Validate the authored USDA and derive MJCF for engines that require it."""
 
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -46,14 +47,18 @@ def render_mjcf(source, profile, backend_limits):
     return ET.tostring(tree, encoding="unicode") + "\n"
 
 
-def render_usda(source, profile, backend_limits):
-    if source.startswith("version https://git-lfs.github.com/spec"):
-        raise ValueError("SMPL USD is a Git LFS pointer. Run git lfs pull in ProtoMotions before using IsaacLab.")
-    if not source.startswith("#usda"):
-        raise ValueError("Expected the text SMPL USDA asset; binary USD needs explicit conversion")
-    seen = set()
+def validate_usda_rom(source, profile):
+    """Check the committed RoM without changing or regenerating the USDA.
 
-    def replace_joint(match):
+    JSON retains the same bounds for action limits and the MJCF backends.
+    Reject disagreement instead of silently overwriting the authored asset.
+    """
+    if source.startswith("version https://git-lfs.github.com/spec"):
+        raise ValueError("Human model USDA must be the actual text asset, not a Git LFS pointer")
+    if not source.startswith("#usda"):
+        raise ValueError("Expected the text human model USDA asset")
+    seen = set()
+    for match in re.finditer(r'        def PhysicsJoint "([^"]+)" \([\s\S]*?\n        }', source):
         block, body = match.group(0), match.group(1)
         for axis in "xyz":
             name = f"{body}_{axis}"
@@ -63,30 +68,18 @@ def render_usda(source, profile, backend_limits):
             token = f"rot{axis.upper()}"
             if f'custom token mjcf:{token}:name = "{name}"' not in block:
                 raise ValueError(f"USD joint/axis mapping changed: {name}")
-            props = {
-                f"limit:{token}:physics:low": row["rom_deg"][0],
-                f"limit:{token}:physics:high": row["rom_deg"][1],
-                f"drive:{token}:physics:stiffness": 0,
-                f"drive:{token}:physics:damping": 0,
-                f"drive:{token}:physics:maxForce": backend_limits[name],
-                # Disable legacy soft-limit spring gains, retaining hard limits.
-                f"physxLimit:{token}:stiffness": 0,
-                f"physxLimit:{token}:damping": 0,
-            }
-            for prop, value in props.items():
-                block, count = re.subn(
-                    rf"(?m)^(\s*float {re.escape(prop)} = )[^\n]+$",
-                    lambda m: m.group(1) + format(value, ".12g"), block,
-                )
-                if count != 1:
+            for bound, value in zip(("low", "high"), row["rom_deg"]):
+                prop = f"limit:{token}:physics:{bound}"
+                values = re.findall(rf"(?m)^\s*float {re.escape(prop)} = ([^\n]+)$", block)
+                if len(values) != 1:
                     raise ValueError(f"Expected exactly one USD property {body}/{prop}")
+                if not math.isclose(float(values[0]), value, rel_tol=1e-6, abs_tol=1e-6):
+                    raise ValueError(f"USD/profile ROM mismatch: {name}; update the USDA and profile bounds together")
+            if name in seen:
+                raise ValueError(f"Duplicate USD joint axis: {name}")
             seen.add(name)
-        return block
-
-    result = re.sub(r'        def PhysicsJoint "([^"]+)" \([\s\S]*?\n        }', replace_joint, source)
     if seen != set(profile["joints"]):
         raise ValueError("USD/profile joint mismatch")
-    return result.replace("#usda 1.0", "#usda 1.0\n# Locally derived human joint properties; see robot_configs/human_model/README.md", 1)
 
 
 def _atomic_write(path, text):
@@ -101,12 +94,11 @@ def _atomic_write(path, text):
             staging.unlink(missing_ok=True)
 
 
-def derive_assets(xml_path, usd_path, profile, backend_limits, require_usd=False):
+def derive_mjcf(xml_path, profile, backend_limits):
     xml_path = Path(xml_path)
     xml = xml_path.read_text()
-    usd = Path(usd_path).read_text() if require_usd else None
     digest = hashlib.sha256()
-    for data in (xml, usd or "", json.dumps(profile, sort_keys=True), json.dumps(backend_limits, sort_keys=True), Path(__file__).read_text()):
+    for data in (xml, json.dumps(profile, sort_keys=True), json.dumps(backend_limits, sort_keys=True), Path(__file__).read_text()):
         digest.update(data.encode())
     root = Path(os.environ.get("PROTOMOTIONS_HUMAN_MODEL_CACHE", str(Path(tempfile.gettempdir()) / f"protomotions-human-model-{os.getuid()}")))
     destination = root / digest.hexdigest()[:24]
@@ -114,8 +106,4 @@ def derive_assets(xml_path, usd_path, profile, backend_limits, require_usd=False
     derived_xml = destination / "smpl_humanoid.xml"
     if not derived_xml.exists():
         _atomic_write(derived_xml, render_mjcf(xml, profile, backend_limits))
-    if require_usd:
-        derived_usd = destination / "smpl_humanoid.usda"
-        if not derived_usd.exists():
-            _atomic_write(derived_usd, render_usda(usd, profile, backend_limits))
     return destination

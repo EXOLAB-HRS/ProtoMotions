@@ -6,7 +6,7 @@ import logging
 import os
 from pathlib import Path
 
-from .assets import derive_assets
+from .assets import derive_mjcf, validate_usda_rom
 from .dynamics import HumanJointModel
 from .profile import load_profile
 
@@ -43,7 +43,7 @@ def prepare_simulator(robot_config, simulator_config, device):
     """Return (backend config, force model), leaving command type and PD gains intact.
 
     Update shared kinematic metadata (old checkpoints skip __post_init__), then
-    copy only for backend force ceilings and generated asset paths. Policy
+    copy only for backend force ceilings and model asset paths. Policy
     parameters, action ordering, controller gains and source assets are preserved.
     """
     name = selected_profile(robot_config)
@@ -69,19 +69,23 @@ def prepare_simulator(robot_config, simulator_config, device):
         backend.control.control_info[n].effort_limit = limit
         backend.control.control_info[n].friction = 0.0
     asset = backend.asset
-    root = Path(asset.asset_root)
-    xml = root / asset.asset_file_name
-    usd = root / asset.usd_asset_file_name
-    if not xml.is_file():
-        # Checkpoint may contain an absolute path on its training machine.
-        root = Path(__file__).resolve().parents[2] / "data/assets"
-        xml, usd = root / "mjcf/smpl_humanoid.xml", root / "usd/smpl_humanoid.usda"
-    generated = derive_assets(xml, usd, profile, limits, require_usd=".isaaclab." in target)
-    asset.asset_root = str(generated)
-    asset.asset_file_name = "smpl_humanoid.xml"
-    asset.usd_asset_file_name = "smpl_humanoid.usda"
+    packaged_assets = Path(__file__).resolve().parents[2] / "data/assets"
+    if ".isaaclab." in target:
+        # Load the committed, editable USDA directly. RoM is authored in the
+        # file; actuator force settings are supplied by the IsaacLab scene.
+        usd = packaged_assets / "usd" / f"smpl_humanoid_{name}.usda"
+        validate_usda_rom(usd.read_text(), profile)
+        asset.asset_root = str(usd.parent)
+        asset.usd_asset_file_name = usd.name
+    else:
+        xml = Path(asset.asset_root) / asset.asset_file_name
+        if not xml.is_file():
+            # Checkpoint may contain an absolute path on its training machine.
+            xml = packaged_assets / "mjcf/smpl_humanoid.xml"
+        asset.asset_root = str(derive_mjcf(xml, profile, limits))
+        asset.asset_file_name = "smpl_humanoid.xml"
     backend._human_model_enabled = True
     if ".mujoco." in target:
         simulator_config.use_implicit_pd = False
-    log.info("Human model %s: physiological ROM, direction-specific active caps, separate passive forces; assets %s", name, generated)
+    log.info("Human model %s: physiological ROM, direction-specific active caps, separate passive forces; assets %s", name, asset.asset_root)
     return backend, model

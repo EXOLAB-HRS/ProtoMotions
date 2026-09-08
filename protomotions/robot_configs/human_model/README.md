@@ -11,7 +11,8 @@
 | `healthy_adult_v1.json` | 69개 축의 값, 단위, 방향, 근거 ID, 가정; 향후 모델을 추가할 위치 |
 | `profile.py` | 프로필 로딩·검증 |
 | `dynamics.py` | 방향별 능동 토크 제한과 별도의 수동 관절 힘 |
-| `assets.py` | 기존 MJCF/USDA에서 관절 속성만 바꾼 로컬 캐시 생성 |
+| `../../data/assets/usd/smpl_humanoid_healthy_adult_v1.usda` | **RoM을 직접 저장한 실제 모델 파일; IsaacLab에서 그대로 로딩** |
+| `assets.py` | USDA의 RoM 일치 검사; MuJoCo/IsaacGym용 MJCF 캐시 생성 |
 | `integration.py` | 새 설정 및 이전 체크포인트에 프로필 적용 |
 | `tests/test_human_model.py` | 에너지·힘·축 방향·자산·실제 MuJoCo 경로 검증 |
 
@@ -28,9 +29,9 @@ PROTOMOTIONS_HUMAN_MODEL=legacy python ...
 python -m pytest -q protomotions/robot_configs/human_model/tests
 ```
 
-IsaacLab은 원래의 `protomotions/data/assets/usd/smpl_humanoid.usda`가 필요하다. 파일이 `version https://git-lfs.github.com/spec/v1`으로 시작하면 `git lfs pull`로 실제 자산을 받아야 한다. LFS 포인터를 자산으로 오인하거나 모델 적용을 생략하지 않고 명확한 오류를 낸다. 모델 패키지가 원본 자산을 다운로드하거나 변경하지는 않는다.
+IsaacLab은 [smpl_humanoid_healthy_adult_v1.usda](../../data/assets/usd/smpl_humanoid_healthy_adult_v1.usda)를 직접 읽는다. 69축의 `limit:rotX/Y/Z:physics:low/high`에 아래의 RoM을 **도(°) 단위로 저장**했다. 이 약 115 KB의 텍스트 파일은 일반 Git으로 관리하므로 이 파일을 위한 LFS 다운로드는 필요 없다. 기존 `smpl_humanoid.usda`는 legacy 모델용으로 유지한다.
 
-생성 자산은 기본적으로 `/tmp/protomotions-human-model-<uid>/<content-hash>/`에 저장한다. 위치는 `PROTOMOTIONS_HUMAN_MODEL_CACHE`로 지정할 수 있다. 원본과 프로필이 바뀌면 새 캐시를 만든다. 생성 파일을 직접 수정하지 말고 프로필을 수정한다.
+실행 중 USDA를 생성하거나 RoM을 덮어쓰지 않는다. RoM을 변경할 때는 이 USDA와 JSON의 `rom_deg`를 함께 수정한다. JSON은 행동 범위와 MJCF 백엔드에 사용하며, IsaacLab 시작 시 USDA와 일치하는지 검사한다. MuJoCo/IsaacGym은 같은 JSON에서 만든 MJCF를 `/tmp/protomotions-human-model-<uid>/<content-hash>/`에 캐시한다. MJCF 캐시 위치는 `PROTOMOTIONS_HUMAN_MODEL_CACHE`로 지정할 수 있다.
 
 연결한 엔진은 MuJoCo, IsaacLab, IsaacGym이다. Genesis/Newton은 검증되지 않은 적용을 막기 위해 오류를 낸다. **CPU MuJoCo 실행을 검증했으며 GPU IsaacLab/IsaacGym 동역학 검증은 남아 있다.**
 
@@ -87,7 +88,7 @@ IsaacLab은 원래의 `protomotions/data/assets/usd/smpl_humanoid.usda`가 필�
 
 `tau_total = clip_directional(tau_active_requested) + tau_elastic(q) + tau_damping(qdot)`
 
-PD 명령의 `Kp*(target-q)-Kd*qdot`는 능동 요청이다. 원래 XML의 stiffness 300–1000, damping 30–100을 인체 수동 특성으로 해석하지 않는다. 파생 자산의 기존 spring/damping/drive는 0으로 하고 수동 항은 매 물리 step에서 한 번만 더한다. 액추에이터는 이 합을 받을 수 있는 충분한 한계를 사용하고, 생체 최대 능동 토크는 합산 **전**에 방향별로 제한한다. 수동 토크나 관절 제한의 반력은 근육 최대 토크와 다른 양이다.
+PD 명령의 `Kp*(target-q)-Kd*qdot`는 능동 요청이다. 원래 XML의 stiffness 300–1000, damping 30–100을 인체 수동 특성으로 해석하지 않는다. USDA에서 바꾼 물리 속성은 **RoM뿐**이다. IsaacLab의 actuator 설정이 실행 시 drive 강성·감쇠를 0으로 지정하고, 최대 토크 제한과 passive 항은 코드에서 적용한다. MuJoCo/IsaacGym용 파생 MJCF도 기존 spring/damping을 0으로 한다. 수동 항은 매 물리 step에서 한 번만 더한다. 액추에이터는 이 합을 받을 수 있는 충분한 한계를 사용하고, 생체 최대 능동 토크는 합산 **전**에 방향별로 제한한다. 수동 토크나 관절 제한의 반력은 근육 최대 토크와 다른 양이다.
 
 Silder 하지는 `q_h=-Hip_y`, `q_k=Knee_y`, `q_a=-Ankle_y`로 변환한다. JSON의 각 항은 `E=scale*exp(a·q+offset)`, `tau=-∂E/∂q` 형식이다. hip flexor/extensor, knee flexor/extensor, plantarflexor와 RF/HAM 연결을 구현한다. 논문 α(°)는 rad로 변환했다. **비복근의 2관절 항은 부호·각도 규약 교차 검증을 마치지 못해 이번 버전에서 제외했다.** 평균 계수를 비선형식에 넣은 결과가 개인별 수동 토크 곡선의 산술평균과 같다는 가정도 하지 않는다.
 
@@ -108,9 +109,9 @@ JSON의 `ASSUMPTION`, `PROXY`, `UNMEASURED`를 측정 평균과 구분해서 검
 
 ## 변경 범위와 병합
 
-정책·controller·학습 데이터 파일은 수정하지 않는다. 기존 파일 수정은 `robot_configs/smpl.py`와 모델 로딩·힘 적용을 위한 simulator 3곳(base, IsaacLab scene, MuJoCo)뿐이다. 모델 패키지와 이 연결부가 함께 있어야 수동 특성이 실제 시뮬레이션에 작용한다. 기존 자산 XML/USDA의 Git blob은 유지한다.
+정책·controller·학습 데이터 파일은 수정하지 않는다. 기존 연결부 수정은 `robot_configs/smpl.py`와 모델 로딩·힘 적용을 위한 simulator 3곳(base, IsaacLab scene, MuJoCo)다. 모델 패키지와 이 연결부가 함께 있어야 수동 특성이 실제 시뮬레이션에 작용한다. 별도의 건강한 성인 USDA를 추가하고, `.gitattributes`에서 그 파일만 일반 텍스트로 관리한다. 원래 XML/USDA는 legacy 비교용으로 유지한다.
 
-상위 저장소와 ProtoMotions는 **별도 Git 저장소**다. 상위 `human_model` 브랜치의 gitlink만 덮어쓰면 대상 브랜치의 ProtoMotions 변경을 잃을 수 있다. 상위 저장소의 `human_model/README.md`와 `merge_model.py` 절차를 사용해 서브모듈을 먼저 보존 병합한다. 다른 브랜치 ref를 자동으로 변경하지 않는다.
+상위 저장소와 ProtoMotions는 **별도 Git 저장소**다. 일반 `git merge`로 두 저장소의 변경을 병합한 뒤 상위 gitlink를 기록한다. 별도 Python 병합 도구는 사용하지 않는다. 명령 순서는 [human_model 브랜치 README](https://github.com/EXOLAB-HRS/human-controller/blob/human_model/README.md#다른-브랜치에-병합)에 있다. 대상 README와 다른 기능을 유지하며 다른 브랜치 ref는 변경하지 않는다.
 
 기존 파일을 이 브랜치에서 삭제하면 삭제도 merge된다. 따라서 Git에는 공통 기준의 기존 파일을 남기고, 변경분만 모델에 한정한다. 별도 모델 보기 폴더나 sparse checkout은 작업 화면을 줄이는 수단이며 삭제 commit과 다르다.
 
@@ -118,4 +119,4 @@ JSON의 `ASSUMPTION`, `PROXY`, `UNMEASURED`를 측정 평균과 구분해서 검
 
 ProtoMotions의 Apache-2.0 라이선스·기존 헤더를 유지하고 변경한 파일에는 변경 표시를 추가했다. 이 패키지는 자체 파라미터와 변환 코드를 제공하며 SMPL 원본 파라메트릭 모델이나 새 형상 자산을 배포하지 않는다. 기존 자산의 이용 조건은 그대로 적용된다. [ProtoMotions LICENSE](../../../LICENSE.md), [SMPL Model license](https://smpl.is.tue.mpg.de/modellicense.html), [SMPL-Body license](https://smpl.is.tue.mpg.de/license.html).
 
-검증은 단위·방향별 상한, 수동 에너지의 음의 기울기, 감쇠의 소산, 극단 입력 유한성, 기존 형상·질량·관절 순서 보존, MJCF 제한, USD 변환, 이전 체크포인트 설정 적용, MuJoCo substep 실행을 포함한다. 안정적인 전신 보행이나 생체실험과의 일치를 입증하는 검증은 아니다.
+검증은 단위·방향별 상한, 수동 에너지의 음의 기울기, 감쇠의 소산, 극단 입력 유한성, 기존 형상·질량·관절 순서 보존, MJCF 제한, 저장된 USDA의 69축 RoM, USDA 직접 로딩 경로, 이전 체크포인트 설정 적용, MuJoCo substep 실행을 포함한다. 안정적인 전신 보행이나 생체실험과의 일치를 입증하는 검증은 아니다.

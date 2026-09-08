@@ -2,9 +2,7 @@
 """Physics and integration checks, runnable on CPU without IsaacSim."""
 
 import copy
-import os
 from pathlib import Path
-import re
 from types import SimpleNamespace
 
 import mujoco
@@ -12,7 +10,7 @@ import numpy as np
 import pytest
 import torch
 
-from protomotions.robot_configs.human_model.assets import render_mjcf, render_usda
+from protomotions.robot_configs.human_model.assets import render_mjcf, validate_usda_rom
 from protomotions.robot_configs.human_model.dynamics import HumanJointModel
 from protomotions.robot_configs.human_model.integration import prepare_simulator
 from protomotions.robot_configs.human_model.profile import load_profile
@@ -21,6 +19,7 @@ from protomotions.robot_configs.base import ControlType
 from protomotions.simulator.mujoco.config import MujocoSimulatorConfig
 
 ASSETS = Path(__file__).resolve().parents[3] / "data/assets"
+HEALTHY_USDA = ASSETS / "usd/smpl_humanoid_healthy_adult_v1.usda"
 
 
 @pytest.fixture
@@ -176,62 +175,49 @@ def test_legacy_and_other_robots_are_unmodified(robot, monkeypatch):
 
 def test_usd_lfs_pointer_fails_instead_of_silently_ignoring_model(model):
     with pytest.raises(ValueError, match="Git LFS"):
-        render_usda("version https://git-lfs.github.com/spec/v1\n", load_profile(), {})
+        validate_usda_rom("version https://git-lfs.github.com/spec/v1\n", load_profile())
 
 
-def test_usda_parser_updates_all_axes_and_preserves_other_properties(model):
-    # Minimal schema fixture; actual upstream USDA is verified separately when
-    # LFS assets are available (test accepts HUMAN_MODEL_TEST_USDA below).
+def test_authored_usda_requires_matching_profile_and_axis_conventions():
+    source = HEALTHY_USDA.read_text()
+    validate_usda_rom(source, load_profile())
     profile = load_profile()
-    parts = ["#usda 1.0\n"]
-    for body in dict.fromkeys(n.rsplit("_", 1)[0] for n in model.names):
-        parts.append(f'        def PhysicsJoint "{body}" (\n        )\n        {{\n')
-        parts.append('            rel physics:body0 = </preserve/me>\n')
-        for a in "xyz":
-            token = f"rot{a.upper()}"
-            parts.append(f'            custom token mjcf:{token}:name = "{body}_{a}"\n')
-            for prop in (f"limit:{token}:physics:low", f"limit:{token}:physics:high", f"drive:{token}:physics:stiffness", f"drive:{token}:physics:damping", f"drive:{token}:physics:maxForce", f"physxLimit:{token}:stiffness", f"physxLimit:{token}:damping"):
-                parts.append(f"            float {prop} = 500\n")
-        parts.append("        }\n")
-    result = render_usda("".join(parts), profile, dict(zip(model.names, model.backend_limit.tolist())))
-    assert result.count("</preserve/me>") == 23
-    assert len(re.findall(r"physics:low =", result)) == 69
-    assert "physics:low = -132.1" in result
+    profile["joints"]["L_Knee_y"]["rom_deg"][1] = 90.0
+    with pytest.raises(ValueError, match="ROM mismatch: L_Knee_y"):
+        validate_usda_rom(source, profile)
     with pytest.raises(ValueError, match="mapping changed"):
-        render_usda("".join(parts).replace('name = "L_Hip_x"', 'name = "bad"'), profile, dict(zip(model.names, model.backend_limit.tolist())))
+        validate_usda_rom(source.replace('name = "L_Hip_x"', 'name = "bad"'), load_profile())
 
 
 def test_actual_usda_with_openusd(model):
-    path = Path(os.environ.get("HUMAN_MODEL_TEST_USDA", str(ASSETS / "usd/smpl_humanoid.usda")))
-    source = path.read_text()
-    if source.startswith("version https://git-lfs.github.com/spec"):
-        pytest.skip("Actual USDA requires Git LFS; optionally set HUMAN_MODEL_TEST_USDA")
+    # Inspect the committed asset directly, independently of the regex validator.
     Usd = pytest.importorskip("pxr.Usd")
-    Sdf = pytest.importorskip("pxr.Sdf")
-    output = render_usda(source, load_profile(), dict(zip(model.names, model.backend_limit.tolist())))
-    layers = [Sdf.Layer.CreateAnonymous("test.usda") for _ in range(2)]
-    for layer, text in zip(layers, [source, output]):
-        assert layer.ImportFromString(text)
-    old, new = [Usd.Stage.Open(layer) for layer in layers]
-    assert [p.GetPath() for p in old.Traverse()] == [p.GetPath() for p in new.Traverse()]
+    stage = Usd.Stage.Open(str(HEALTHY_USDA))
+    assert stage and stage.GetDefaultPrim().GetName() == "smpl_humanoid"
     count = 0
-    for prim in old.Traverse():
-        updated = new.GetPrimAtPath(prim.GetPath())
-        for attr in prim.GetAttributes():
-            name = attr.GetName()
-            if prim.GetTypeName() == "PhysicsJoint" and name.startswith(("drive:rot", "limit:rot", "physxLimit:rot")):
-                continue
-            assert attr.Get() == updated.GetAttribute(name).Get()
+    for prim in stage.Traverse():
         if prim.GetTypeName() == "PhysicsJoint":
             for axis in "xyz":
                 i = model.names.index(f"{prim.GetName()}_{axis}")
                 token = f"rot{axis.upper()}"
-                assert updated.GetAttribute(f"limit:{token}:physics:low").Get() == pytest.approx(float(model.lower[i]) * 180 / np.pi)
-                assert updated.GetAttribute(f"limit:{token}:physics:high").Get() == pytest.approx(float(model.upper[i]) * 180 / np.pi)
-                assert updated.GetAttribute(f"drive:{token}:physics:stiffness").Get() == 0
-                assert updated.GetAttribute(f"drive:{token}:physics:damping").Get() == 0
+                assert prim.GetAttribute(f"limit:{token}:physics:low").Get() == pytest.approx(float(model.lower[i]) * 180 / np.pi)
+                assert prim.GetAttribute(f"limit:{token}:physics:high").Get() == pytest.approx(float(model.upper[i]) * 180 / np.pi)
                 count += 1
     assert count == 69
+
+
+def test_isaaclab_preparation_loads_committed_usda_without_generating_assets(robot, tmp_path, monkeypatch):
+    monkeypatch.setenv("PROTOMOTIONS_HUMAN_MODEL_CACHE", str(tmp_path / "unused_cache"))
+    # An old checkpoint's nonexistent asset directory must not be used.
+    robot.asset.asset_root = str(tmp_path / "old_training_machine")
+    before = HEALTHY_USDA.read_bytes()
+    cfg = SimpleNamespace(_target_="protomotions.simulator.isaaclab.simulator.IsaacLabSimulator")
+    backend, force = prepare_simulator(robot, cfg, torch.device("cpu"))
+    assert force is not None and backend._human_model_enabled
+    assert Path(backend.asset.asset_root, backend.asset.usd_asset_file_name) == HEALTHY_USDA
+    assert HEALTHY_USDA.read_bytes() == before
+    assert not (tmp_path / "unused_cache").exists()
+    assert robot.asset.usd_asset_file_name == "usd/smpl_humanoid.usda"
 
 
 def test_mujoco_runtime_uses_passive_forces_at_every_substep(robot):
