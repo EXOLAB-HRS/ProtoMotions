@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025-2026 The ProtoMotions Developers
 # SPDX-License-Identifier: Apache-2.0
+# Modified to evaluate human passive forces at each physics substep.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -723,7 +724,11 @@ class MujocoSimulator(Simulator):
             and self.control_type == ControlType.BUILT_IN_PD
         )
 
-        if use_explicit_substep_pd:
+        if self._human_joint_model is not None:
+            for _ in range(self.decimation):
+                self._apply_control()
+                mujoco.mj_step(self.model, self.data)
+        elif use_explicit_substep_pd:
             # Explicit PD: recompute torques from current state at each substep
             for _ in range(self.decimation):
                 self._recompute_explicit_pd()

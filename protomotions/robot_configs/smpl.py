@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025-2026 The ProtoMotions Developers
 # SPDX-License-Identifier: Apache-2.0
+# Modified for versioned human joint properties; see human_model/README.md.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -34,6 +35,14 @@ from dataclasses import dataclass, field
 
 @dataclass
 class SmplRobotConfig(RobotConfig):
+    human_model_profile: str = "healthy_adult_v1"
+
+    def __post_init__(self):
+        super().__post_init__()
+        from protomotions.robot_configs.human_model.integration import apply_metadata
+
+        apply_metadata(self)
+
     trackable_bodies_subset: List[str] = field(
         default_factory=lambda: [
             "Pelvis",
