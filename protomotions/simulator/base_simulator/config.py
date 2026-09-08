@@ -599,6 +599,41 @@ class SimulatorConfig:
             )
         },
     )
+    viewer_record_start_paused: bool = field(
+        default=False,
+        metadata={
+            "help": "Initialize offscreen rendering but wait for an explicit recording trigger."
+        },
+    )
+    viewer_record_width: int = field(
+        default=500, metadata={"help": "Offscreen viewer recording width in pixels."}
+    )
+    viewer_record_height: int = field(
+        default=500, metadata={"help": "Offscreen viewer recording height in pixels."}
+    )
+    viewer_record_crf: int = field(
+        default=23,
+        metadata={"help": "libx264 constant-rate-factor; lower is higher quality."},
+    )
+    viewer_record_preset: str = field(
+        default="veryfast", metadata={"help": "libx264 encoding preset."}
+    )
+    viewer_record_disable_advanced_rendering: bool = field(
+        default=True,
+        metadata={"help": "Disable costly RTX rendering features for viewer capture."},
+    )
+    viewer_camera_offset_x: float = field(
+        default=0.0, metadata={"help": "Tracking camera X offset from the root."}
+    )
+    viewer_camera_offset_y: float = field(
+        default=-5.0, metadata={"help": "Tracking camera Y offset from the root."}
+    )
+    viewer_camera_offset_z: float = field(
+        default=1.0, metadata={"help": "Tracking camera Z offset from the root."}
+    )
+    viewer_camera_target_height: float = field(
+        default=0.2, metadata={"help": "Tracking camera target height above the root."}
+    )
     domain_randomization: Optional[DomainRandomizationConfig] = field(
         default=None,
         metadata={

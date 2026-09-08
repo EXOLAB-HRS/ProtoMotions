@@ -79,7 +79,9 @@ class RecordingMixin:
         # Initialized here (not only in the recording-start branch) so the
         # frame-cap check at the top of render() is always safe.
         self._user_recording_frame = 0
-        if getattr(self.config, "record_viewer", False):
+        if getattr(self.config, "record_viewer", False) and not getattr(
+            self.config, "viewer_record_start_paused", False
+        ):
             self._user_is_recording = True
             self._user_recording_state_change = True
 
@@ -346,7 +348,9 @@ class RecordingMixin:
                         codec="libx264",
                         audio=False,
                         threads=32,
-                        preset="veryfast",
+                        preset=str(
+                            getattr(self.config, "viewer_record_preset", "veryfast")
+                        ),
                         ffmpeg_params=[
                             "-profile:v",
                             "main",
@@ -357,7 +361,7 @@ class RecordingMixin:
                             "-movflags",
                             "+faststart",
                             "-crf",
-                            "23",
+                            str(getattr(self.config, "viewer_record_crf", 23)),
                             "-x264-params",
                             "keyint=60:min-keyint=30",
                         ],

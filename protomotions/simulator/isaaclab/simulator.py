@@ -19,7 +19,6 @@ import torch
 
 import isaaclab.sim as sim_utils
 
-log = logging.getLogger(__name__)
 from isaaclab.scene import InteractiveScene
 from isaaclab.sim import SimulationContext, PhysxCfg
 from isaaclab.markers import VisualizationMarkers as IsaacLabVisualizationMarkers
@@ -57,6 +56,8 @@ from protomotions.simulator.base_simulator.simulator_state import (
     ObjectState,
     ResetState,
 )
+
+log = logging.getLogger(__name__)
 
 
 class IsaacLabSimulator(Simulator):
@@ -962,7 +963,20 @@ class IsaacLabSimulator(Simulator):
                     PerspectiveViewer,
                 )
 
-                self._perspective_view = PerspectiveViewer()
+                width = int(getattr(self.config, "viewer_record_width", 500))
+                height = int(getattr(self.config, "viewer_record_height", 500))
+                if width <= 0 or height <= 0:
+                    raise ValueError("viewer recording resolution must be positive")
+                self._perspective_view = PerspectiveViewer(
+                    resolution=(width, height),
+                    disable_advanced_rendering=bool(
+                        getattr(
+                            self.config,
+                            "viewer_record_disable_advanced_rendering",
+                            True,
+                        )
+                    ),
+                )
                 self._init_camera()
             else:
                 self._update_camera()
@@ -975,9 +989,18 @@ class IsaacLabSimulator(Simulator):
         self._cam_prev_char_pos = (
             self._get_simulator_root_state(0).root_pos.cpu().numpy()
         )
-        pos = self._cam_prev_char_pos + np.array([0, -5, 1])
+        pos = self._cam_prev_char_pos + np.array(
+            [
+                float(getattr(self.config, "viewer_camera_offset_x", 0.0)),
+                float(getattr(self.config, "viewer_camera_offset_y", -5.0)),
+                float(getattr(self.config, "viewer_camera_offset_z", 1.0)),
+            ]
+        )
+        target_height = float(
+            getattr(self.config, "viewer_camera_target_height", 0.2)
+        )
         self._perspective_view.set_camera_view(
-            pos, self._cam_prev_char_pos + np.array([0, 0, 0.2])
+            pos, self._cam_prev_char_pos + np.array([0, 0, target_height])
         )
 
     def _update_camera(self) -> None:
@@ -990,7 +1013,9 @@ class IsaacLabSimulator(Simulator):
                 .root_pos.cpu()
                 .numpy()
             )
-            height_offset = 0.2
+            height_offset = float(
+                getattr(self.config, "viewer_camera_target_height", 0.2)
+            )
         else:
             in_scene_object_id = self._camera_target["element"] - 1
             char_root_pos = (
