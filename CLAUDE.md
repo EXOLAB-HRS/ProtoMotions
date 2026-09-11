@@ -1,5 +1,10 @@
 # CLAUDE.md
 
+## Human Controller workspace governance
+
+When used as the `human-controller/ProtoMotions` submodule, follow [../AGENTS.md](../AGENTS.md) for workspace governance. Ask the user before assigning/incrementing implementation version numbers. Deliver videos through the parent `videos/`; only explicit user retention gets the final `_pass.mp4` suffix. New narrative work documents are capped at four per KST day across send/get/archive; update existing major documents. Preserve upstream technical guidance and existing submodule changes. These rules supersede old autonomous/no-question handoffs for version changes.
+
+
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project Overview

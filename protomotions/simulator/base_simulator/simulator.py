@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025-2026 The ProtoMotions Developers
 # SPDX-License-Identifier: Apache-2.0
+# Modified for human joint model loading and separate passive joint forces.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -134,7 +135,9 @@ class Simulator(RecordingMixin, ABC):
         torch._C._jit_set_profiling_executor(False)
 
         self.config = config
-        self.robot_config = robot_config
+        from protomotions.robot_configs.human_model.integration import prepare_simulator
+
+        self.robot_config, self._human_joint_model = prepare_simulator(robot_config, config, device)
         self.device = device
         self.scene_lib = scene_lib  # Always provided (empty if no scenes)
         self.terrain = terrain  # Always provided
@@ -142,6 +145,10 @@ class Simulator(RecordingMixin, ABC):
         self.num_envs: int = self.config.num_envs
 
         self.control_type: ControlType = self.robot_config.control.control_type
+        if self._human_joint_model is not None:
+            # Command interpretation stays in robot_config; backend motors receive
+            # the sum of independently limited active and passive joint torques.
+            self.control_type = ControlType.TORQUE
         self.decimation: int = self.config.sim.decimation
         self.dt: float = self.decimation * 1.0 / self.config.sim.fps
 
@@ -1166,6 +1173,10 @@ class Simulator(RecordingMixin, ABC):
         All three control modes are co-located here. Child simulators call this method
         from _physics_step() instead of branching on control_type themselves.
         """
+        if self._human_joint_model is not None:
+            self._human_joint_model.apply(self)
+            return
+
         if self.control_type == ControlType.BUILT_IN_PD:
             targets = self._common_actions
             if (
@@ -1565,3 +1576,7 @@ class Simulator(RecordingMixin, ABC):
         Close the simulator and perform cleanup operations.
         """
         self._simulation_running = False
+
+# Native integration already applies human joint forces. Prevent the earlier
+# parent-repository bootstrap from installing another layer of model adapters.
+_hc_human_model_adapter = True

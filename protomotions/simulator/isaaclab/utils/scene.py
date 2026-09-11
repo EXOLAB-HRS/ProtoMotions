@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025-2026 The ProtoMotions Developers
 # SPDX-License-Identifier: Apache-2.0
+# Modified to let the human joint model apply active and passive forces once.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -138,15 +139,16 @@ class SceneCfg(InteractiveSceneCfg):
                 setattr(self, f"projectile_{proj_idx}", proj_cfg)
 
         actuators = {}
+        explicit_human = getattr(robot_config, "_human_model_enabled", False)
         ActuatorConfig = (
             ImplicitActuatorCfg
-            if robot_config.control.control_type == ControlType.BUILT_IN_PD
+            if robot_config.control.control_type == ControlType.BUILT_IN_PD and not explicit_human
             else IdealPDActuatorCfg
         )
         for dof_name, control_info in robot_config.control.control_info.items():
             stiffness = control_info.stiffness
             damping = control_info.damping
-            if robot_config.control.control_type != ControlType.BUILT_IN_PD:
+            if robot_config.control.control_type != ControlType.BUILT_IN_PD or explicit_human:
                 stiffness = 0.0
                 damping = 0.0
             actuators[dof_name] = ActuatorConfig(
@@ -159,6 +161,9 @@ class SceneCfg(InteractiveSceneCfg):
                         "damping": damping,
                         "armature": control_info.armature,
                         "effort_limit_sim": control_info.effort_limit,
+                        # IdealPD must not clip passive torque to an active-only
+                        # ceiling before forwarding it to PhysX.
+                        "effort_limit": control_info.effort_limit if explicit_human else None,
                         "velocity_limit_sim": control_info.velocity_limit,
                         "friction": control_info.friction,
                     }.items()
@@ -251,3 +256,7 @@ class SceneCfg(InteractiveSceneCfg):
             )
         else:
             self.terrain = None
+
+# Native integration already applies human joint forces. Prevent the earlier
+# parent-repository bootstrap from installing another layer of model adapters.
+_hc_human_model_adapter = True

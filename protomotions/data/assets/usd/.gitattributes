@@ -1,0 +1,2 @@
+# Store the self-contained human-model USDA as editable text, including in patches.
+smpl_humanoid_healthy_adult_v1.usda -filter diff merge text eol=lf

@@ -111,6 +111,14 @@ class IsaacGymSimulator(Simulator):
         self._projectile_handles: list = [[] for _ in range(self.num_envs)]
         self._projectile_sim_indices: list = []
 
+    def _viewer_is_active(self) -> bool:
+        """Return whether Isaac Gym needs a viewer for display or recording."""
+        return (not self.headless) or getattr(self.config, "record_viewer", False)
+
+    def _viewer_is_interactive(self) -> bool:
+        """Return whether keyboard-driven viewer controls should be enabled."""
+        return not self.headless
+
     def _create_simulation(self) -> None:
         """Create the IsaacGym simulation environment.
 
@@ -133,10 +141,13 @@ class IsaacGymSimulator(Simulator):
         self._enable_viewer_sync = True
         self._viewer = None
 
-        # if running with a viewer, set up keyboard shortcuts and camera
-        if not self.headless:
-            # subscribe to keyboard shortcuts
+        # Headless recording still needs a viewer, but it must not consume
+        # interactive shortcuts (especially the recording toggle).
+        if self._viewer_is_active():
             self._viewer = self._gym.create_viewer(self._sim, gymapi.CameraProperties())
+
+        if self._viewer_is_interactive():
+            # subscribe to keyboard shortcuts
             self._gym.subscribe_viewer_keyboard_event(
                 self._viewer, gymapi.KEY_Q, "QUIT"
             )
@@ -165,6 +176,7 @@ class IsaacGymSimulator(Simulator):
             # Subscribe to custom key handlers
             self._register_custom_key_handlers()
 
+        if self._viewer_is_active():
             # set the camera position based on up axis
             sim_params = self._gym.get_sim_params(self._sim)
             if sim_params.up_axis == gymapi.UP_AXIS_Z:
@@ -289,7 +301,7 @@ class IsaacGymSimulator(Simulator):
                 self.num_envs, bodies_per_env, 3
             )[..., self._num_bodies :, :]
 
-        if not self.headless:
+        if self._viewer_is_active():
             self._init_camera()
 
         if self._visualization_markers:
@@ -1141,12 +1153,73 @@ class IsaacGymSimulator(Simulator):
         for i in range(self.decimation):
             if self.control_type != ControlType.BUILT_IN_PD:
                 self._apply_control()
+            self._apply_scheduled_force_substep()
             self._simulate()
             if self.device.type == "cpu":
                 self._gym.fetch_results(self._sim, True)
             if self.control_type != ControlType.BUILT_IN_PD:
                 self._gym.refresh_dof_state_tensor(self._sim)
         self._refresh_sim_tensors()
+
+    def schedule_humanoid_force_pulse(
+        self,
+        forces_newtons: torch.Tensor,
+        env_ids: torch.Tensor,
+        *,
+        body_index: int,
+        duration_substeps: int,
+    ) -> None:
+        """Schedule a constant world-space force for exact physics substeps.
+
+        Isaac Gym external-force tensors affect one call to ``simulate``.  The
+        pending tensor is therefore submitted again before every physics
+        substep until the requested duration is exhausted.
+        """
+        env_ids = env_ids.to(device=self.device, dtype=torch.long)
+        forces_newtons = forces_newtons.to(device=self.device, dtype=torch.float32)
+        if forces_newtons.shape != (len(env_ids), 3):
+            raise ValueError("forces_newtons must have shape [num_envs, 3]")
+        if not torch.isfinite(forces_newtons).all():
+            raise ValueError("forces_newtons must be finite")
+        if not 0 <= int(body_index) < self._num_bodies:
+            raise ValueError("body_index is outside the humanoid body range")
+        if int(duration_substeps) <= 0:
+            raise ValueError("duration_substeps must be positive")
+        if not hasattr(self, "_scheduled_force_tensor"):
+            bodies_per_env = self._rigid_body_state.shape[0] // self.num_envs
+            self._scheduled_force_tensor = torch.zeros(
+                (self.num_envs, bodies_per_env, 3),
+                dtype=torch.float32,
+                device=self.device,
+            )
+            self._scheduled_force_remaining = torch.zeros(
+                self.num_envs, dtype=torch.long, device=self.device
+            )
+        self._scheduled_force_tensor[env_ids] = 0.0
+        self._scheduled_force_tensor[env_ids, int(body_index)] = forces_newtons
+        self._scheduled_force_remaining[env_ids] = int(duration_substeps)
+
+    def _apply_scheduled_force_substep(self) -> None:
+        if not hasattr(self, "_scheduled_force_remaining"):
+            return
+        active = self._scheduled_force_remaining > 0
+        if not bool(active.any()):
+            return
+        self._gym.apply_rigid_body_force_tensors(
+            self._sim,
+            gymtorch.unwrap_tensor(self._scheduled_force_tensor.view(-1, 3)),
+            None,
+            gymapi.ENV_SPACE,
+        )
+        self._scheduled_force_remaining[active] -= 1
+        expired = self._scheduled_force_remaining == 0
+        self._scheduled_force_tensor[expired] = 0.0
+
+    def _clear_scheduled_forces(self, env_ids: torch.Tensor) -> None:
+        if hasattr(self, "_scheduled_force_remaining"):
+            env_ids = env_ids.to(device=self.device, dtype=torch.long)
+            self._scheduled_force_remaining[env_ids] = 0
+            self._scheduled_force_tensor[env_ids] = 0.0
 
     def _refresh_sim_tensors(self) -> None:
         self._gym.refresh_dof_state_tensor(self._sim)
@@ -1164,6 +1237,7 @@ class IsaacGymSimulator(Simulator):
     ) -> None:
         if env_ids is None:
             env_ids = torch.arange(self.num_envs, device=self.device)
+        self._clear_scheduled_forces(env_ids)
 
         # Set new states
         self._humanoid_root_states[env_ids, 0:3] = new_states.root_pos
@@ -1643,41 +1717,42 @@ class IsaacGymSimulator(Simulator):
         self._gym.viewer_camera_look_at(self._viewer, None, cam_pos, cam_target)
 
     def render(self) -> None:
-        if not self.headless:
+        if self._viewer_is_active():
             self._update_camera()
 
             # check for window closed
             if self._gym.query_viewer_has_closed(self._viewer):
                 sys.exit()
 
-            # check for keyboard events
-            for evt in self._gym.query_viewer_action_events(self._viewer):
-                if evt.action == "QUIT" and evt.value > 0:
-                    sys.exit()
-                elif evt.action == "toggle_viewer_sync" and evt.value > 0:
-                    self._enable_viewer_sync = not self._enable_viewer_sync
-                elif evt.action == "throw_projectile" and evt.value > 0:
-                    self._throw_projectile()
-                elif evt.action == "toggle_video_record" and evt.value > 0:
-                    self._toggle_video_record()
-                elif evt.action == "cancel_video_record" and evt.value > 0:
-                    self._cancel_video_record()
-                elif evt.action == "reset_envs" and evt.value > 0:
-                    self._requested_reset()
-                elif evt.action == "toggle_camera_target" and evt.value > 0:
-                    self._toggle_camera_target()
-                elif evt.action == "toggle_markers" and evt.value > 0:
-                    self._toggle_markers()
-                elif evt.action.startswith("custom_") and evt.value > 0:
-                    # Handle custom key events
-                    key_name = evt.action[7:]  # Remove "custom_" prefix
-                    if key_name in self._custom_key_handlers:
-                        try:
-                            self._custom_key_handlers[key_name]()
-                        except Exception as e:
-                            print(
-                                f"Error executing custom key handler for '{key_name}': {e}"
-                            )
+            if self._viewer_is_interactive():
+                # check for keyboard events
+                for evt in self._gym.query_viewer_action_events(self._viewer):
+                    if evt.action == "QUIT" and evt.value > 0:
+                        sys.exit()
+                    elif evt.action == "toggle_viewer_sync" and evt.value > 0:
+                        self._enable_viewer_sync = not self._enable_viewer_sync
+                    elif evt.action == "throw_projectile" and evt.value > 0:
+                        self._throw_projectile()
+                    elif evt.action == "toggle_video_record" and evt.value > 0:
+                        self._toggle_video_record()
+                    elif evt.action == "cancel_video_record" and evt.value > 0:
+                        self._cancel_video_record()
+                    elif evt.action == "reset_envs" and evt.value > 0:
+                        self._requested_reset()
+                    elif evt.action == "toggle_camera_target" and evt.value > 0:
+                        self._toggle_camera_target()
+                    elif evt.action == "toggle_markers" and evt.value > 0:
+                        self._toggle_markers()
+                    elif evt.action.startswith("custom_") and evt.value > 0:
+                        # Handle custom key events
+                        key_name = evt.action[7:]  # Remove "custom_" prefix
+                        if key_name in self._custom_key_handlers:
+                            try:
+                                self._custom_key_handlers[key_name]()
+                            except Exception as e:
+                                print(
+                                    f"Error executing custom key handler for '{key_name}': {e}"
+                                )
 
             if self.device.type != "cpu":
                 self._gym.fetch_results(self._sim, True)
