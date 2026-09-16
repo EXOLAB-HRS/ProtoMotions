@@ -13,9 +13,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-"""Compatibility import for pre-layout callers and serialized objects."""
-
-import importlib
-import sys
-
-sys.modules[__name__] = importlib.import_module("protomotions.robot_configs.human_model.common.integration")
+"""Authorized design namespace, not an executable anatomical model."""
+MODEL = {
+    "model_id": "human_model_v2",
+    "profile_id": None,
+    "status": "candidate",
+    "runnable": False,
+    "reason": "Anatomical assets, coordinates, policy adapters and validation are not implemented.",
+    "planned_lower_limb_dofs_per_side": {"hip": 3, "knee": 1, "ankle": 1, "subtalar": 1, "mtp": 1},
+    "knee_coupled_translation": False,
+}

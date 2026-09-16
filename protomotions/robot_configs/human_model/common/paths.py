@@ -13,9 +13,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-"""Compatibility import for pre-layout callers and serialized objects."""
+"""Stable package resources, independent of legacy import wrappers."""
+from pathlib import Path
 
-import importlib
-import sys
+PACKAGE_ROOT = Path(__file__).resolve().parents[1]
+PROTOMOTIONS_ROOT = PACKAGE_ROOT.parents[2]
+WORKSPACE_ROOT = PROTOMOTIONS_ROOT.parent
+ASSET_ROOT = PACKAGE_ROOT.parents[1] / "data/assets"
+V1_PROFILE_ROOT = PACKAGE_ROOT / "human_model_v1/profiles"
 
-sys.modules[__name__] = importlib.import_module("protomotions.robot_configs.human_model.common.integration")
+def v1_resource(name):
+    return V1_PROFILE_ROOT / name

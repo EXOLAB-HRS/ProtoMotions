@@ -1,0 +1,9 @@
+{
+  "model_id": "human_model_v2",
+  "status": "candidate",
+  "implemented": false,
+  "joints": [],
+  "planned_lower_limb_dofs": 14,
+  "total_dofs": null,
+  "note": "No executable ordering until anatomical frames and upper-body mapping are validated."
+}

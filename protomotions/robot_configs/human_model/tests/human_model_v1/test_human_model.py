@@ -18,8 +18,9 @@ from protomotions.robot_configs.smpl import SmplRobotConfig
 from protomotions.robot_configs.base import ControlType
 from protomotions.simulator.mujoco.config import MujocoSimulatorConfig
 
-ASSETS = Path(__file__).resolve().parents[3] / "data/assets"
-HEALTHY_USDA = ASSETS / "usd/smpl_humanoid_healthy_adult_v1.usda"
+ASSETS = Path(__file__).resolve().parents[4] / "data/assets"
+from protomotions.robot_configs.human_model.registry import get_model
+HEALTHY_USDA = get_model().asset_path("usd")
 
 
 @pytest.fixture

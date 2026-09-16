@@ -13,9 +13,4 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-"""Compatibility import for pre-layout callers and serialized objects."""
-
-import importlib
-import sys
-
-sys.modules[__name__] = importlib.import_module("protomotions.robot_configs.human_model.common.integration")
+"""Human model package namespace; see the package README."""

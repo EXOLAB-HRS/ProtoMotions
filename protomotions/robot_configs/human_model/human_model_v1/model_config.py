@@ -13,9 +13,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-"""Compatibility import for pre-layout callers and serialized objects."""
-
-import importlib
-import sys
-
-sys.modules[__name__] = importlib.import_module("protomotions.robot_configs.human_model.common.integration")
+"""Current 69-coordinate model; opt-in candidates are not defaults."""
+MODEL = {
+    "model_id": "human_model_v1",
+    "profile_id": "healthy_adult_v1",
+    "status": "active",
+    "runnable": True,
+    "profile": "profiles/healthy_adult_v1.json",
+    "assets": {"usd": "assets/smpl_humanoid_healthy_adult_v1.usda",
+               "mjcf": "assets/smpl_humanoid.xml"},
+    "joint_mode": "serial",
+    "joint_frame_mass": 1e-6,
+    "default_features": [],
+    "candidate_profiles": {"population_profile_candidate": "profiles/population_profile_candidate.json"},
+}

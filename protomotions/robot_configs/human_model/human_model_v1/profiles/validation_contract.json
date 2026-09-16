@@ -1,0 +1,613 @@
+{
+  "implementation_id": "healthy_adult_v1",
+  "status": "candidate",
+  "frozen_before_new_assays_at": "2026-09-13T01:10:56.078607+00:00",
+  "owner": "docs_ghlee/archive/experiments/environment_and_baselines/README.md",
+  "metrics": [
+    {
+      "group": "accounting",
+      "id": "torque_sum_max_nm",
+      "unit": "Nm",
+      "threshold_max": 0.0002,
+      "definition": "max|applied-active-elastic-damping|",
+      "conditions": "every DOF, every physical substep",
+      "required_evidence": "numerical",
+      "threshold_basis": "float32 arithmetic tolerance",
+      "status": "not_evaluated"
+    },
+    {
+      "group": "accounting",
+      "id": "active_cap_excess_max_nm",
+      "unit": "Nm",
+      "threshold_max": 0.0002,
+      "definition": "max(active-positive_cap,-active-negative_cap,0)",
+      "conditions": "instantaneous directional cap, excludes passive torque",
+      "required_evidence": "numerical",
+      "threshold_basis": "float32 arithmetic tolerance",
+      "status": "not_evaluated"
+    },
+    {
+      "group": "accounting",
+      "id": "passive_energy_gradient_nrmse",
+      "unit": "fraction",
+      "threshold_max": 1e-06,
+      "definition": "RMS(tau_elastic + central_difference(E))/max(1,RMS(tau_elastic))",
+      "conditions": "float64; h=1e-6 rad, all axes, in-ROM and extrapolation separately",
+      "required_evidence": "numerical",
+      "threshold_basis": "central finite difference audit",
+      "status": "not_evaluated"
+    },
+    {
+      "group": "accounting",
+      "id": "damping_positive_power_max_w",
+      "unit": "W",
+      "threshold_max": 1e-10,
+      "definition": "max(tau_damping*qdot,0)",
+      "conditions": "both velocity signs, all axes",
+      "required_evidence": "numerical",
+      "threshold_basis": "passivity invariant tolerance",
+      "status": "not_evaluated"
+    },
+    {
+      "group": "accounting",
+      "id": "substep_count_error",
+      "unit": "count",
+      "threshold_max": 0,
+      "definition": "abs(trace_count - physics_substeps)",
+      "conditions": "each simulator backend and partial episode reset",
+      "required_evidence": "numerical",
+      "threshold_basis": "one activation update per physical step",
+      "status": "not_evaluated"
+    },
+    {
+      "group": "accounting",
+      "id": "source_formula_max_nm",
+      "unit": "Nm",
+      "threshold_max": 1e-08,
+      "definition": "max absolute difference from independent scalar source equation",
+      "conditions": "inside reported source domain, each side/direction",
+      "required_evidence": "source_equation",
+      "threshold_basis": "float64 transcription tolerance; NOT biological accuracy",
+      "status": "not_evaluated"
+    },
+    {
+      "group": "strength",
+      "id": "isometric_torque_nrmse",
+      "unit": "fraction",
+      "threshold_max": 0.15,
+      "definition": "RMS(pred-ref)/calibration_peak_reference_Nm",
+      "conditions": "per direction; held-out joint and adjacent-joint angles",
+      "required_evidence": "independent_measurement",
+      "threshold_basis": "engineering_acceptance_target",
+      "status": "not_evaluated"
+    },
+    {
+      "group": "strength",
+      "id": "isokinetic_torque_nrmse",
+      "unit": "fraction",
+      "threshold_max": 0.15,
+      "definition": "RMS(pred-ref)/calibration_peak_reference_Nm",
+      "conditions": "concentric/eccentric and speeds separate; matched apparatus/posture",
+      "required_evidence": "independent_measurement",
+      "threshold_basis": "engineering_acceptance_target",
+      "status": "not_evaluated"
+    },
+    {
+      "group": "strength",
+      "id": "torque_bias_fraction",
+      "unit": "fraction",
+      "threshold_max": 0.05,
+      "definition": "abs(mean(pred-ref))/calibration_peak_reference_Nm",
+      "conditions": "per direction and speed, not pooled cancellation",
+      "required_evidence": "independent_measurement",
+      "threshold_basis": "engineering_acceptance_target",
+      "status": "not_evaluated"
+    },
+    {
+      "group": "strength",
+      "id": "peak_angle_error_deg",
+      "unit": "deg",
+      "threshold_max": 5,
+      "definition": "abs(argmax(pred_curve)-argmax(reference_curve))",
+      "conditions": "common preregistered angle grid; boundary maxima reported",
+      "required_evidence": "independent_measurement",
+      "threshold_basis": "engineering_acceptance_target",
+      "status": "not_evaluated"
+    },
+    {
+      "group": "activation",
+      "id": "rise_time_error_s",
+      "unit": "s",
+      "threshold_max": 0.01,
+      "definition": "abs(predicted_10_90_time-reference_10_90_time)",
+      "conditions": "fixed angle, onset clock; no fitted time shift",
+      "required_evidence": "independent_measurement",
+      "threshold_basis": "engineering_acceptance_target",
+      "status": "not_evaluated"
+    },
+    {
+      "group": "activation",
+      "id": "fall_time_error_s",
+      "unit": "s",
+      "threshold_max": 0.01,
+      "definition": "abs(predicted_90_10_time-reference_90_10_time)",
+      "conditions": "fixed angle, release and reversal separate",
+      "required_evidence": "independent_measurement",
+      "threshold_basis": "engineering_acceptance_target",
+      "status": "not_evaluated"
+    },
+    {
+      "group": "activation",
+      "id": "transient_torque_nrmse",
+      "unit": "fraction",
+      "threshold_max": 0.15,
+      "definition": "RMS(pred-ref)/reference_steady_step_amplitude",
+      "conditions": "rise/fall/reversal, including uncompleted response",
+      "required_evidence": "independent_measurement",
+      "threshold_basis": "engineering_acceptance_target",
+      "status": "not_evaluated"
+    },
+    {
+      "group": "passive_rom",
+      "id": "passive_curve_nrmse",
+      "unit": "fraction",
+      "threshold_max": 0.15,
+      "definition": "RMS(pred-ref)/calibration_reference_peak_to_peak_Nm",
+      "conditions": "relaxed multijoint sweeps at held-out postures; unclipped source range",
+      "required_evidence": "independent_measurement",
+      "threshold_basis": "engineering_acceptance_target",
+      "status": "not_evaluated"
+    },
+    {
+      "group": "passive_rom",
+      "id": "passive_coupling_nrmse",
+      "unit": "fraction",
+      "threshold_max": 0.15,
+      "definition": "RMS(predicted_delta_torque-reference_delta_torque)/calibration_delta_range_Nm",
+      "conditions": "same primary angle with changed adjacent joint angle",
+      "required_evidence": "independent_measurement",
+      "threshold_basis": "engineering_acceptance_target",
+      "status": "not_evaluated"
+    },
+    {
+      "group": "passive_rom",
+      "id": "rom_boundary_error_deg",
+      "unit": "deg",
+      "threshold_max": 5,
+      "definition": "max absolute predicted-minus-measured boundary angle",
+      "conditions": "multi-axis and adjacent-posture grid; report each boundary",
+      "required_evidence": "independent_measurement",
+      "threshold_basis": "engineering_acceptance_target",
+      "status": "not_evaluated"
+    },
+    {
+      "group": "passive_rom",
+      "id": "rom_false_accept_fraction",
+      "unit": "fraction",
+      "threshold_max": 0.05,
+      "definition": "count(predicted_allowed and measured_forbidden)/count(measured_forbidden)",
+      "conditions": "predeclared boundary-adjacent poses; denominator must be nonzero",
+      "required_evidence": "independent_measurement",
+      "threshold_basis": "engineering_acceptance_target",
+      "status": "not_evaluated"
+    },
+    {
+      "group": "passive_rom",
+      "id": "rom_false_reject_fraction",
+      "unit": "fraction",
+      "threshold_max": 0.05,
+      "definition": "count(predicted_forbidden and measured_allowed)/count(measured_allowed)",
+      "conditions": "same boundary-adjacent pose grid",
+      "required_evidence": "independent_measurement",
+      "threshold_basis": "engineering_acceptance_target",
+      "status": "not_evaluated"
+    },
+    {
+      "group": "impedance",
+      "id": "stiffness_nrmse",
+      "unit": "fraction",
+      "threshold_max": 0.2,
+      "definition": "RMS(pred_K-ref_K)/calibration_reference_K_range",
+      "conditions": "paired small-perturbation and control; matched average torque; held-out subjects/activation",
+      "required_evidence": "independent_measurement",
+      "threshold_basis": "engineering_acceptance_target",
+      "status": "not_evaluated"
+    },
+    {
+      "group": "impedance",
+      "id": "damping_nrmse",
+      "unit": "fraction",
+      "threshold_max": 0.2,
+      "definition": "RMS(pred_B-ref_B)/calibration_reference_B_range",
+      "conditions": "joint- and state-specific; inertia explicitly included",
+      "required_evidence": "independent_measurement",
+      "threshold_basis": "engineering_acceptance_target",
+      "status": "not_evaluated"
+    },
+    {
+      "group": "impedance",
+      "id": "perturbation_angle_nrmse",
+      "unit": "fraction",
+      "threshold_max": 0.15,
+      "definition": "RMS(pred_q-ref_q)/calibration_peak_perturbation_amplitude",
+      "conditions": "raw synchronized response; no gait-loop slope as stiffness",
+      "required_evidence": "independent_measurement",
+      "threshold_basis": "engineering_acceptance_target",
+      "status": "not_evaluated"
+    },
+    {
+      "group": "impedance",
+      "id": "settling_time_error_s",
+      "unit": "s",
+      "threshold_max": 0.05,
+      "definition": "abs(pred_2percent_settling-ref_2percent_settling)",
+      "conditions": "2% externally specified step band; insufficient duration is not_evaluated",
+      "required_evidence": "independent_measurement",
+      "threshold_basis": "engineering_acceptance_target",
+      "status": "not_evaluated"
+    },
+    {
+      "group": "multiaxis",
+      "id": "strength_envelope_nrmse",
+      "unit": "fraction",
+      "threshold_max": 0.15,
+      "definition": "RMS(predicted_max_radial_torque-reference)/calibration_max_torque",
+      "conditions": "held-out combined torque directions and adjacent postures",
+      "required_evidence": "independent_measurement",
+      "threshold_basis": "engineering_acceptance_target",
+      "status": "not_evaluated"
+    },
+    {
+      "group": "viscoelastic",
+      "id": "hysteresis_work_nrmse",
+      "unit": "fraction",
+      "threshold_max": 0.15,
+      "definition": "RMS(pred_cycle_work-ref_cycle_work)/calibration_reference_work_range",
+      "conditions": "complete closed cycles, matched amplitudes/speeds; external resisting torque",
+      "required_evidence": "independent_measurement",
+      "threshold_basis": "engineering_acceptance_target",
+      "status": "not_evaluated"
+    },
+    {
+      "group": "viscoelastic",
+      "id": "relaxation_curve_nrmse",
+      "unit": "fraction",
+      "threshold_max": 0.15,
+      "definition": "RMS(pred_torque-ref_torque)/calibration_initial_torque",
+      "conditions": "held stretch; separate preconditioning trials",
+      "required_evidence": "independent_measurement",
+      "threshold_basis": "engineering_acceptance_target",
+      "status": "not_evaluated"
+    },
+    {
+      "group": "fatigue",
+      "id": "capacity_curve_nrmse",
+      "unit": "fraction",
+      "threshold_max": 0.15,
+      "definition": "RMS(pred_capacity-ref_capacity)/initial_measured_capacity",
+      "conditions": "continuous and intermittent held-out protocols",
+      "required_evidence": "independent_measurement",
+      "threshold_basis": "engineering_acceptance_target",
+      "status": "not_evaluated"
+    },
+    {
+      "group": "fatigue",
+      "id": "recovery_time_error_fraction",
+      "unit": "fraction",
+      "threshold_max": 0.2,
+      "definition": "abs(pred_t90-ref_t90)/ref_t90",
+      "conditions": "First crossing of initial_measured_capacity + 0.9*(prefatigue_measured_capacity-initial_measured_capacity); fixed external levels shared by candidates, time zero at recovery onset. Report sampled bracket and left/right censoring; no inferred completion beyond observation. Positive observed reference t90 required for relative error.",
+      "required_evidence": "independent_measurement",
+      "threshold_basis": "engineering_acceptance_target",
+      "status": "not_evaluated"
+    },
+    {
+      "group": "series_elastic",
+      "id": "load_displacement_nrmse",
+      "unit": "fraction",
+      "threshold_max": 0.15,
+      "definition": "RMS(pred_displacement-ref_displacement)/calibration_displacement_range",
+      "conditions": "external load and measured elongation; tissue source separation",
+      "required_evidence": "independent_measurement",
+      "threshold_basis": "engineering_acceptance_target",
+      "status": "not_evaluated"
+    },
+    {
+      "group": "series_elastic",
+      "id": "energy_return_error_fraction",
+      "unit": "fraction",
+      "threshold_max": 0.1,
+      "definition": "abs(pred_returned/input_work-ref_returned/input_work)",
+      "conditions": "complete load-release cycles; positive nonzero input work",
+      "required_evidence": "independent_measurement",
+      "threshold_basis": "engineering_acceptance_target",
+      "status": "not_evaluated"
+    },
+    {
+      "group": "series_elastic",
+      "id": "frequency_gain_error_db",
+      "unit": "dB",
+      "threshold_max": 3,
+      "definition": "max|20log10(pred_gain/ref_gain)|",
+      "conditions": "predeclared driven frequencies within measured bandwidth",
+      "required_evidence": "independent_measurement",
+      "threshold_basis": "engineering_acceptance_target",
+      "status": "not_evaluated"
+    },
+    {
+      "group": "series_elastic",
+      "id": "frequency_phase_error_deg",
+      "unit": "deg",
+      "threshold_max": 15,
+      "definition": "max absolute wrapped phase difference",
+      "conditions": "same frequency grid; nonzero response required",
+      "required_evidence": "independent_measurement",
+      "threshold_basis": "engineering_acceptance_target",
+      "status": "not_evaluated"
+    },
+    {
+      "group": "foot_kinematics",
+      "id": "grf_rmse_bw",
+      "unit": "BW",
+      "threshold_max": 0.1,
+      "definition": "RMS(pred_force-ref_force)/(mass_kg*9.81)",
+      "conditions": "each world-axis force separately, complete stance, measured subject mass",
+      "required_evidence": "independent_measurement",
+      "threshold_basis": "engineering_acceptance_target",
+      "status": "not_evaluated"
+    },
+    {
+      "group": "foot_kinematics",
+      "id": "cop_rmse_m",
+      "unit": "m",
+      "threshold_max": 0.02,
+      "definition": "sqrt(mean(sum((pred_xy-ref_xy)^2)))",
+      "conditions": "shared plate coordinates, paired force>=20N only; coverage reported",
+      "required_evidence": "independent_measurement",
+      "threshold_basis": "engineering_acceptance_target",
+      "status": "not_evaluated"
+    },
+    {
+      "group": "foot_kinematics",
+      "id": "joint_angle_rmse_deg",
+      "unit": "deg",
+      "threshold_max": 5,
+      "definition": "RMS(pred_angle-ref_angle)",
+      "conditions": "explicit anatomical axis mapping; speed-matched gait",
+      "required_evidence": "independent_measurement",
+      "threshold_basis": "engineering_acceptance_target",
+      "status": "not_evaluated"
+    },
+    {
+      "group": "foot_kinematics",
+      "id": "joint_translation_rmse_m",
+      "unit": "m",
+      "threshold_max": 0.005,
+      "definition": "sqrt(mean(sum((pred_xyz-ref_xyz)^2)))",
+      "conditions": "bone/joint coordinate measurement; marker skin motion not ground truth",
+      "required_evidence": "independent_measurement",
+      "threshold_basis": "engineering_acceptance_target",
+      "status": "not_evaluated"
+    },
+    {
+      "group": "foot_kinematics",
+      "id": "plantar_pressure_nrmse",
+      "unit": "fraction",
+      "threshold_max": 0.2,
+      "definition": "RMS(pred_pressure-ref_pressure)/calibration_reference_pressure_range",
+      "conditions": "registered spatial grid and contact area; no unmeasured pressure from net force",
+      "required_evidence": "independent_measurement",
+      "threshold_basis": "engineering_acceptance_target",
+      "status": "not_evaluated"
+    },
+    {
+      "group": "personalization",
+      "id": "heldout_subject_macro_nrmse",
+      "unit": "fraction",
+      "threshold_max": 0.2,
+      "definition": "mean over subjects of task NRMSE",
+      "conditions": "subject-disjoint calibration/confirmation; anthropometry/strength coherent",
+      "required_evidence": "independent_measurement",
+      "threshold_basis": "engineering_acceptance_target",
+      "status": "not_evaluated"
+    },
+    {
+      "group": "output_variability",
+      "id": "torque_cv_error",
+      "unit": "fraction",
+      "threshold_max": 0.05,
+      "definition": "abs(pred_sd/abs(pred_mean)-ref_sd/abs(ref_mean))",
+      "conditions": "steady nonzero mean force; physiological output noise distinct from exploration",
+      "required_evidence": "independent_measurement",
+      "threshold_basis": "engineering_acceptance_target",
+      "status": "not_evaluated"
+    },
+    {
+      "group": "output_variability",
+      "id": "torque_spectrum_nrmse",
+      "unit": "fraction",
+      "threshold_max": 0.2,
+      "definition": "RMS(pred_PSD-ref_PSD)/calibration_PSD_range",
+      "conditions": "matched sample rate/window, de-meaned steady trial, integrated variance reported",
+      "required_evidence": "independent_measurement",
+      "threshold_basis": "engineering_acceptance_target",
+      "status": "not_evaluated"
+    },
+    {
+      "group": "walking",
+      "id": "completion_drop_pp",
+      "unit": "percentage_point",
+      "threshold_max": 0,
+      "definition": "100*(baseline_completion-candidate_completion)",
+      "conditions": "paired scenario seeds, fixed checkpoint; 3 untouched seeds, >=32 walks per seed",
+      "required_evidence": "independent_measurement",
+      "threshold_basis": "engineering_acceptance_target",
+      "status": "not_evaluated"
+    },
+    {
+      "group": "walking",
+      "id": "tracking_relative_increase",
+      "unit": "fraction",
+      "threshold_max": 0.05,
+      "definition": "candidate_speed_RMSE/baseline_speed_RMSE-1",
+      "conditions": "clean and perturbation separate; baseline near zero uses predeclared absolute margin",
+      "required_evidence": "independent_measurement",
+      "threshold_basis": "engineering_acceptance_target",
+      "status": "not_evaluated"
+    },
+    {
+      "group": "walking",
+      "id": "tilt_relative_increase",
+      "unit": "fraction",
+      "threshold_max": 0.05,
+      "definition": "candidate_tilt_RMS/baseline_tilt_RMS-1",
+      "conditions": "same scenarios; report fall termination without censoring failed walks",
+      "required_evidence": "independent_measurement",
+      "threshold_basis": "engineering_acceptance_target",
+      "status": "not_evaluated"
+    },
+    {
+      "group": "walking",
+      "id": "foot_slip_relative_increase",
+      "unit": "fraction",
+      "threshold_max": 0.05,
+      "definition": "candidate_support_foot_speed/baseline_support_foot_speed-1",
+      "conditions": "contact-point data if available, otherwise clearly labeled centroid proxy",
+      "required_evidence": "independent_measurement",
+      "threshold_basis": "engineering_acceptance_target",
+      "status": "not_evaluated"
+    }
+  ],
+  "policy": {
+    "thresholds": "Numerical tolerances are arithmetic/physics invariants. All biological numeric thresholds are engineering acceptance targets, NOT established healthy norms. Tighten using measurement repeatability where available; never loosen after confirmation.",
+    "uncertainty": "When independent measurement standard uncertainty u exists, also require standardized_RMSE<=2 and >=95% within2u. Population SD is not u.",
+    "splits": "Calibration: fit; screening: choose model; confirmation: untouched subjects/conditions, never used for refit. Ablation: disable one feature at a time. Numerical/source equations are not independent biological observations.",
+    "normalization": "Fixed calibration reference scale per joint/direction. A zero/unknown scale is not evaluable. Never normalize by candidate output.",
+    "aggregation": "Report every joint/direction/condition and subject; equal-weight subject macro scores; no pooled averaging to hide failures. Candidate adoption requires all required primary and safety gates, no missing evidence.",
+    "repeated_confirmation": "A failed confirmation remains a failed candidate result. Subsequent fit makes that set screening; new untouched data is required for independent final confirmation.",
+    "diagnostics": [
+      "saturation fraction and near-locked axes separately",
+      "positive/negative joint work",
+      "ROM exceedance",
+      "force domain and numerical guard hit fraction",
+      "coverage and missing channels",
+      "source and config SHA256"
+    ],
+    "source_scope": "Anderson Table3 curve reproduction and first-order activation analytic tests validate software only. GAS source sign remains unresolved. No clinical validity claimed."
+  },
+  "scope_policy": {
+    "primary": "joint_level_plant",
+    "supplementary_groups": {
+      "walking": "fixed_pretrained_controller_integration",
+      "foot_kinematics": "foot_contact_and_kinematic_integration"
+    },
+    "reason": "User clarified joint-level plant implementation; controller training is outside scope. Supplementary measurements are retained separately, not required to establish joint-model numerical correctness.",
+    "threshold_interpretation": "Engineering targets are provisional acceptance proposals, not established biological norms or measurement-derived tolerances."
+  },
+  "implementation_coverage": {
+    "accounting": {
+      "status": "implemented",
+      "scope": "Substep torque/work/limit metrics and numerical assays; backend validation coverage remains assay-specific."
+    },
+    "strength": {
+      "status": "partial",
+      "scope": "69 directional constant caps; sagittal hip/knee/ankle angle-speed candidates; source cohort/size and explicit capacity scaling. No full-body measured force envelope."
+    },
+    "activation": {
+      "status": "partial",
+      "scope": "Directional first-order joint activation proxy, reset/replay support. Independent joint torque onset/release measurements missing."
+    },
+    "passive_rom": {
+      "status": "partial",
+      "scope": "69 independent bounds, lower-limb coupled exponential energy and wrist linear springs. Multi-axis posture-dependent anatomical bounds missing; fitted passive candidate not adopted."
+    },
+    "impedance": {
+      "status": "partial",
+      "scope": "Passive tangent K/B and perturbation fitting metrics. Explicit joint API coactivation allocates balanced opposing effort within directional activation caps. No measured activation-dependent stiffness/damping law; simulator default net-torque interface unchanged."
+    },
+    "multiaxis": {
+      "status": "not_implemented",
+      "scope": "Independent axis bounds only; no coupled multi-axis active torque envelope."
+    },
+    "viscoelastic": {
+      "status": "partial",
+      "scope": "Memoryless springs and viscous damping can dissipate cycle work; no tissue relaxation or internal history state."
+    },
+    "fatigue": {
+      "status": "partial",
+      "scope": "Candidate three-compartment ODE integrated into explicitly mapped joint torque directions, available-capacity diagnostics, reset and replay; numerical and short MuJoCo checks only. No independent endurance/recovery validation; independent directional reservoirs remain an assumption. Source endurance-error reproduction remains unresolved: tested dt and two unfatigued initial conditions do not explain the high-load reference-curve discrepancy."
+    },
+    "series_elastic": {
+      "status": "not_implemented",
+      "scope": "No separate series elastic displacement or force transmission state."
+    },
+    "foot_kinematics": {
+      "status": "integration_only",
+      "scope": "Existing rigid-body engine and contact geometry; no identified compliant foot/pressure model."
+    },
+    "personalization": {
+      "status": "partial",
+      "scope": "Strength reference cohort/size and per-direction scale only; body geometry/inertia and subject-level validation missing."
+    },
+    "output_variability": {
+      "status": "not_implemented",
+      "scope": "No physiological motor output noise; policy exploration/action noise is not equivalent."
+    },
+    "walking": {
+      "status": "integration_only",
+      "scope": "Historical frozen-controller diagnostics; controller training outside current user scope."
+    }
+  },
+  "implementation_coverage_policy": "Source-code coverage inventory, not experimental pass/fail or biological validation. Conditional roadmap items remain recorded and unimplemented, not marked complete.",
+  "measurement_reference_notes": {
+    "NGUYEN2020_reliability": {
+      "source": "https://www.frontiersin.org/journals/sports-and-active-living/articles/10.3389/fspor.2020.00023/full",
+      "table": "Table 1",
+      "applies_to": "EOD fitted EL/VI summaries under source reliability protocol only",
+      "reported_absolute_sem": {
+        "intra_EL": 0.223,
+        "intra_VI": 0.181,
+        "inter_EL": 0.154,
+        "inter_VI": 0.178
+      },
+      "unit_caution": "VI retains source Hz regression definition; do not directly use as physical B uncertainty",
+      "percentage_caution": "Source SEM% is not SEM divided by reported mean; do not use as a global percentage tolerance",
+      "gate_usage": "Context only until population/protocol/observable compatibility established; MDC is paired-change detectability, not model accuracy",
+      "adopted_as_global_threshold": false
+    }
+  },
+  "delivery_scope": {
+    "user_selected_max_level": "L2",
+    "priority": "Finish L0 and L1 verification/fixes before adopting L2 candidates",
+    "L0": [
+      "units and coordinates",
+      "joint ordering",
+      "force application and decomposition",
+      "backend asset loading",
+      "reset and replay"
+    ],
+    "L1": [
+      "independent-axis ROM",
+      "directional constant active torque limits",
+      "basic passive elasticity and damping with explicit coverage"
+    ],
+    "L2": [
+      "angle-dependent strength",
+      "velocity-dependent strength",
+      "effective activation and relaxation dynamics",
+      "major posture-dependent joint coupling"
+    ],
+    "deferred_L3": [
+      "active coactivation-dependent impedance",
+      "fatigue and recovery",
+      "tissue history and series elasticity",
+      "subject-specific personalization",
+      "physiological output variability"
+    ],
+    "outside_scope": [
+      "controller training",
+      "compliant foot pressure model"
+    ],
+    "interpretation": "Levels classify delivery scope, not implementation version or biological validation. Preserve deferred code/evidence; do not count it toward L0-L2 completion."
+  }
+}

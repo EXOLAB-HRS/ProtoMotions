@@ -1,4 +1,24 @@
-# 건강한 성인 관절 모델 — healthy_adult_v1
+# Human model — 공통 코드와 버전별 자산
+
+> 분류: **내부 구현·실험 기록**. 2026-09-16 사용자 승인으로 폴더를 분리했다. 물성·토크 법칙·학습 결과는 바꾸지 않는다.
+
+## 버전 선택과 소유 경로
+
+| 경로 | 역할·상태 |
+|---|---|
+| `common/` | 공통 계산·연결·metric·검증/보정 도구. 현재 실행 가능한 plant는 v1이며 v1 전용 후보 파라미터를 v2 기본값으로 사용하지 않음 |
+| `human_model_v1/` | 현재 모델. `model_config.py`, `joint_map.json`, `profiles/`, `assets/`, SHA/provenance `manifest.json` |
+| `human_model_v2/` | 생체 관절 제안의 candidate namespace. 모델 자산·변환·생체 검증은 미구현; 실행 요청은 명시적으로 거부 |
+| `registry.py` | `human_model_v1`와 기존 `healthy_adult_v1` 이름 연결, v2 실행 방지 |
+| `tests/common/`, `tests/human_model_v1/`, `tests/human_model_v2/` | 공통 지표/호환성, v1 물리·연결, v2 미구현 guard 검사 |
+
+기존 root Python 모듈은 호환 import/CLI 진입점이며 구현 복사본이 아니다. 기존 세 JSON과 기존 human-model USDA 경로는 canonical 자원으로 연결한 상대 symlink다. 기존 checkpoint의 import와 명령을 보존하기 위해 이 경로는 의도적으로 유지한다. 공용 legacy SMPL MJCF는 기존 자산 위치를 유지하고 v1 `assets/smpl_humanoid.xml`에서 참조한다. Linux symlink 지원 checkout을 기준으로 한다.
+
+`PROTOMOTIONS_HUMAN_MODEL=human_model_v1`와 `healthy_adult_v1`은 같은 기본 물성을 선택한다. `human_model_v2`는 디자인 단계 오류를 내며 v1로 대체하지 않는다. 기본 선택은 기존 `healthy_adult_v1`이다. `profiles/population_profile_candidate.json`는 이전 실험의 보정 후보를 SHA 그대로 보존한 자료이며, runtime 기본값으로 자동 채택하지 않는다. 과거 assay 실행에서는 명시적인 `candidate_profile_path`로 선택했다.
+
+`python -m protomotions.robot_configs.human_model.validation` 및 `.calibration`은 유지되며 canonical 실행 경로는 `.common.validation`, `.common.calibration`이다. v1 재현 기준은 manifest의 **분리 전 baseline commit**과 자원 SHA다. 이후 공통 코드가 바뀌면 그 commit 또는 해당 실행의 코드 SHA로 재현해야 한다. 과거 원시 trace/영상은 상위 `output/`에 남고 이 패키지에 복사하지 않는다.
+
+## v1 모델 정의와 과거 검증 범위
 
 이 디렉터리는 SMPL 강체 모델의 **관절 RoM, 방향별 능동 토크 한계, 수동 탄성·감쇠**를 관리한다. 기본 프로필은 `healthy_adult_v1.json`이다. 서로 다른 연구의 건강한 성인 측정 평균을 조합했으며, 근거가 없는 축은 가정 또는 미구현으로 명시했다. 하나의 모집단에서 측정한 전신 평균 데이터는 아니다.
 
@@ -8,13 +28,13 @@
 
 | 파일 | 역할 |
 | --- | --- |
-| `healthy_adult_v1.json` | 69개 축의 값, 단위, 방향, 근거 ID, 가정; 향후 모델을 추가할 위치 |
-| `profile.py` | 프로필 로딩·검증 |
-| `dynamics.py` | 방향별 능동 토크 제한과 별도의 수동 관절 힘 |
-| `../../data/assets/usd/smpl_humanoid_healthy_adult_v1.usda` | **RoM·원본 부위 질량/COM/관성을 저장한 편집 원본; 기본 실행은 직렬 hinge 캐시로 변환** |
-| `assets.py` | USDA의 RoM 일치 검사; IsaacLab 직렬 hinge 및 MuJoCo/IsaacGym MJCF 캐시 생성 |
-| `integration.py` | 새 설정 및 이전 체크포인트에 프로필 적용 |
-| `tests/test_human_model.py` | 에너지·힘·축 방향·자산·실제 MuJoCo 경로 검증 |
+| `human_model_v1/profiles/healthy_adult_v1.json` | 69개 축의 값, 단위, 방향, 근거 ID, 가정; v1 기본 profile |
+| `common/profile.py` | 프로필 로딩·검증 |
+| `common/dynamics.py` | 방향별 능동 토크 제한과 별도의 수동 관절 힘 |
+| `human_model_v1/assets/smpl_humanoid_healthy_adult_v1.usda` | **RoM·원본 부위 질량/COM/관성을 저장한 편집 원본; 기본 실행은 직렬 hinge 캐시로 변환** |
+| `human_model_v1/assets/builder.py` | USDA의 RoM 일치 검사; IsaacLab 직렬 hinge 및 MuJoCo/IsaacGym MJCF 캐시 생성 |
+| `common/integration.py` | 새 설정 및 이전 체크포인트에 프로필 적용 |
+| `tests/human_model_v1/test_human_model.py` | 에너지·힘·축 방향·자산·실제 MuJoCo 경로 검증 |
 
 이 패치를 적용하면 `SmplRobotConfig`의 기본 프로필이 자동으로 활성화된다. `resolved_configs_inference.pt`에 저장된 과거 설정도 시뮬레이터 생성 시 다시 적용한다. 정책 네트워크의 가중치나 입출력 순서를 변환하지 않는다. 기존 PD 이득은 능동 명령 계산에 유지한다. 생체 토크 제한을 적용하므로 과거 정책의 균형·보행 성능은 재평가해야 한다.
 
@@ -29,7 +49,7 @@ PROTOMOTIONS_HUMAN_MODEL=legacy python ...
 python -m pytest -q protomotions/robot_configs/human_model/tests
 ```
 
-IsaacLab은 [smpl_humanoid_healthy_adult_v1.usda](../../data/assets/usd/smpl_humanoid_healthy_adult_v1.usda)를 편집 원본으로 읽고, 기본 `human_model_usd_joint_mode="serial"`에서 X→Y→Z 단일축 연결 자산을 캐시하여 실행한다. 기존 D6 표현은 `"d6"`로 명시할 때 진단용으로 실행할 수 있지만 강한 토크 시험의 ROM 검증에 실패했다. 69축의 `limit:rotX/Y/Z:physics:low/high`에 아래의 RoM을 **도(°) 단위로 저장**했다. 이 텍스트 파일은 일반 Git으로 관리하므로 이 파일을 위한 LFS 다운로드는 필요 없다. 기존 `smpl_humanoid.usda`는 legacy 모델용으로 유지한다.
+IsaacLab은 [smpl_humanoid_healthy_adult_v1.usda](human_model_v1/assets/smpl_humanoid_healthy_adult_v1.usda)를 편집 원본으로 읽고, 기본 `human_model_usd_joint_mode="serial"`에서 X→Y→Z 단일축 연결 자산을 캐시하여 실행한다. 기존 D6 표현은 `"d6"`로 명시할 때 진단용으로 실행할 수 있지만 강한 토크 시험의 ROM 검증에 실패했다. 69축의 `limit:rotX/Y/Z:physics:low/high`에 아래의 RoM을 **도(°) 단위로 저장**했다. 이 텍스트 파일은 일반 Git으로 관리하므로 이 파일을 위한 LFS 다운로드는 필요 없다. 기존 `smpl_humanoid.usda`는 legacy 모델용으로 유지한다.
 
 원본 USDA와 RoM은 실행 중 덮어쓰지 않는다. 직렬 hinge 캐시는 원본·변환 코드·수치 프레임 질량의 내용 해시로 구분해 생성한다. RoM을 변경할 때는 이 USDA와 JSON의 `rom_deg`를 함께 수정한다. JSON은 행동 범위와 MJCF 백엔드에 사용하며, IsaacLab 시작 시 USDA와 일치하는지 검사한다. MuJoCo/IsaacGym은 같은 JSON에서 만든 MJCF를 `/tmp/protomotions-human-model-<uid>/<content-hash>/`에 캐시한다. MJCF 캐시 위치는 `PROTOMOTIONS_HUMAN_MODEL_CACHE`로 지정할 수 있다.
 

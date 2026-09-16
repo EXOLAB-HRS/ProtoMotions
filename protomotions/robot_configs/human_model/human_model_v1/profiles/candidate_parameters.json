@@ -1,0 +1,501 @@
+{
+  "implementation_id": "healthy_adult_v1",
+  "status": "candidate",
+  "default_enabled": false,
+  "owner": "docs_ghlee/archive/experiments/environment_and_baselines/README.md",
+  "strength": {
+    "source": "https://www.cs.cmu.edu/~cga/exo/info/Anderson2007.pdf",
+    "location": "Eq.9, Table2 and Table3, ages18-25, seven men and seven women",
+    "interpretation": "Equal mean of two sex-specific prediction curves using each cohort mean mass and height. This is a synthetic cohort proxy, not personalization of the SMPL mass and not held-out biological validation. No Anderson passive term is added.",
+    "parameter_order": [
+      "C1_normalized_by_weight_height",
+      "C2_per_rad",
+      "C3_rad",
+      "C4_rad_s",
+      "C5_rad_s",
+      "C6_s_rad"
+    ],
+    "cohorts": [
+      {
+        "mass_kg": 72.8,
+        "height_m": 1.748
+      },
+      {
+        "mass_kg": 62.1,
+        "height_m": 1.606
+      }
+    ],
+    "gravity_m_s2": 9.81,
+    "outside_domain": "Hold angle and angular speed at nearest reported measurement-domain boundary; report outside-domain fraction. This guard is an assumption, not validated extrapolation.",
+    "directions": {
+      "hip_extension": {
+        "joint": "Hip_y",
+        "sign": 1,
+        "clinical_angle_sign": -1,
+        "angle_domain_rad": [
+          -0.5,
+          1.3
+        ],
+        "concentric_limit_rad_s": 2.0943951023931953,
+        "eccentric_limit_rad_s": 1.0471975511965976,
+        "coefficients": [
+          [
+            0.161,
+            0.958,
+            0.932,
+            1.578,
+            3.19,
+            0.242
+          ],
+          [
+            0.181,
+            0.697,
+            1.242,
+            1.567,
+            3.164,
+            0.164
+          ]
+        ]
+      },
+      "hip_flexion": {
+        "joint": "Hip_y",
+        "sign": -1,
+        "clinical_angle_sign": -1,
+        "angle_domain_rad": [
+          -0.5,
+          1.3
+        ],
+        "concentric_limit_rad_s": 2.0943951023931953,
+        "eccentric_limit_rad_s": 1.0471975511965976,
+        "coefficients": [
+          [
+            0.113,
+            0.738,
+            -0.214,
+            2.095,
+            4.267,
+            0.218
+          ],
+          [
+            0.127,
+            0.65,
+            -0.35,
+            2.136,
+            4.349,
+            0.156
+          ]
+        ]
+      },
+      "knee_extension": {
+        "joint": "Knee_y",
+        "sign": -1,
+        "clinical_angle_sign": 1,
+        "angle_domain_rad": [
+          0,
+          1.8
+        ],
+        "concentric_limit_rad_s": 2.6179938779914944,
+        "eccentric_limit_rad_s": 1.3089969389957472,
+        "coefficients": [
+          [
+            0.163,
+            1.258,
+            1.133,
+            1.517,
+            3.952,
+            0.095
+          ],
+          [
+            0.159,
+            1.187,
+            1.274,
+            1.393,
+            3.623,
+            0.173
+          ]
+        ]
+      },
+      "knee_flexion": {
+        "joint": "Knee_y",
+        "sign": 1,
+        "clinical_angle_sign": 1,
+        "angle_domain_rad": [
+          0,
+          1.8
+        ],
+        "concentric_limit_rad_s": 2.6179938779914944,
+        "eccentric_limit_rad_s": 1.3089969389957472,
+        "coefficients": [
+          [
+            0.087,
+            0.869,
+            0.522,
+            2.008,
+            5.233,
+            0.304
+          ],
+          [
+            0.08,
+            0.873,
+            0.635,
+            1.698,
+            4.412,
+            0.175
+          ]
+        ]
+      },
+      "plantarflexion": {
+        "joint": "Ankle_y",
+        "sign": 1,
+        "clinical_angle_sign": -1,
+        "angle_domain_rad": [
+          -0.6,
+          0.5
+        ],
+        "concentric_limit_rad_s": 2.0943951023931953,
+        "eccentric_limit_rad_s": 1.0471975511965976,
+        "coefficients": [
+          [
+            0.095,
+            1.391,
+            0.408,
+            0.987,
+            3.558,
+            0.295
+          ],
+          [
+            0.104,
+            1.399,
+            0.424,
+            0.862,
+            3.109,
+            0.189
+          ]
+        ]
+      },
+      "dorsiflexion": {
+        "joint": "Ankle_y",
+        "sign": -1,
+        "clinical_angle_sign": -1,
+        "angle_domain_rad": [
+          -0.6,
+          0.5
+        ],
+        "concentric_limit_rad_s": 2.0943951023931953,
+        "eccentric_limit_rad_s": 1.0471975511965976,
+        "coefficients": [
+          [
+            0.033,
+            1.51,
+            -0.187,
+            0.699,
+            1.94,
+            0.828
+          ],
+          [
+            0.027,
+            1.079,
+            -0.302,
+            0.864,
+            2.399,
+            0.771
+          ]
+        ]
+      }
+    }
+  },
+  "activation": {
+    "rise_s": 0.01,
+    "fall_s": 0.04,
+    "source": "https://opensimconfluence.atlassian.net/wiki/spaces/OpenSim/pages/53090590",
+    "interpretation": "Constant first-order effective joint activation proxy; these are assumed muscle-scale time constants, not measured joint response. This is not the activation-dependent OpenSim ODE. Sweep 0.5x,1x,2x in screening."
+  },
+  "gastrocnemius": {
+    "status": "candidate_curve_fitted_restoring_energy",
+    "source": "https://uwnmbl.engr.wisc.edu/pubs/jb07_silder.pdf",
+    "reason": "Printed equation sign is not copied. Opt-in passive_fit uses restoring-energy exponent signs and nonnegative amplitude fitted to digitized Silder curves. Independent biological confirmation remains required."
+  },
+  "passive_fit": {
+    "source": "https://doi.org/10.6084/m9.figshare.26018563",
+    "source_scope": "Silder2007 figures, digitized fitted curves; calibration only, no independent biological confirmation",
+    "fit_method": "nonnegative least squares for conservative energy amplitudes, fixed slopes",
+    "calibration_curve_ids": [
+      "isometric_passive_286_curve0",
+      "isometric_passive_286_curve1",
+      "isometric_passive_286_curve2",
+      "isometric_passive_286_curve3",
+      "isometric_passive_287_curve0",
+      "isometric_passive_287_curve1",
+      "isometric_passive_288_curve0",
+      "isometric_passive_288_curve1",
+      "isometric_passive_289_curve0",
+      "isometric_passive_289_curve1",
+      "isometric_passive_289_curve2",
+      "isometric_passive_289_curve3"
+    ],
+    "calibration_scales_nm": {
+      "L_Ankle_y": 40.199999999999996,
+      "L_Hip_y": 89.19999999999999,
+      "L_Knee_y": 45.8
+    },
+    "passive_exponentials": [
+      {
+        "name": "L_hip_flexor",
+        "coeff_per_rad": {
+          "L_Hip_y": 5.1
+        },
+        "offset": 1.7357299411083604,
+        "energy_scale_j": 0.27021890141876864,
+        "source": "SILDER2007"
+      },
+      {
+        "name": "L_hip_extensor",
+        "coeff_per_rad": {
+          "L_Hip_y": -2.0
+        },
+        "offset": -0.9529497715889039,
+        "energy_scale_j": 0.5013994187122799,
+        "source": "SILDER2007"
+      },
+      {
+        "name": "L_knee_flexor",
+        "coeff_per_rad": {
+          "L_Knee_y": -5.8
+        },
+        "offset": 1.2957324366805902,
+        "energy_scale_j": 0.0,
+        "source": "SILDER2007"
+      },
+      {
+        "name": "L_knee_extensor",
+        "coeff_per_rad": {
+          "L_Knee_y": 3.5
+        },
+        "offset": -6.224716777237777,
+        "energy_scale_j": 0.45454918016133317,
+        "source": "SILDER2007"
+      },
+      {
+        "name": "L_plantarflexor",
+        "coeff_per_rad": {
+          "L_Ankle_y": -4.9
+        },
+        "offset": 0.2907718533822553,
+        "energy_scale_j": 0.3128992464747118,
+        "source": "SILDER2007"
+      },
+      {
+        "name": "L_rectus_femoris",
+        "coeff_per_rad": {
+          "L_Hip_y": 3.1,
+          "L_Knee_y": 1.9
+        },
+        "offset": 1.3201670462085109,
+        "energy_scale_j": 0.03787263165320276,
+        "source": "SILDER2007"
+      },
+      {
+        "name": "L_hamstrings",
+        "coeff_per_rad": {
+          "L_Hip_y": -5.1,
+          "L_Knee_y": -3.9
+        },
+        "offset": -2.7415631890326924,
+        "energy_scale_j": 0.2445145632560857,
+        "source": "SILDER2007"
+      },
+      {
+        "name": "L_gastrocnemius",
+        "coeff_per_rad": {
+          "L_Knee_y": -4.5,
+          "L_Ankle_y": -4.7
+        },
+        "offset": 0.0,
+        "energy_scale_j": 1.0657004056657016,
+        "source": "SILDER2007_CURVE_FIT",
+        "note": "Restoring-energy sign hypothesis, amplitude fitted to digitized source curves; not printed Eq.A.6/A.7 reproduction."
+      },
+      {
+        "name": "R_hip_flexor",
+        "coeff_per_rad": {
+          "R_Hip_y": 5.1
+        },
+        "offset": 1.7357299411083604,
+        "energy_scale_j": 0.27021890141876864,
+        "source": "SILDER2007"
+      },
+      {
+        "name": "R_hip_extensor",
+        "coeff_per_rad": {
+          "R_Hip_y": -2.0
+        },
+        "offset": -0.9529497715889039,
+        "energy_scale_j": 0.5013994187122799,
+        "source": "SILDER2007"
+      },
+      {
+        "name": "R_knee_flexor",
+        "coeff_per_rad": {
+          "R_Knee_y": -5.8
+        },
+        "offset": 1.2957324366805902,
+        "energy_scale_j": 0.0,
+        "source": "SILDER2007"
+      },
+      {
+        "name": "R_knee_extensor",
+        "coeff_per_rad": {
+          "R_Knee_y": 3.5
+        },
+        "offset": -6.224716777237777,
+        "energy_scale_j": 0.45454918016133317,
+        "source": "SILDER2007"
+      },
+      {
+        "name": "R_plantarflexor",
+        "coeff_per_rad": {
+          "R_Ankle_y": -4.9
+        },
+        "offset": 0.2907718533822553,
+        "energy_scale_j": 0.3128992464747118,
+        "source": "SILDER2007"
+      },
+      {
+        "name": "R_rectus_femoris",
+        "coeff_per_rad": {
+          "R_Hip_y": 3.1,
+          "R_Knee_y": 1.9
+        },
+        "offset": 1.3201670462085109,
+        "energy_scale_j": 0.03787263165320276,
+        "source": "SILDER2007"
+      },
+      {
+        "name": "R_hamstrings",
+        "coeff_per_rad": {
+          "R_Hip_y": -5.1,
+          "R_Knee_y": -3.9
+        },
+        "offset": -2.7415631890326924,
+        "energy_scale_j": 0.2445145632560857,
+        "source": "SILDER2007"
+      },
+      {
+        "name": "R_gastrocnemius",
+        "coeff_per_rad": {
+          "R_Knee_y": -4.5,
+          "R_Ankle_y": -4.7
+        },
+        "offset": 0.0,
+        "energy_scale_j": 1.0657004056657016,
+        "source": "SILDER2007_CURVE_FIT",
+        "note": "Restoring-energy sign hypothesis, amplitude fitted to digitized source curves; not printed Eq.A.6/A.7 reproduction."
+      }
+    ],
+    "source_sha256": {
+      "chen2025_datasets.mat": "90df32956a923c9ac0e93c57736efa5a952a251ece750807b138b107464c9804",
+      "chen2025_catalog.xlsx": "8d00804eaf8e8bd61aee91e0d333f4038e10c94b8dc09ea151d4706dbe7c6874"
+    }
+  },
+  "strength_coupling": {
+    "beta_per_rad": 0.3201695097384741,
+    "reference_knee_rad": 0.8726646259971648,
+    "knee_domain_rad": [
+      0.0,
+      2.0943951023931953
+    ],
+    "scope": "Screening matched-angle isometric torque ratios; not biological confirmation or individual muscle identification",
+    "fit_method": "Equal study and matched-angle group weighted centered log torque regression; beta nonnegative",
+    "status": "candidate",
+    "source": "https://doi.org/10.6084/m9.figshare.26018563",
+    "fit_sha256": "11d5042cfeb88890af3ffe0d80204c48354cdadbc97308828088145f475c5409",
+    "training_studies": [
+      "Kawakami, Ichinose, et al. (1998)",
+      "Miyamoto & Oda (2003)"
+    ],
+    "note": "Plantarflexion-only gain exp(-beta*(knee-reference)); extrapolation holds boundary. Dynamic use is an unvalidated separability assumption and flagged out of domain."
+  },
+  "wrist_damping": {
+    "status": "candidate",
+    "source": "https://www.frontiersin.org/journals/sports-and-active-living/articles/10.3389/fspor.2020.00023/full",
+    "location": "Methods Electromechanical Oscillation Device; Figure2 frequency axis Hz; Table2 ages25-45",
+    "reported_vi_female": 1.89,
+    "reported_vi_male": 2.56,
+    "interpretation": "Reported VI is slope of quadrature torque/displacement amplitude versus frequency in Hz. Candidate interprets B=VI/(2*pi) for torque=-B*qdot. The source labels VI Nms/rad; this conversion follows its stated frequency regression, not independent biological confirmation. Figure2 is visibly nonlinear, so a constant B does not reproduce the full measured response.",
+    "frequency_hz": [
+      3,
+      12
+    ],
+    "oscillation_amplitude_deg": 10,
+    "joint_names": [
+      "L_Wrist_x",
+      "R_Wrist_x"
+    ],
+    "outside_domain": "Constant-coefficient extrapolation outside relaxed neutral-wrist oscillation protocol is unvalidated."
+  },
+  "fatigue": {
+    "status": "candidate_torque_integration",
+    "source": "Frey-Law2012 Table1 and Appendix Eq1-6",
+    "source_url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC3397684/",
+    "tracking_rate_per_s": 10.0,
+    "regions": {
+      "Ankle": {
+        "fatigue_rate_per_s": 0.00589,
+        "recovery_rate_per_s": 0.00058
+      },
+      "Knee": {
+        "fatigue_rate_per_s": 0.015,
+        "recovery_rate_per_s": 0.00149
+      },
+      "Trunk": {
+        "fatigue_rate_per_s": 0.00755,
+        "recovery_rate_per_s": 0.00075
+      },
+      "Shoulder": {
+        "fatigue_rate_per_s": 0.0182,
+        "recovery_rate_per_s": 0.00168
+      },
+      "Elbow": {
+        "fatigue_rate_per_s": 0.00912,
+        "recovery_rate_per_s": 0.00094
+      },
+      "Hand/Grip": {
+        "fatigue_rate_per_s": 0.0098,
+        "recovery_rate_per_s": 0.00064
+      },
+      "General": {
+        "fatigue_rate_per_s": 0.0097,
+        "recovery_rate_per_s": 0.00091
+      }
+    },
+    "scope": "Opt-in joint torque integration with explicit region-to-DOF mapping; sustained isometric source scope only",
+    "state_order": [
+      "resting",
+      "active",
+      "fatigued"
+    ],
+    "notes": [
+      "Do not use abstract transposed F/R labels; Table1 retained",
+      "Hand/Grip is not a wrist-torque parameter",
+      "No independent intermittent fatigue or recovery validation claimed",
+      "Independent negative/positive torque-direction reservoirs are a modeling assumption, not direction-specific measured parameters",
+      "Unmapped DOFs retain direct torque behavior; activation and fatigue features are mutually exclusive",
+      "Frey-Law2010 PMC2891087 Table2 ET power curves were used to calibrate the 2012 parameters; they are not independent confirmation.",
+      "Frey-Law2010 Table1 Knee evidence is extension-only; assigning Knee rates to flexion is an unvalidated extrapolation.",
+      "Knee 9-intensity reference reproduction unresolved: exact pre-failure affine ODE RMSE25.9254s, exact 1Hz discretization RMSE25.7062s vs published6.7s; do not attribute discrepancy to SSPRK2 integration error."
+    ],
+    "rest_augmentation": {
+      "status": "candidate",
+      "default_multiplier": 1.0,
+      "source_multipliers": [
+        15.0,
+        30.0
+      ],
+      "source_urls": [
+        "https://pmc.ncbi.nlm.nih.gov/articles/PMC6092960/",
+        "https://pmc.ncbi.nlm.nih.gov/articles/PMC8848298/"
+      ],
+      "scope": "Enhanced fatigued-to-resting transfer only for exact target zero. Joint direction reservoirs remain an assumption; no all-joint adoption."
+    }
+  }
+}

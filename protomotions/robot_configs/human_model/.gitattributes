@@ -1,0 +1,3 @@
+# Versioned model metadata and authored USDA are reviewable text.
+*.json -filter diff merge text eol=lf
+*.usda -filter diff merge text eol=lf

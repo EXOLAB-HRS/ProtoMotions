@@ -19,7 +19,7 @@ from protomotions.robot_configs.smpl import SmplRobotConfig
 
 
 def test_com_randomization_uses_physical_names_with_intermediate_frame_links():
-    source=Path(__file__).resolve().parents[3]/'simulator/isaaclab/simulator.py'
+    source=Path(__file__).resolve().parents[4]/'simulator/isaaclab/simulator.py'
     tree=ast.parse(source.read_text())
     cls=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='IsaacLabSimulator')
     method=next(n for n in cls.body if isinstance(n,ast.FunctionDef) and n.name=='_apply_domain_randomization_if_needed')
@@ -96,7 +96,7 @@ def test_serialized_plant_parameters_reach_native_actuator_limits(monkeypatch):
 
 
 def native_scene_class():
-    source = Path(__file__).resolve().parents[3] / "simulator/isaaclab/utils/scene.py"
+    source = Path(__file__).resolve().parents[4] / "simulator/isaaclab/utils/scene.py"
     tree = ast.parse(source.read_text(), filename=str(source))
     cls = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "SceneCfg")
     cls.decorator_list = []

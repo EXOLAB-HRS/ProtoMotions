@@ -1,0 +1,130 @@
+{
+  "model_id": "human_model_v1",
+  "legacy_profile_id": "healthy_adult_v1",
+  "status": "active",
+  "baseline_commit": "aeacb784c7334bd54e72900077fc8ca5a076f9b1",
+  "baseline_tests": "143 passed, 1 existing warning; OpenUSD library paths set",
+  "default_profile": "profiles/healthy_adult_v1.json",
+  "default_features": [],
+  "candidate_parameters_status": "candidate_opt_in_not_default",
+  "population_profile": {
+    "path": "profiles/population_profile_candidate.json",
+    "status": "candidate",
+    "source": "output/260914/e01_human_model_population/configs/population_profile_candidate.json",
+    "sha256": "d227c5ba78d5e25d854679798982feecc73cb131d5796dcb422c5758b509ffe7",
+    "scope": "Used by prior population/all-direction assays; not runtime default or independent human fidelity certification"
+  },
+  "artifacts": [
+    {
+      "path": "__init__.py",
+      "sha256": "96615d25eca7e9f92464fea3627fc635adbb3b44531f503f555bb1f7bb41090d"
+    },
+    {
+      "path": "assets/__init__.py",
+      "sha256": "96615d25eca7e9f92464fea3627fc635adbb3b44531f503f555bb1f7bb41090d"
+    },
+    {
+      "path": "assets/builder.py",
+      "sha256": "7911f097b513a4fe2436c8d9635b77e1d13cf2e2042e7e314c83e29486cd6bb3"
+    },
+    {
+      "path": "assets/smpl_humanoid.xml",
+      "sha256": "58dc997c830b3ded2d2b4528797ed2768f9528b2f25aa008e541fe3a9083e7cc"
+    },
+    {
+      "path": "assets/smpl_humanoid_healthy_adult_v1.usda",
+      "sha256": "09da2f31fe80395ff18c4750d312b72ef2469720392ad14976322d523de14d0c"
+    },
+    {
+      "path": "joint_map.json",
+      "sha256": "c57fc0aa5377cd045d13ba4d4cf3e438444b939317d15a1f755636f668a9c89b"
+    },
+    {
+      "path": "model_config.py",
+      "sha256": "9e583800f1af11c4f32870c23408205d5fc0d3a695a39052544d8ba0e1d08c89"
+    },
+    {
+      "path": "profiles/candidate_parameters.json",
+      "sha256": "7637ed1c8e85c9a370cef0632dc2c6f8e7d6c44989a48d6ec3ed097641bca464"
+    },
+    {
+      "path": "profiles/healthy_adult_v1.json",
+      "sha256": "f3456051b775b5135818b9932c031aa23c73f571648b5648541e868d3f79b037"
+    },
+    {
+      "path": "profiles/population_profile_candidate.json",
+      "sha256": "d227c5ba78d5e25d854679798982feecc73cb131d5796dcb422c5758b509ffe7"
+    },
+    {
+      "path": "profiles/validation_contract.json",
+      "sha256": "840028d8c659ae56bf841bd6ed0f426bcd207f2198e85feb3d0d3e6985418c68"
+    }
+  ],
+  "historical_evidence_root": "output/260915/e02_human_model_all_direction_rom",
+  "historical_evidence_availability": "Workspace-local; videos and raw traces are not bundled in this package.",
+  "common_code": [
+    {
+      "path": "common/__init__.py",
+      "sha256": "96615d25eca7e9f92464fea3627fc635adbb3b44531f503f555bb1f7bb41090d",
+      "status": "active"
+    },
+    {
+      "path": "common/calibration.py",
+      "sha256": "d3262568b013d3c1549c17fe48f8216db0210c9b7d0df976960d0af814cd4902",
+      "status": "active"
+    },
+    {
+      "path": "common/dynamics.py",
+      "sha256": "da56dd25b21cc03a9bcc3ead9e0a2f6daa4e69ac14744c7bc7fa8e70dab65871",
+      "status": "active"
+    },
+    {
+      "path": "common/integration.py",
+      "sha256": "2fad42cdf780376b5da533a4c5ddd3923aed09e34c4d51df89c1182d7397a8a8",
+      "status": "active"
+    },
+    {
+      "path": "common/metrics.py",
+      "sha256": "2829bf68fa760cc693573cfc6b76597df6f7b7c37a1c0712b3403321da404708",
+      "status": "active"
+    },
+    {
+      "path": "common/paths.py",
+      "sha256": "fb10ad5855a6c0caa499bf8587ef04e5ec9ad5307eaad29215150e81be1c6cea",
+      "status": "active"
+    },
+    {
+      "path": "common/profile.py",
+      "sha256": "bf87c3e0de204fb33deaafb5222c5333686058255a9d6d65a30a7934ec189f14",
+      "status": "active"
+    },
+    {
+      "path": "common/validation.py",
+      "sha256": "23063bbb1b6b957bc59465a488fdfec1071b85063107c3e59f14c43d58647b9a",
+      "status": "active"
+    }
+  ],
+  "migration_validation": {
+    "tests": 149,
+    "failed": 0,
+    "skipped": 0,
+    "warning": "existing invalid escape sequence warning",
+    "baseline_comparison": {
+      "default": "3fca9da8a7704b2511042c590367ad8c11504e4427a818019e11a7b0cd0fc4ae",
+      "strength": "14707addd0a9b7a99a33e985b358f625ec958316a62189194e55deba0d370531",
+      "activation": "6991270528070d3b013b88dc37ff41e8762ec7a663ca4a23802d1ed24413435f",
+      "passive": "73bf324b09d6978850f83c93c4ab9c4b08e3ec581f6badbfeb2b3e58a504633e",
+      "fatigue": "c771ce63f9506b497dca47da164381570392ac5185227e9d5cffc40e38582b6c",
+      "derived_mjcf": "7437bb61e66e8fe28185616505063433f09f252049645a533499936c4d072f28"
+    },
+    "parity_scope": "CPU torch.float32, 32 x 69 deterministic sin/cos states, four 1/480s steps; default/strength+coupling/activation/passive_fit+wrist_damping/fatigue. SHA hashes of torque tuple bytes and derived MJCF match before/after relocation. Not a new whole-body biological or locomotion validation.",
+    "cli": [
+      "legacy validation --help",
+      "legacy calibration --help",
+      "common validation --help",
+      "common calibration --help"
+    ],
+    "openusd": "authored and serial asset tests included",
+    "native_isaaclab_run": "not rerun for layout-only migration"
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "model_id": "human_model_v2",
+  "status": "candidate",
+  "implementation_status": "design_only",
+  "runnable": false,
+  "authorization": "2026-09-16 user approved versioned folder structure and push",
+  "design_document": "docs_ghlee/archive/experiments/human_model_joint_design/README.md",
+  "validation_status": "not_implemented",
+  "assets": []
+}
