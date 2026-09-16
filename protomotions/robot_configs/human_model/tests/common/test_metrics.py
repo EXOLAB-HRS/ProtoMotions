@@ -581,3 +581,25 @@ def test_active_rom_metrics_detects_subframe_assistance_and_missing_audit():
     audit['time']=t[::16]
     with pytest.raises(ValueError,match='every physical substep'):
         active_rom_metrics(trace,sub,audit,chapters)
+
+
+def test_suspended_gait_targets_are_smooth_bounded_and_alternating():
+    from protomotions.robot_configs.human_model.validation import suspended_gait_target
+    from protomotions.robot_configs.human_model.profile import load_profile
+    joints=load_profile()['joints'];names=list(joints)
+    q=np.array([suspended_gait_target(names,t)[0] for t in np.linspace(0,12,721)])
+    bounds=np.deg2rad([joints[n]['rom_deg'] for n in names])
+    assert (q>=bounds[:,0]).all() and (q<=bounds[:,1]).all()
+    for t in [0.,12.]:
+        _,v,a=suspended_gait_target(names,t)
+        assert np.max(abs(v))==0 and np.max(abs(a))==0
+    h=1e-5
+    for t in [.7,2.,3.4,10.,11.2]:
+        _,v,a=suspended_gait_target(names,t)
+        qm,vm,_=suspended_gait_target(names,t-h)
+        qp,vp,_=suspended_gait_target(names,t+h)
+        np.testing.assert_allclose((qp-qm)/(2*h),v,atol=1e-7)
+        np.testing.assert_allclose((vp-vm)/(2*h),a,atol=1e-4)
+    for t in np.linspace(2,10,37):
+        q,_,_=suspended_gait_target(names,t)
+        assert np.rad2deg(q[names.index('L_Hip_y')]+q[names.index('R_Hip_y')])==pytest.approx(-10)

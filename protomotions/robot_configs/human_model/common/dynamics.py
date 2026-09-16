@@ -100,10 +100,12 @@ class HumanJointModel:
             raise ValueError(f"Unknown human-model candidate features: {self.features}")
         if 'strength_coupling' in self.features and 'strength' not in self.features:
             raise ValueError('strength_coupling requires strength')
+        if self.features and profile["id"] == "human_model_v2":
+            raise ValueError("v1 optional force candidates have not been calibrated on v2 axes")
         if self.features:
             self.candidate_parameters = json.loads(v1_resource("candidate_parameters.json").read_text())
         if set(dof_names) != set(profile["joints"]) or len(set(dof_names)) != len(dof_names):
-            raise ValueError("Human profile requires the exact 69-axis SMPL joint set")
+            raise ValueError("Human profile requires its exact named joint set")
         self.names = list(dof_names)
         self.fatigue_regions = dict(fatigue_regions or {})
         self._fatigue = None
@@ -173,26 +175,28 @@ class HumanJointModel:
             params = self.candidate_parameters
             self.activation_rise_s = params["activation"]["rise_s"]
             self.activation_fall_s = params["activation"]["fall_s"]
-            if "strength" in self.features:
-                strength = params["strength"]
-                scales = tensor([r["mass_kg"] * r["height_m"] * strength["gravity_m_s2"] for r in strength["cohorts"]])
-                if self.strength_reference_size is not None:
-                    mass,height = self.strength_reference_size
-                    scales.fill_(mass*height*strength['gravity_m_s2'])
-                for row in strength["directions"].values():
-                    coefficients = tensor(row["coefficients"])
-                    coefficients[:, 0] *= scales
-                    for side in ("L", "R"):
-                        i = self.names.index(f"{side}_{row['joint']}")
-                        self._strength_rows.append((i, row, coefficients))
-                        # The concentric rational function <= 1 for these data.
-                        bound = (self.strength_cohort_weights * coefficients[:, 0] * (1 + coefficients[:, 5] * row["eccentric_limit_rad_s"])).sum()
-                        bound *= self.active_strength_scale[i, int(row['sign']>0)]
-                        if 'strength_coupling' in self.features and row['joint']=='Ankle_y' and row['sign']>0:
-                            coupling=params['strength_coupling']
-                            bound*=math.exp(-coupling['beta_per_rad']*(coupling['knee_domain_rad'][0]-coupling['reference_knee_rad']))
-                        previous = torch.maximum(self.negative[i], self.positive[i])
-                        self.backend_limit[i] += (bound - previous).clamp_min(0)
+        strength = profile.get("active_strength_model")
+        if "strength" in self.features:
+            strength = self.candidate_parameters["strength"]
+        if strength is not None:
+            scales = tensor([r["mass_kg"] * r["height_m"] * strength["gravity_m_s2"] for r in strength["cohorts"]])
+            if self.strength_reference_size is not None:
+                mass,height = self.strength_reference_size
+                scales.fill_(mass*height*strength['gravity_m_s2'])
+            for row in strength["directions"].values():
+                coefficients = tensor(row["coefficients"])
+                coefficients[:, 0] *= scales
+                for side in ("L", "R"):
+                    i = self.names.index(f"{side}_{row['joint']}")
+                    self._strength_rows.append((i, row, coefficients))
+                    # The concentric rational function <= 1 for these data.
+                    bound = (self.strength_cohort_weights * coefficients[:, 0] * (1 + coefficients[:, 5] * row["eccentric_limit_rad_s"])).sum()
+                    bound *= self.active_strength_scale[i, int(row['sign']>0)]
+                    if 'strength_coupling' in self.features and row['joint']=='Ankle_y' and row['sign']>0:
+                        coupling=params['strength_coupling']
+                        bound*=math.exp(-coupling['beta_per_rad']*(coupling['knee_domain_rad'][0]-coupling['reference_knee_rad']))
+                    previous = torch.maximum(self.negative[i], self.positive[i])
+                    self.backend_limit[i] += (bound - previous).clamp_min(0)
 
     def strength_caps(self, q, qd, *, directional_domain=False):
         """Caps and extrapolation flags for enabled candidates; stateless.

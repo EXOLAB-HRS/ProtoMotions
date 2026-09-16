@@ -121,12 +121,15 @@ def prepare_simulator(robot_config, simulator_config, device):
         # Load the committed, editable USDA directly. RoM is authored in the
         # file; actuator force settings are supplied by the IsaacLab scene.
         usd = get_model(name).asset_path("usd")
-        validate_usda_rom(usd.read_text(), profile)
+        if name == "human_model_v2":
+            from ..human_model_v2.assets.builder import validate_assets
+            validate_assets(profile)
+        else:validate_usda_rom(usd.read_text(), profile)
         joint_mode=getattr(robot_config,'human_model_usd_joint_mode','serial')
         backend.human_model_usd_joint_mode=joint_mode
         if joint_mode=='serial':
             usd=derive_serial_usda(usd,frame_mass=getattr(robot_config,'human_model_joint_frame_mass',1e-6))
-        elif joint_mode!='d6':
+        elif joint_mode not in ('d6','anatomical'):
             raise ValueError(f'Unsupported human model USD joint mode: {joint_mode}')
         asset.asset_root = str(usd.parent)
         asset.usd_asset_file_name = usd.name
@@ -136,6 +139,8 @@ def prepare_simulator(robot_config, simulator_config, device):
         if not xml.is_file():
             # Checkpoint may contain an absolute path on its training machine.
             xml = packaged_assets / "mjcf/smpl_humanoid.xml"
+        if name == "human_model_v2":
+            raise NotImplementedError("v2 runtime currently verified on IsaacLab only")
         asset.asset_root = str(derive_mjcf(xml, profile, limits))
         asset.asset_file_name = "smpl_humanoid.xml"
     backend._human_model_enabled = True

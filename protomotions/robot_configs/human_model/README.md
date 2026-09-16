@@ -1,22 +1,38 @@
 # Human model — 공통 코드와 버전별 자산
 
-> 분류: **내부 구현·실험 기록**. 2026-09-16 사용자 승인으로 폴더를 분리했다. 물성·토크 법칙·학습 결과는 바꾸지 않는다.
+> 분류: **내부 구현·실험 기록**. 2026-09-16 사용자 승인으로 폴더를 분리하고 v2의 teacher 연결 전 plant를 구현했다. v1의 자산·기본 profile은 보존한다.
 
 ## 버전 선택과 소유 경로
 
 | 경로 | 역할·상태 |
 |---|---|
-| `common/` | 공통 계산·연결·metric·검증/보정 도구. 현재 실행 가능한 plant는 v1이며 v1 전용 후보 파라미터를 v2 기본값으로 사용하지 않음 |
+| `common/` | 공통 계산·연결·metric·검증/보정 도구. v1/v2 force 계산과 IsaacLab 연결. v1 opt-in strength/activation/fatigue 후보를 v2에서 자동 실행하지 않음 |
 | `human_model_v1/` | 현재 모델. `model_config.py`, `joint_map.json`, `profiles/`, `assets/`, SHA/provenance `manifest.json` |
-| `human_model_v2/` | 생체 관절 제안의 candidate namespace. 모델 자산·변환·생체 검증은 미구현; 실행 요청은 명시적으로 거부 |
-| `registry.py` | `human_model_v1`와 기존 `healthy_adult_v1` 이름 연결, v2 실행 방지 |
-| `tests/common/`, `tests/human_model_v1/`, `tests/human_model_v2/` | 공통 지표/호환성, v1 물리·연결, v2 미구현 guard 검사 |
+| `human_model_v2/` | 59좌표 plant: MyoLeg 기반 하지 고정 축, ankle/subtalar 분리. 인체자료 보정 수동 profile 채택; 독립 생체 인증 아님 |
+| `registry.py` | `human_model_v1`와 기존 `healthy_adult_v1` 이름 연결, v2 자산·profile 선택 |
+| `tests/common/`, `tests/human_model_v1/`, `tests/human_model_v2/` | 공통 지표/호환성, v1 물리·연결, v2 좌표·자산/ROM·에너지·질량 보존 검사 |
 
 기존 root Python 모듈은 호환 import/CLI 진입점이며 구현 복사본이 아니다. 기존 세 JSON과 기존 human-model USDA 경로는 canonical 자원으로 연결한 상대 symlink다. 기존 checkpoint의 import와 명령을 보존하기 위해 이 경로는 의도적으로 유지한다. 공용 legacy SMPL MJCF는 기존 자산 위치를 유지하고 v1 `assets/smpl_humanoid.xml`에서 참조한다. Linux symlink 지원 checkout을 기준으로 한다.
 
-`PROTOMOTIONS_HUMAN_MODEL=human_model_v1`와 `healthy_adult_v1`은 같은 기본 물성을 선택한다. `human_model_v2`는 디자인 단계 오류를 내며 v1로 대체하지 않는다. 기본 선택은 기존 `healthy_adult_v1`이다. `profiles/population_profile_candidate.json`는 이전 실험의 보정 후보를 SHA 그대로 보존한 자료이며, runtime 기본값으로 자동 채택하지 않는다. 과거 assay 실행에서는 명시적인 `candidate_profile_path`로 선택했다.
+`PROTOMOTIONS_HUMAN_MODEL=human_model_v1`와 `healthy_adult_v1`은 같은 기본 물성을 선택한다. v2는 아래 전용 factory로 선택한다. 기존 69좌표 설정에 이름만 v2로 붙이면 좌표 불일치로 거부한다. 기본 선택은 기존 `healthy_adult_v1`이다. `profiles/population_profile_candidate.json`는 이전 실험의 보정 후보를 SHA 그대로 보존한 자료이며, v1 runtime 기본값으로 자동 채택하지 않는다. v2는 별도 profile에 명시적으로 반영하고 다시 검증했다. 과거 assay 실행에서는 명시적인 `candidate_profile_path`로 선택했다.
 
 `python -m protomotions.robot_configs.human_model.validation` 및 `.calibration`은 유지되며 canonical 실행 경로는 `.common.validation`, `.common.calibration`이다. v1 재현 기준은 manifest의 **분리 전 baseline commit**과 자원 SHA다. 이후 공통 코드가 바뀌면 그 commit 또는 해당 실행의 코드 SHA로 재현해야 한다. 과거 원시 trace/영상은 상위 `output/`에 남고 이 패키지에 복사하지 않는다.
+
+## v2 실행 계약 — teacher 연결 전
+
+```python
+from protomotions.robot_configs.human_model.human_model_v2.model_config import robot_config
+robot = robot_config()  # IsaacLab, 59 scalar coordinates; TORQUE input
+```
+
+- 하지 한쪽7개: Hip_y/x/z(굴신→내외전→회전 순서), Knee_y, Ankle_y(부위 Talus), Subtalar_x(부위 Ankle/calcaneus), Toe_y. 상체45좌표 유지. 실제 부위26개와 수치 프레임34개. x/y/z 접미사는 좌표 식별자이며 새 하지 축이 직교축이라는 뜻이 아니다.
+- `assets/myoleg_joint_reference.json`에 MyoLeg 원본 commit/SHA, 축·offset을 보존한다. 무릎 연동 운동·근육·건은 구현하지 않는다. 중립 SMPL 형상과 anthropometry는 유지한다. Talus는 기존 발 질량10%를 나누고 중립 총 COM/관성을 보존한 가정이다.
+- `profiles/healthy_adult_v2.json`: v1 population 후보의 knee/passive toe/wrist 보정을 재사용한 v2 profile. 하지 힘 법칙은 새 고정 축으로 옮긴 대용값이며 subtalar strength는 v1 ankle inversion/eversion proxy다. v1 기본 profile은 변하지 않는다.
+- v2의 `active_strength_model`은 Anderson2007 Eq9의 hip/knee/ankle 굴신6방향을 양쪽에 기본 적용한다. 각 관절 자신의 q/qd에 따라 능동 상한을 계산한다. `active_nm`은 해당 축의 실제 동적 상한이 아니라 기존 정적 참조값이며, 현재 상한은 `strength_caps(q, qd)` / simulator `human_negative_caps`, `human_positive_caps`로 읽는다. 나머지 축은 정적 proxy를 유지한다. 문헌 범위 밖은 경계값 유지와 flag이며 생체 검증 범위가 아니다. v1 optional `strength`와 별개로 v2 profile에 명시되어 있으며 기본 v1 물성은 바뀌지 않는다.
+- 입력은 각 환경의 59차원 요청 토크와 현재 q/qd, 출력은 능동/수동/합산 토크. IsaacLab이 중력·contact·ROM을 해석하고 상태를 반환한다. 공개 상태 순서는 `joint_map.json`과 config metadata를 따른다. HumanJointModel 자체에는 q_ref 제어기가 포함되지 않는다.
+- USD는 실행 자산이고 MJCF는 metadata/별도 FK·관성 교차검사 자산이다. v2 MuJoCo/IsaacGym runtime은 이 단계에서 검증하지 않으며 비IsaacLab 동역학 경로를 거부한다. v1 optional force candidates도 새 축에 자동 적용하지 않는다.
+- Native 시험은 공통 `validation --scenario suspended_gait/population_load/v2_suite --population-config ...`와 v2 `validation.py`를 사용한다. 설정·결과·소스 bundle: workspace `output/260916/e02_human_model_v2/`. 단관절 ROM은 비검사 축 clamp, 발 하중은 외부 harness/비발 자세 clamp를 명시한다. 자력 서기/보행·retargeter·teacher 연결/학습은 포함하지 않는다.
+- 모델 자산/힘 profile뿐 아니라 armature·solver·dt·접촉·외부 시험 지지 조건도 결과 해석에 필요하다. 지원발 시험의 TGS external-forces-every-iteration 설정은 다른 시험과 구분한다. 상세 수치·실패 기록은 상위 `docs_ghlee/archive/experiments/human_model_joint_design/README.md`와 manifest를 따른다.
 
 ## v1 모델 정의와 과거 검증 범위
 

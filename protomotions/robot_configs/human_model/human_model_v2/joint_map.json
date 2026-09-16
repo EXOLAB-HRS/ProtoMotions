@@ -1,9 +1,1797 @@
 {
   "model_id": "human_model_v2",
-  "status": "candidate",
-  "implemented": false,
-  "joints": [],
-  "planned_lower_limb_dofs": 14,
-  "total_dofs": null,
-  "note": "No executable ordering until anatomical frames and upper-body mapping are validated."
+  "dof_count": 59,
+  "lower_dofs": 14,
+  "joints": [
+    {
+      "name": "L_Hip_y",
+      "parent": "Pelvis",
+      "child": "_joint_frame_L_Hip_0",
+      "axis_local": [
+        -0.0,
+        1.0,
+        -0.0
+      ],
+      "offset_parent": [
+        -0.006800000322982669,
+        0.06949999928474426,
+        -0.09139999747276306
+      ],
+      "source": {
+        "source_joint": "hip_flexion_l",
+        "source_axis": [
+          0.0,
+          0.0,
+          1.0
+        ],
+        "axis_local": [
+          -0.0,
+          1.0,
+          -0.0
+        ],
+        "coordinate_sign": -1,
+        "source_to_model_rotation": [
+          [
+            1.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          [
+            0.0,
+            1.0,
+            0.0
+          ]
+        ],
+        "source_sha256": "da7c4a13eec2abfedc683210972ea423d630461a56909bee2884e181e1bf1d97"
+      }
+    },
+    {
+      "name": "L_Hip_x",
+      "parent": "_joint_frame_L_Hip_0",
+      "child": "_joint_frame_L_Hip_1",
+      "axis_local": [
+        1.0,
+        -0.0,
+        -0.0
+      ],
+      "offset_parent": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "source": {
+        "source_joint": "hip_adduction_l",
+        "source_axis": [
+          -1.0,
+          0.0,
+          0.0
+        ],
+        "axis_local": [
+          1.0,
+          -0.0,
+          -0.0
+        ],
+        "coordinate_sign": -1,
+        "source_to_model_rotation": [
+          [
+            1.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          [
+            0.0,
+            1.0,
+            0.0
+          ]
+        ],
+        "source_sha256": "da7c4a13eec2abfedc683210972ea423d630461a56909bee2884e181e1bf1d97"
+      }
+    },
+    {
+      "name": "L_Hip_z",
+      "parent": "_joint_frame_L_Hip_1",
+      "child": "L_Hip",
+      "axis_local": [
+        -0.0,
+        -0.0,
+        1.0
+      ],
+      "offset_parent": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "source": {
+        "source_joint": "hip_rotation_l",
+        "source_axis": [
+          0.0,
+          -1.0,
+          0.0
+        ],
+        "axis_local": [
+          -0.0,
+          -0.0,
+          1.0
+        ],
+        "coordinate_sign": -1,
+        "source_to_model_rotation": [
+          [
+            1.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          [
+            0.0,
+            1.0,
+            0.0
+          ]
+        ],
+        "source_sha256": "da7c4a13eec2abfedc683210972ea423d630461a56909bee2884e181e1bf1d97"
+      }
+    },
+    {
+      "name": "L_Knee_y",
+      "parent": "L_Hip",
+      "child": "L_Knee",
+      "axis_local": [
+        3.983728789901512e-10,
+        0.9974966970001451,
+        0.07071307852017697
+      ],
+      "offset_parent": [
+        -0.0044999998062849045,
+        0.034299999475479126,
+        -0.3752000033855438
+      ],
+      "source": {
+        "source_joint": "knee_angle_l",
+        "source_axis": [
+          3.98373e-10,
+          0.0707131,
+          -0.997497
+        ],
+        "axis_local": [
+          3.9837287899015113e-10,
+          0.997496697000145,
+          0.07071307852017696
+        ],
+        "coordinate_sign": 1,
+        "source_to_model_rotation": [
+          [
+            1.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          [
+            0.0,
+            1.0,
+            0.0
+          ]
+        ],
+        "source_sha256": "da7c4a13eec2abfedc683210972ea423d630461a56909bee2884e181e1bf1d97"
+      }
+    },
+    {
+      "name": "L_Ankle_y",
+      "parent": "L_Knee",
+      "child": "L_Talus",
+      "axis_local": [
+        -0.10501403567558429,
+        0.9791263326308125,
+        -0.17402205911913202
+      ],
+      "offset_parent": [
+        -0.043700000271201134,
+        -0.013600006699562073,
+        -0.398000031709671
+      ],
+      "source": {
+        "source_joint": "ankle_angle_l",
+        "source_axis": [
+          0.105014,
+          0.174022,
+          0.979126
+        ],
+        "axis_local": [
+          -0.10501403567558429,
+          0.9791263326308125,
+          -0.17402205911913202
+        ],
+        "coordinate_sign": -1,
+        "source_to_model_rotation": [
+          [
+            1.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          [
+            0.0,
+            1.0,
+            0.0
+          ]
+        ],
+        "source_sha256": "da7c4a13eec2abfedc683210972ea423d630461a56909bee2884e181e1bf1d97"
+      }
+    },
+    {
+      "name": "L_Subtalar_x",
+      "parent": "L_Talus",
+      "child": "L_Ankle",
+      "axis_local": [
+        0.787180020856335,
+        -0.1209490032045439,
+        0.6047470160227725
+      ],
+      "offset_parent": [
+        -0.036635794117028164,
+        0.0059494666681743635,
+        -0.031512642263878066
+      ],
+      "source": {
+        "source_joint": "subtalar_angle_l",
+        "source_axis": [
+          -0.78718,
+          -0.604747,
+          -0.120949
+        ],
+        "axis_local": [
+          0.787180020856335,
+          -0.1209490032045439,
+          0.6047470160227725
+        ],
+        "coordinate_sign": -1,
+        "source_to_model_rotation": [
+          [
+            1.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          [
+            0.0,
+            1.0,
+            0.0
+          ]
+        ],
+        "source_sha256": "da7c4a13eec2abfedc683210972ea423d630461a56909bee2884e181e1bf1d97"
+      }
+    },
+    {
+      "name": "L_Toe_y",
+      "parent": "L_Ankle",
+      "child": "L_Toe",
+      "axis_local": [
+        -0.5809541852628335,
+        0.8139362595594309,
+        0.0
+      ],
+      "offset_parent": [
+        0.15593579448657696,
+        0.02045053318877449,
+        -0.0242873784308546
+      ],
+      "source": {
+        "source_joint": "mtp_angle_l",
+        "source_axis": [
+          -0.580954,
+          0.0,
+          -0.813936
+        ],
+        "axis_local": [
+          -0.5809541852628335,
+          0.8139362595594309,
+          0.0
+        ],
+        "coordinate_sign": 1,
+        "source_to_model_rotation": [
+          [
+            1.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          [
+            0.0,
+            1.0,
+            0.0
+          ]
+        ],
+        "source_sha256": "da7c4a13eec2abfedc683210972ea423d630461a56909bee2884e181e1bf1d97"
+      }
+    },
+    {
+      "name": "R_Hip_y",
+      "parent": "Pelvis",
+      "child": "_joint_frame_R_Hip_0",
+      "axis_local": [
+        -0.0,
+        1.0,
+        -0.0
+      ],
+      "offset_parent": [
+        -0.004299999913200736,
+        -0.06770001351833344,
+        -0.09049999713897705
+      ],
+      "source": {
+        "source_joint": "hip_flexion_r",
+        "source_axis": [
+          0.0,
+          0.0,
+          1.0
+        ],
+        "axis_local": [
+          -0.0,
+          1.0,
+          -0.0
+        ],
+        "coordinate_sign": -1,
+        "source_to_model_rotation": [
+          [
+            1.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          [
+            0.0,
+            1.0,
+            0.0
+          ]
+        ],
+        "source_sha256": "da7c4a13eec2abfedc683210972ea423d630461a56909bee2884e181e1bf1d97"
+      }
+    },
+    {
+      "name": "R_Hip_x",
+      "parent": "_joint_frame_R_Hip_0",
+      "child": "_joint_frame_R_Hip_1",
+      "axis_local": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "offset_parent": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "source": {
+        "source_joint": "hip_adduction_r",
+        "source_axis": [
+          1.0,
+          0.0,
+          0.0
+        ],
+        "axis_local": [
+          1.0,
+          0.0,
+          0.0
+        ],
+        "coordinate_sign": 1,
+        "source_to_model_rotation": [
+          [
+            1.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          [
+            0.0,
+            1.0,
+            0.0
+          ]
+        ],
+        "source_sha256": "da7c4a13eec2abfedc683210972ea423d630461a56909bee2884e181e1bf1d97"
+      }
+    },
+    {
+      "name": "R_Hip_z",
+      "parent": "_joint_frame_R_Hip_1",
+      "child": "R_Hip",
+      "axis_local": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "offset_parent": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "source": {
+        "source_joint": "hip_rotation_r",
+        "source_axis": [
+          0.0,
+          1.0,
+          0.0
+        ],
+        "axis_local": [
+          0.0,
+          0.0,
+          1.0
+        ],
+        "coordinate_sign": 1,
+        "source_to_model_rotation": [
+          [
+            1.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          [
+            0.0,
+            1.0,
+            0.0
+          ]
+        ],
+        "source_sha256": "da7c4a13eec2abfedc683210972ea423d630461a56909bee2884e181e1bf1d97"
+      }
+    },
+    {
+      "name": "R_Knee_y",
+      "parent": "R_Hip",
+      "child": "R_Knee",
+      "axis_local": [
+        -3.983728789901512e-10,
+        0.9974966970001451,
+        -0.07071307852017697
+      ],
+      "offset_parent": [
+        -0.008899999782443047,
+        -0.038300007581710815,
+        -0.38260000944137573
+      ],
+      "source": {
+        "source_joint": "knee_angle_r",
+        "source_axis": [
+          -3.98373e-10,
+          -0.0707131,
+          -0.997497
+        ],
+        "axis_local": [
+          -3.9837287899015113e-10,
+          0.997496697000145,
+          -0.07071307852017696
+        ],
+        "coordinate_sign": 1,
+        "source_to_model_rotation": [
+          [
+            1.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          [
+            0.0,
+            1.0,
+            0.0
+          ]
+        ],
+        "source_sha256": "da7c4a13eec2abfedc683210972ea423d630461a56909bee2884e181e1bf1d97"
+      }
+    },
+    {
+      "name": "R_Ankle_y",
+      "parent": "R_Knee",
+      "child": "R_Talus",
+      "axis_local": [
+        0.10501403567558429,
+        0.9791263326308125,
+        0.17402205911913202
+      ],
+      "offset_parent": [
+        -0.042300001718103886,
+        0.015799999237060547,
+        -0.3983999788761139
+      ],
+      "source": {
+        "source_joint": "ankle_angle_r",
+        "source_axis": [
+          -0.105014,
+          -0.174022,
+          0.979126
+        ],
+        "axis_local": [
+          0.10501403567558429,
+          0.9791263326308125,
+          0.17402205911913202
+        ],
+        "coordinate_sign": -1,
+        "source_to_model_rotation": [
+          [
+            1.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          [
+            0.0,
+            1.0,
+            0.0
+          ]
+        ],
+        "source_sha256": "da7c4a13eec2abfedc683210972ea423d630461a56909bee2884e181e1bf1d97"
+      }
+    },
+    {
+      "name": "R_Subtalar_x",
+      "parent": "R_Talus",
+      "child": "R_Ankle",
+      "axis_local": [
+        0.787180020856335,
+        0.1209490032045439,
+        0.6047470160227725
+      ],
+      "offset_parent": [
+        -0.03675597289395885,
+        -0.005968983090427593,
+        -0.031616015232757366
+      ],
+      "source": {
+        "source_joint": "subtalar_angle_r",
+        "source_axis": [
+          0.78718,
+          0.604747,
+          -0.120949
+        ],
+        "axis_local": [
+          0.787180020856335,
+          0.1209490032045439,
+          0.6047470160227725
+        ],
+        "coordinate_sign": 1,
+        "source_to_model_rotation": [
+          [
+            1.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          [
+            0.0,
+            1.0,
+            0.0
+          ]
+        ],
+        "source_sha256": "da7c4a13eec2abfedc683210972ea423d630461a56909bee2884e181e1bf1d97"
+      }
+    },
+    {
+      "name": "R_Toe_y",
+      "parent": "R_Ankle",
+      "child": "R_Toe",
+      "axis_local": [
+        0.5809541852628335,
+        0.8139362595594309,
+        0.0
+      ],
+      "offset_parent": [
+        0.16005597391915874,
+        -0.01943102964112453,
+        -0.016483979426666462
+      ],
+      "source": {
+        "source_joint": "mtp_angle_r",
+        "source_axis": [
+          0.580954,
+          0.0,
+          -0.813936
+        ],
+        "axis_local": [
+          0.5809541852628335,
+          0.8139362595594309,
+          0.0
+        ],
+        "coordinate_sign": 1,
+        "source_to_model_rotation": [
+          [
+            1.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          [
+            0.0,
+            1.0,
+            0.0
+          ]
+        ],
+        "source_sha256": "da7c4a13eec2abfedc683210972ea423d630461a56909bee2884e181e1bf1d97"
+      }
+    },
+    {
+      "name": "Torso_x",
+      "parent": "Pelvis",
+      "child": "_joint_frame_Torso_0",
+      "axis_local": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "offset_parent": [
+        -0.02670000004582107,
+        -0.002499997615814209,
+        0.10899999737739563
+      ],
+      "source": {
+        "source": "v1 upper-body retained"
+      }
+    },
+    {
+      "name": "Torso_y",
+      "parent": "_joint_frame_Torso_0",
+      "child": "_joint_frame_Torso_1",
+      "axis_local": [
+        0.0,
+        1.0,
+        0.0
+      ],
+      "offset_parent": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "source": {
+        "source": "v1 upper-body retained"
+      }
+    },
+    {
+      "name": "Torso_z",
+      "parent": "_joint_frame_Torso_1",
+      "child": "Torso",
+      "axis_local": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "offset_parent": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "source": {
+        "source": "v1 upper-body retained"
+      }
+    },
+    {
+      "name": "Spine_x",
+      "parent": "Torso",
+      "child": "_joint_frame_Spine_0",
+      "axis_local": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "offset_parent": [
+        0.0010999999940395355,
+        0.005500003695487976,
+        0.13519999384880066
+      ],
+      "source": {
+        "source": "v1 upper-body retained"
+      }
+    },
+    {
+      "name": "Spine_y",
+      "parent": "_joint_frame_Spine_0",
+      "child": "_joint_frame_Spine_1",
+      "axis_local": [
+        0.0,
+        1.0,
+        0.0
+      ],
+      "offset_parent": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "source": {
+        "source": "v1 upper-body retained"
+      }
+    },
+    {
+      "name": "Spine_z",
+      "parent": "_joint_frame_Spine_1",
+      "child": "Spine",
+      "axis_local": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "offset_parent": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "source": {
+        "source": "v1 upper-body retained"
+      }
+    },
+    {
+      "name": "Chest_x",
+      "parent": "Spine",
+      "child": "_joint_frame_Chest_0",
+      "axis_local": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "offset_parent": [
+        0.02539999969303608,
+        0.0014999955892562866,
+        0.05289998650550842
+      ],
+      "source": {
+        "source": "v1 upper-body retained"
+      }
+    },
+    {
+      "name": "Chest_y",
+      "parent": "_joint_frame_Chest_0",
+      "child": "_joint_frame_Chest_1",
+      "axis_local": [
+        0.0,
+        1.0,
+        0.0
+      ],
+      "offset_parent": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "source": {
+        "source": "v1 upper-body retained"
+      }
+    },
+    {
+      "name": "Chest_z",
+      "parent": "_joint_frame_Chest_1",
+      "child": "Chest",
+      "axis_local": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "offset_parent": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "source": {
+        "source": "v1 upper-body retained"
+      }
+    },
+    {
+      "name": "Neck_x",
+      "parent": "Chest",
+      "child": "_joint_frame_Neck_0",
+      "axis_local": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "offset_parent": [
+        -0.042899999767541885,
+        -0.002800002694129944,
+        0.21389997005462646
+      ],
+      "source": {
+        "source": "v1 upper-body retained"
+      }
+    },
+    {
+      "name": "Neck_y",
+      "parent": "_joint_frame_Neck_0",
+      "child": "_joint_frame_Neck_1",
+      "axis_local": [
+        0.0,
+        1.0,
+        0.0
+      ],
+      "offset_parent": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "source": {
+        "source": "v1 upper-body retained"
+      }
+    },
+    {
+      "name": "Neck_z",
+      "parent": "_joint_frame_Neck_1",
+      "child": "Neck",
+      "axis_local": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "offset_parent": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "source": {
+        "source": "v1 upper-body retained"
+      }
+    },
+    {
+      "name": "Head_x",
+      "parent": "Neck",
+      "child": "_joint_frame_Head_0",
+      "axis_local": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "offset_parent": [
+        0.05130000039935112,
+        0.005199998617172241,
+        0.06499999761581421
+      ],
+      "source": {
+        "source": "v1 upper-body retained"
+      }
+    },
+    {
+      "name": "Head_y",
+      "parent": "_joint_frame_Head_0",
+      "child": "_joint_frame_Head_1",
+      "axis_local": [
+        0.0,
+        1.0,
+        0.0
+      ],
+      "offset_parent": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "source": {
+        "source": "v1 upper-body retained"
+      }
+    },
+    {
+      "name": "Head_z",
+      "parent": "_joint_frame_Head_1",
+      "child": "Head",
+      "axis_local": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "offset_parent": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "source": {
+        "source": "v1 upper-body retained"
+      }
+    },
+    {
+      "name": "L_Thorax_x",
+      "parent": "Chest",
+      "child": "_joint_frame_L_Thorax_0",
+      "axis_local": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "offset_parent": [
+        -0.0340999998152256,
+        0.0788000077009201,
+        0.1216999888420105
+      ],
+      "source": {
+        "source": "v1 upper-body retained"
+      }
+    },
+    {
+      "name": "L_Thorax_y",
+      "parent": "_joint_frame_L_Thorax_0",
+      "child": "_joint_frame_L_Thorax_1",
+      "axis_local": [
+        0.0,
+        1.0,
+        0.0
+      ],
+      "offset_parent": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "source": {
+        "source": "v1 upper-body retained"
+      }
+    },
+    {
+      "name": "L_Thorax_z",
+      "parent": "_joint_frame_L_Thorax_1",
+      "child": "L_Thorax",
+      "axis_local": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "offset_parent": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "source": {
+        "source": "v1 upper-body retained"
+      }
+    },
+    {
+      "name": "L_Shoulder_x",
+      "parent": "L_Thorax",
+      "child": "_joint_frame_L_Shoulder_0",
+      "axis_local": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "offset_parent": [
+        -0.008900001645088196,
+        0.09099999815225601,
+        0.03049999475479126
+      ],
+      "source": {
+        "source": "v1 upper-body retained"
+      }
+    },
+    {
+      "name": "L_Shoulder_y",
+      "parent": "_joint_frame_L_Shoulder_0",
+      "child": "_joint_frame_L_Shoulder_1",
+      "axis_local": [
+        0.0,
+        1.0,
+        0.0
+      ],
+      "offset_parent": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "source": {
+        "source": "v1 upper-body retained"
+      }
+    },
+    {
+      "name": "L_Shoulder_z",
+      "parent": "_joint_frame_L_Shoulder_1",
+      "child": "L_Shoulder",
+      "axis_local": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "offset_parent": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "source": {
+        "source": "v1 upper-body retained"
+      }
+    },
+    {
+      "name": "L_Elbow_x",
+      "parent": "L_Shoulder",
+      "child": "_joint_frame_L_Elbow_0",
+      "axis_local": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "offset_parent": [
+        -0.027500003576278687,
+        0.259600006043911,
+        -0.012800008058547974
+      ],
+      "source": {
+        "source": "v1 upper-body retained"
+      }
+    },
+    {
+      "name": "L_Elbow_y",
+      "parent": "_joint_frame_L_Elbow_0",
+      "child": "_joint_frame_L_Elbow_1",
+      "axis_local": [
+        0.0,
+        1.0,
+        0.0
+      ],
+      "offset_parent": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "source": {
+        "source": "v1 upper-body retained"
+      }
+    },
+    {
+      "name": "L_Elbow_z",
+      "parent": "_joint_frame_L_Elbow_1",
+      "child": "L_Elbow",
+      "axis_local": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "offset_parent": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "source": {
+        "source": "v1 upper-body retained"
+      }
+    },
+    {
+      "name": "L_Wrist_x",
+      "parent": "L_Elbow",
+      "child": "_joint_frame_L_Wrist_0",
+      "axis_local": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "offset_parent": [
+        -0.0011999979615211487,
+        0.2491999864578247,
+        0.009000003337860107
+      ],
+      "source": {
+        "source": "v1 upper-body retained"
+      }
+    },
+    {
+      "name": "L_Wrist_y",
+      "parent": "_joint_frame_L_Wrist_0",
+      "child": "_joint_frame_L_Wrist_1",
+      "axis_local": [
+        0.0,
+        1.0,
+        0.0
+      ],
+      "offset_parent": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "source": {
+        "source": "v1 upper-body retained"
+      }
+    },
+    {
+      "name": "L_Wrist_z",
+      "parent": "_joint_frame_L_Wrist_1",
+      "child": "L_Wrist",
+      "axis_local": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "offset_parent": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "source": {
+        "source": "v1 upper-body retained"
+      }
+    },
+    {
+      "name": "L_Hand_x",
+      "parent": "L_Wrist",
+      "child": "_joint_frame_L_Hand_0",
+      "axis_local": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "offset_parent": [
+        -0.014899998903274536,
+        0.08399999141693115,
+        -0.008199989795684814
+      ],
+      "source": {
+        "source": "v1 upper-body retained"
+      }
+    },
+    {
+      "name": "L_Hand_y",
+      "parent": "_joint_frame_L_Hand_0",
+      "child": "_joint_frame_L_Hand_1",
+      "axis_local": [
+        0.0,
+        1.0,
+        0.0
+      ],
+      "offset_parent": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "source": {
+        "source": "v1 upper-body retained"
+      }
+    },
+    {
+      "name": "L_Hand_z",
+      "parent": "_joint_frame_L_Hand_1",
+      "child": "L_Hand",
+      "axis_local": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "offset_parent": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "source": {
+        "source": "v1 upper-body retained"
+      }
+    },
+    {
+      "name": "R_Thorax_x",
+      "parent": "Chest",
+      "child": "_joint_frame_R_Thorax_0",
+      "axis_local": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "offset_parent": [
+        -0.038600001484155655,
+        -0.08179999887943268,
+        0.11879998445510864
+      ],
+      "source": {
+        "source": "v1 upper-body retained"
+      }
+    },
+    {
+      "name": "R_Thorax_y",
+      "parent": "_joint_frame_R_Thorax_0",
+      "child": "_joint_frame_R_Thorax_1",
+      "axis_local": [
+        0.0,
+        1.0,
+        0.0
+      ],
+      "offset_parent": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "source": {
+        "source": "v1 upper-body retained"
+      }
+    },
+    {
+      "name": "R_Thorax_z",
+      "parent": "_joint_frame_R_Thorax_1",
+      "child": "R_Thorax",
+      "axis_local": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "offset_parent": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "source": {
+        "source": "v1 upper-body retained"
+      }
+    },
+    {
+      "name": "R_Shoulder_x",
+      "parent": "R_Thorax",
+      "child": "_joint_frame_R_Shoulder_0",
+      "axis_local": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "offset_parent": [
+        -0.00910000130534172,
+        -0.09600001573562622,
+        0.03259998559951782
+      ],
+      "source": {
+        "source": "v1 upper-body retained"
+      }
+    },
+    {
+      "name": "R_Shoulder_y",
+      "parent": "_joint_frame_R_Shoulder_0",
+      "child": "_joint_frame_R_Shoulder_1",
+      "axis_local": [
+        0.0,
+        1.0,
+        0.0
+      ],
+      "offset_parent": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "source": {
+        "source": "v1 upper-body retained"
+      }
+    },
+    {
+      "name": "R_Shoulder_z",
+      "parent": "_joint_frame_R_Shoulder_1",
+      "child": "R_Shoulder",
+      "axis_local": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "offset_parent": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "source": {
+        "source": "v1 upper-body retained"
+      }
+    },
+    {
+      "name": "R_Elbow_x",
+      "parent": "R_Shoulder",
+      "child": "_joint_frame_R_Elbow_0",
+      "axis_local": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "offset_parent": [
+        -0.021400000900030136,
+        -0.25370001792907715,
+        -0.013300001621246338
+      ],
+      "source": {
+        "source": "v1 upper-body retained"
+      }
+    },
+    {
+      "name": "R_Elbow_y",
+      "parent": "_joint_frame_R_Elbow_0",
+      "child": "_joint_frame_R_Elbow_1",
+      "axis_local": [
+        0.0,
+        1.0,
+        0.0
+      ],
+      "offset_parent": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "source": {
+        "source": "v1 upper-body retained"
+      }
+    },
+    {
+      "name": "R_Elbow_z",
+      "parent": "_joint_frame_R_Elbow_1",
+      "child": "R_Elbow",
+      "axis_local": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "offset_parent": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "source": {
+        "source": "v1 upper-body retained"
+      }
+    },
+    {
+      "name": "R_Wrist_x",
+      "parent": "R_Elbow",
+      "child": "_joint_frame_R_Wrist_0",
+      "axis_local": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "offset_parent": [
+        -0.005599997937679291,
+        -0.25529998540878296,
+        0.007800012826919556
+      ],
+      "source": {
+        "source": "v1 upper-body retained"
+      }
+    },
+    {
+      "name": "R_Wrist_y",
+      "parent": "_joint_frame_R_Wrist_0",
+      "child": "_joint_frame_R_Wrist_1",
+      "axis_local": [
+        0.0,
+        1.0,
+        0.0
+      ],
+      "offset_parent": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "source": {
+        "source": "v1 upper-body retained"
+      }
+    },
+    {
+      "name": "R_Wrist_z",
+      "parent": "_joint_frame_R_Wrist_1",
+      "child": "R_Wrist",
+      "axis_local": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "offset_parent": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "source": {
+        "source": "v1 upper-body retained"
+      }
+    },
+    {
+      "name": "R_Hand_x",
+      "parent": "R_Wrist",
+      "child": "_joint_frame_R_Hand_0",
+      "axis_local": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "offset_parent": [
+        -0.010300002992153168,
+        -0.08460003137588501,
+        -0.006099998950958252
+      ],
+      "source": {
+        "source": "v1 upper-body retained"
+      }
+    },
+    {
+      "name": "R_Hand_y",
+      "parent": "_joint_frame_R_Hand_0",
+      "child": "_joint_frame_R_Hand_1",
+      "axis_local": [
+        0.0,
+        1.0,
+        0.0
+      ],
+      "offset_parent": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "source": {
+        "source": "v1 upper-body retained"
+      }
+    },
+    {
+      "name": "R_Hand_z",
+      "parent": "_joint_frame_R_Hand_1",
+      "child": "R_Hand",
+      "axis_local": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "offset_parent": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "source": {
+        "source": "v1 upper-body retained"
+      }
+    }
+  ],
+  "mass_split": [
+    {
+      "side": "L",
+      "original_mass": 1.5239615440368652,
+      "talus_mass": 0.15239615440368653,
+      "calcaneus_mass": 1.3715653896331788,
+      "inertia_min": 0.002072985727247531,
+      "assumption": "10% mass split preserving neutral aggregate mass/COM/inertia; not measured talus inertia"
+    },
+    {
+      "side": "R",
+      "original_mass": 1.597648024559021,
+      "talus_mass": 0.1597648024559021,
+      "calcaneus_mass": 1.4378832221031188,
+      "inertia_min": 0.0023100440688766798,
+      "assumption": "10% mass split preserving neutral aggregate mass/COM/inertia; not measured talus inertia"
+    }
+  ],
+  "source_sha256": "da7c4a13eec2abfedc683210972ea423d630461a56909bee2884e181e1bf1d97",
+  "neutral_body_positions": {
+    "Pelvis": [
+      -0.0017999999690800905,
+      -0.2232999950647354,
+      0.028200000524520874
+    ],
+    "L_Hip": [
+      -0.00860000029206276,
+      -0.15379999577999115,
+      -0.06319999694824219
+    ],
+    "L_Knee": [
+      -0.013100000098347664,
+      -0.11949999630451202,
+      -0.438400000333786
+    ],
+    "L_Ankle": [
+      -0.09343579448657696,
+      -0.12715053633589973,
+      -0.8679126743073351
+    ],
+    "L_Toe": [
+      0.0625,
+      -0.10670000314712524,
+      -0.8922000527381897
+    ],
+    "R_Hip": [
+      -0.006099999882280827,
+      -0.29100000858306885,
+      -0.06229999661445618
+    ],
+    "R_Knee": [
+      -0.014999999664723873,
+      -0.32930001616477966,
+      -0.4449000060558319
+    ],
+    "R_Ankle": [
+      -0.09405597427678661,
+      -0.3194690000181467,
+      -0.8749160001647032
+    ],
+    "R_Toe": [
+      0.06599999964237213,
+      -0.33890002965927124,
+      -0.8913999795913696
+    ],
+    "Torso": [
+      -0.02850000001490116,
+      -0.22579999268054962,
+      0.1371999979019165
+    ],
+    "Spine": [
+      -0.027400000020861626,
+      -0.22029998898506165,
+      0.27239999175071716
+    ],
+    "Chest": [
+      -0.0020000003278255463,
+      -0.21879999339580536,
+      0.3252999782562256
+    ],
+    "Neck": [
+      -0.04490000009536743,
+      -0.2215999960899353,
+      0.539199948310852
+    ],
+    "Head": [
+      0.006400000303983688,
+      -0.21639999747276306,
+      0.6041999459266663
+    ],
+    "L_Thorax": [
+      -0.03610000014305115,
+      -0.13999998569488525,
+      0.4469999670982361
+    ],
+    "L_Shoulder": [
+      -0.04500000178813934,
+      -0.04899998754262924,
+      0.47749996185302734
+    ],
+    "L_Elbow": [
+      -0.07250000536441803,
+      0.21060001850128174,
+      0.46469995379447937
+    ],
+    "L_Wrist": [
+      -0.07370000332593918,
+      0.45980000495910645,
+      0.4736999571323395
+    ],
+    "L_Hand": [
+      -0.08860000222921371,
+      0.5437999963760376,
+      0.46549996733665466
+    ],
+    "R_Thorax": [
+      -0.0406000018119812,
+      -0.30059999227523804,
+      0.44409996271133423
+    ],
+    "R_Shoulder": [
+      -0.04970000311732292,
+      -0.39660000801086426,
+      0.47669994831085205
+    ],
+    "R_Elbow": [
+      -0.07110000401735306,
+      -0.6503000259399414,
+      0.4633999466896057
+    ],
+    "R_Wrist": [
+      -0.07670000195503235,
+      -0.9056000113487244,
+      0.47119995951652527
+    ],
+    "R_Hand": [
+      -0.08700000494718552,
+      -0.9902000427246094,
+      0.465099960565567
+    ],
+    "L_Talus": [
+      -0.0568000003695488,
+      -0.1331000030040741,
+      -0.836400032043457
+    ],
+    "R_Talus": [
+      -0.05730000138282776,
+      -0.3135000169277191,
+      -0.8432999849319458
+    ],
+    "_joint_frame_L_Hip_0": [
+      -0.00860000029206276,
+      -0.15379999577999115,
+      -0.06319999694824219
+    ],
+    "_joint_frame_L_Hip_1": [
+      -0.00860000029206276,
+      -0.15379999577999115,
+      -0.06319999694824219
+    ],
+    "_joint_frame_R_Hip_0": [
+      -0.006099999882280827,
+      -0.29100000858306885,
+      -0.06229999661445618
+    ],
+    "_joint_frame_R_Hip_1": [
+      -0.006099999882280827,
+      -0.29100000858306885,
+      -0.06229999661445618
+    ],
+    "_joint_frame_Torso_0": [
+      -0.02850000001490116,
+      -0.22579999268054962,
+      0.1371999979019165
+    ],
+    "_joint_frame_Torso_1": [
+      -0.02850000001490116,
+      -0.22579999268054962,
+      0.1371999979019165
+    ],
+    "_joint_frame_Spine_0": [
+      -0.027400000020861626,
+      -0.22029998898506165,
+      0.27239999175071716
+    ],
+    "_joint_frame_Spine_1": [
+      -0.027400000020861626,
+      -0.22029998898506165,
+      0.27239999175071716
+    ],
+    "_joint_frame_Chest_0": [
+      -0.0020000003278255463,
+      -0.21879999339580536,
+      0.3252999782562256
+    ],
+    "_joint_frame_Chest_1": [
+      -0.0020000003278255463,
+      -0.21879999339580536,
+      0.3252999782562256
+    ],
+    "_joint_frame_Neck_0": [
+      -0.04490000009536743,
+      -0.2215999960899353,
+      0.539199948310852
+    ],
+    "_joint_frame_Neck_1": [
+      -0.04490000009536743,
+      -0.2215999960899353,
+      0.539199948310852
+    ],
+    "_joint_frame_Head_0": [
+      0.006400000303983688,
+      -0.21639999747276306,
+      0.6041999459266663
+    ],
+    "_joint_frame_Head_1": [
+      0.006400000303983688,
+      -0.21639999747276306,
+      0.6041999459266663
+    ],
+    "_joint_frame_L_Thorax_0": [
+      -0.03610000014305115,
+      -0.13999998569488525,
+      0.4469999670982361
+    ],
+    "_joint_frame_L_Thorax_1": [
+      -0.03610000014305115,
+      -0.13999998569488525,
+      0.4469999670982361
+    ],
+    "_joint_frame_L_Shoulder_0": [
+      -0.04500000178813934,
+      -0.04899998754262924,
+      0.47749996185302734
+    ],
+    "_joint_frame_L_Shoulder_1": [
+      -0.04500000178813934,
+      -0.04899998754262924,
+      0.47749996185302734
+    ],
+    "_joint_frame_L_Elbow_0": [
+      -0.07250000536441803,
+      0.21060001850128174,
+      0.46469995379447937
+    ],
+    "_joint_frame_L_Elbow_1": [
+      -0.07250000536441803,
+      0.21060001850128174,
+      0.46469995379447937
+    ],
+    "_joint_frame_L_Wrist_0": [
+      -0.07370000332593918,
+      0.45980000495910645,
+      0.4736999571323395
+    ],
+    "_joint_frame_L_Wrist_1": [
+      -0.07370000332593918,
+      0.45980000495910645,
+      0.4736999571323395
+    ],
+    "_joint_frame_L_Hand_0": [
+      -0.08860000222921371,
+      0.5437999963760376,
+      0.46549996733665466
+    ],
+    "_joint_frame_L_Hand_1": [
+      -0.08860000222921371,
+      0.5437999963760376,
+      0.46549996733665466
+    ],
+    "_joint_frame_R_Thorax_0": [
+      -0.0406000018119812,
+      -0.30059999227523804,
+      0.44409996271133423
+    ],
+    "_joint_frame_R_Thorax_1": [
+      -0.0406000018119812,
+      -0.30059999227523804,
+      0.44409996271133423
+    ],
+    "_joint_frame_R_Shoulder_0": [
+      -0.04970000311732292,
+      -0.39660000801086426,
+      0.47669994831085205
+    ],
+    "_joint_frame_R_Shoulder_1": [
+      -0.04970000311732292,
+      -0.39660000801086426,
+      0.47669994831085205
+    ],
+    "_joint_frame_R_Elbow_0": [
+      -0.07110000401735306,
+      -0.6503000259399414,
+      0.4633999466896057
+    ],
+    "_joint_frame_R_Elbow_1": [
+      -0.07110000401735306,
+      -0.6503000259399414,
+      0.4633999466896057
+    ],
+    "_joint_frame_R_Wrist_0": [
+      -0.07670000195503235,
+      -0.9056000113487244,
+      0.47119995951652527
+    ],
+    "_joint_frame_R_Wrist_1": [
+      -0.07670000195503235,
+      -0.9056000113487244,
+      0.47119995951652527
+    ],
+    "_joint_frame_R_Hand_0": [
+      -0.08700000494718552,
+      -0.9902000427246094,
+      0.465099960565567
+    ],
+    "_joint_frame_R_Hand_1": [
+      -0.08700000494718552,
+      -0.9902000427246094,
+      0.465099960565567
+    ]
+  },
+  "scope": "MyoLeg fixed axes on SMPL morphology; no knee coupling or muscle geometry"
 }

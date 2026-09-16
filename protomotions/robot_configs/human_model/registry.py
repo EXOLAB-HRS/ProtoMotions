@@ -37,7 +37,7 @@ class ModelDefinition:
     def asset_path(self, kind):
         if not self.runnable:
             raise NotImplementedError(f"{self.model_id} is design-only; no executable assets")
-        return self.root / V1["assets"][kind]
+        return self.root / (V1 if self.model_id == "human_model_v1" else V2)["assets"][kind]
 
 
 def get_model(name="human_model_v1", *, require_runnable=True):
@@ -55,4 +55,4 @@ def get_model(name="human_model_v1", *, require_runnable=True):
 
 def profile_path(name="healthy_adult_v1"):
     model = get_model(name)
-    return model.root / V1["profile"]
+    return model.root / (V1 if model.model_id == "human_model_v1" else V2)["profile"]

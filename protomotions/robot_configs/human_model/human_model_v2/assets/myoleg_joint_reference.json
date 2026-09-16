@@ -1,0 +1,27 @@
+{
+  "source_url": "https://raw.githubusercontent.com/MyoHub/myo_sim/eb327acbae0fad12279495040607f5235d962328/myo_sim/models/leg/assets/myolegs_chain.xml",
+  "source_sha256": "da7c4a13eec2abfedc683210972ea423d630461a56909bee2884e181e1bf1d97",
+  "license": "Apache-2.0; Copyright 2020 Vikash Kumar, Vittorio Caggiano, Huawei Wang",
+  "joint_axes": {
+    "hip_flexion_r": "0 0 1",
+    "hip_adduction_r": "1 0 0",
+    "hip_rotation_r": "0 1 0",
+    "knee_angle_r": "-3.98373e-10 -0.0707131 -0.997497",
+    "ankle_angle_r": "-0.105014 -0.174022 0.979126",
+    "subtalar_angle_r": "0.78718 0.604747 -0.120949",
+    "mtp_angle_r": "0.580954 0 -0.813936",
+    "hip_flexion_l": "0 0 1",
+    "hip_adduction_l": "-1 0 0",
+    "hip_rotation_l": "0 -1 0",
+    "knee_angle_l": "3.98373e-10 0.0707131 -0.997497",
+    "ankle_angle_l": "0.105014 0.174022 0.979126",
+    "subtalar_angle_l": "-0.78718 -0.604747 -0.120949",
+    "mtp_angle_l": "-0.580954 0 -0.813936"
+  },
+  "body_positions": {
+    "calcn_r": "-0.04877 -0.04195 0.00792",
+    "toes_r": "0.1788 -0.002 0.00108",
+    "calcn_l": "-0.04877 -0.04195 -0.00792",
+    "toes_l": "0.1788 -0.002 -0.00108"
+  }
+}

@@ -626,7 +626,7 @@ class IsaacLabSimulator(Simulator):
         # Serial human joint assets contain invisible numerical frame links.
         # Expose only the physical SMPL bodies in the existing 24-body contract.
         names=self._robot.data.body_names
-        serial_human=getattr(self.robot_config,'human_model_usd_joint_mode','d6')=='serial' and self._human_joint_model is not None
+        serial_human=getattr(self.robot_config,'human_model_usd_joint_mode','d6') in ('serial','anatomical') and self._human_joint_model is not None
         self._physical_body_indices=[i for i,name in enumerate(names) if not (serial_human and name.startswith('_joint_frame_'))]
         return SimBodyOrdering(
             body_names=[names[i] for i in self._physical_body_indices],

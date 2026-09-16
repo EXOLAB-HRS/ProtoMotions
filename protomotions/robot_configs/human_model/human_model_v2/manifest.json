@@ -1,10 +1,83 @@
 {
   "model_id": "human_model_v2",
   "status": "candidate",
-  "implementation_status": "design_only",
-  "runnable": false,
-  "authorization": "2026-09-16 user approved versioned folder structure and push",
+  "implementation_status": "implemented_pre_teacher",
+  "runnable": true,
+  "authorization": "2026-09-16 explicit user authorization to implement and verify human_model_v2 through pre-teacher stage",
   "design_document": "docs_ghlee/archive/experiments/human_model_joint_design/README.md",
-  "validation_status": "not_implemented",
-  "assets": []
+  "validation_status": "dynamic_strength_passed_full_active_rom_reach_failed",
+  "evidence_root": "output/260916/e02_human_model_v2",
+  "result": "output/260916/e02_human_model_v2/deliverables/result.json",
+  "default_profile": "profiles/healthy_adult_v2.json",
+  "dofs": 59,
+  "physical_bodies": 26,
+  "teacher_connected": false,
+  "artifacts": [
+    {
+      "path": "__init__.py",
+      "sha256": "96615d25eca7e9f92464fea3627fc635adbb3b44531f503f555bb1f7bb41090d"
+    },
+    {
+      "path": "adapters/__init__.py",
+      "sha256": "96615d25eca7e9f92464fea3627fc635adbb3b44531f503f555bb1f7bb41090d"
+    },
+    {
+      "path": "assets/.gitkeep",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "assets/builder.py",
+      "sha256": "6db8531e37afc235b8baf89cffb25dc3e417c5d460ef38b44af3541408092b0f"
+    },
+    {
+      "path": "assets/human_model_v2.usda",
+      "sha256": "7b55e24d78add067380196872a34b274e6cf1e280925bf5f7d06eb917c3c96f5"
+    },
+    {
+      "path": "assets/human_model_v2.xml",
+      "sha256": "95ae220ab944e319f226476016fdda0f487aeb4c078f4f9aad4db4cb6ad8b722"
+    },
+    {
+      "path": "assets/myoleg_joint_reference.json",
+      "sha256": "6fb979d22cec849852670b081a078d84943413e98020463a0cb935821cb75b74"
+    },
+    {
+      "path": "joint_map.json",
+      "sha256": "e2fbcdfe7162ff238f286c335a7156ed6280e56aad668220294f708906a297c9"
+    },
+    {
+      "path": "model_config.py",
+      "sha256": "5b1d7227ce6d8e1d3fd9e0a8886972096104695f661d2227ae838013b5f13ce3"
+    },
+    {
+      "path": "profiles/.gitkeep",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "profiles/healthy_adult_v2.json",
+      "sha256": "4897760c7e3e240e0d09f6ce949a65447765140197b8515ebe7332f07cf5dcd3"
+    },
+    {
+      "path": "validation.py",
+      "sha256": "667347c9c2a4047e845232aa8c24b0548e8adde800b95041257395820f1914a1"
+    }
+  ],
+  "limitations": [
+    "Engineering verification in declared fixtures, not autonomous standing/walking or teacher compatibility certification.",
+    "MyoLeg fixed axis/center references; no knee coupled translation or angle-dependent axis. Upper body remains v1 proxy.",
+    "Knee/toe mean-SD comparisons reuse calibration cohorts; not independent human validation.",
+    "Subtalar torque transferred proxy; talus mass/inertia split assumed, neutral aggregate mechanics preserved.",
+    "IsaacLab native runtime only; MJCF is independent kinematics/inertia audit asset.",
+    "Self collision disabled. Supported feet use pelvic harness and non-foot posture clamps; airborne demo has fixed pelvis."
+  ],
+  "biological_audit": {
+    "status": "candidate_failed_gate",
+    "evidence_root": "output/260916/e03_human_model_v2_biological_audit",
+    "scope": "Frozen plant analytical/physical-asset audit; prior engineering gates preserved; clinical labels, active torque shape and ankle protocol/coupling gaps",
+    "note": "e03 historical; clinical notes and active-angle/velocity gaps addressed in e04. Other biological gaps remain."
+  },
+  "latest_strength_evidence": "output/260916/e04_human_model_v2_strength",
+  "latest_result": "output/260916/e04_human_model_v2_strength/deliverables/result.json",
+  "geometry_frozen": true,
+  "population_strength_scale": "4 matched-cohort scalar conditions within2SD proxy; no mean fitting"
 }

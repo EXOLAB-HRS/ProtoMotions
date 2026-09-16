@@ -75,13 +75,17 @@
     },
     {
       "path": "common/dynamics.py",
-      "sha256": "da56dd25b21cc03a9bcc3ead9e0a2f6daa4e69ac14744c7bc7fa8e70dab65871",
-      "status": "active"
+      "sha256": "e1c11b08e000a0ce7a6ddf3593a2d99f5d1f78348cee2bd46dac1fa82c450360",
+      "status": "active",
+      "baseline_sha256": "da56dd25b21cc03a9bcc3ead9e0a2f6daa4e69ac14744c7bc7fa8e70dab65871",
+      "change_scope": "2026-09-16 v2 intrinsic dynamic-strength profile, v1 default equations preserved;126 regression tests passed"
     },
     {
       "path": "common/integration.py",
-      "sha256": "2fad42cdf780376b5da533a4c5ddd3923aed09e34c4d51df89c1182d7397a8a8",
-      "status": "active"
+      "sha256": "47a1eb7678189e5aae5892201f5812cb074da986c8f8b1fb2c8918511d46bac7",
+      "status": "active",
+      "baseline_sha256": "2fad42cdf780376b5da533a4c5ddd3923aed09e34c4d51df89c1182d7397a8a8",
+      "change_scope": "2026-09-16: explicit v2 profile/runtime and validation assays; v1 plant assets/default profile preserved; full human_model regression 124 passed"
     },
     {
       "path": "common/metrics.py",
@@ -100,8 +104,10 @@
     },
     {
       "path": "common/validation.py",
-      "sha256": "23063bbb1b6b957bc59465a488fdfec1071b85063107c3e59f14c43d58647b9a",
-      "status": "active"
+      "sha256": "fcd64a485015c0bcbacf2595728c9ca123259d4d9a79dce4ef01598e803ecf7e",
+      "status": "active",
+      "baseline_sha256": "23063bbb1b6b957bc59465a488fdfec1071b85063107c3e59f14c43d58647b9a",
+      "change_scope": "2026-09-16: explicit v2 profile/runtime and validation assays; v1 plant assets/default profile preserved; full human_model regression 124 passed"
     }
   ],
   "migration_validation": {

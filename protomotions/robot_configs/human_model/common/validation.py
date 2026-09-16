@@ -477,7 +477,7 @@ def isaaclab_kinematic_audit(sim, initial, model):
     import mujoco
     from scipy.spatial.transform import Rotation
     from protomotions.simulator.base_simulator.simulator_state import ResetState, StateConversion
-    source=ASSET_ROOT/'mjcf/smpl_humanoid.xml'
+    source=(PACKAGE_ROOT/'human_model_v2/assets/human_model_v2.xml') if model.profile_id=='human_model_v2' else ASSET_ROOT/'mjcf/smpl_humanoid.xml'
     reference=mujoco.MjModel.from_xml_path(str(source));state=mujoco.MjData(reference)
     names=sim.robot_config.kinematic_info.body_names
     body_ids=[mujoco.mj_name2id(reference,mujoco.mjtObj.mjOBJ_BODY,n) for n in names]
@@ -691,14 +691,48 @@ def all_direction_rom_protocols(profile):
         selection_status='candidate') for key,chapters in groups.items()}
 
 
+def suspended_gait_target(names, t, *, duration=12., ramp=2., frequency=.4):
+    """C2-envelope synthetic limb targets (q, qdot, qddot); not human data."""
+    if duration <= 2*ramp or ramp <= 0 or frequency <= 0:
+        raise ValueError('Invalid suspended gait timing')
+    def smooth(x):
+        if x <= 0:return 0.,0.,0.
+        if x >= 1:return 1.,0.,0.
+        return 10*x**3-15*x**4+6*x**5,30*x*x*(1-x)**2,60*x-180*x*x+120*x**3
+    a,ad,add=smooth(t/ramp);b,bd,bdd=smooth((duration-t)/ramp)
+    ad/=ramp;add/=ramp*ramp;bd/=-ramp;bdd/=ramp*ramp
+    e,ed,edd=a*b,ad*b+a*bd,add*b+2*ad*bd+a*bdd
+    q=np.zeros(len(names));v=q.copy();acc=q.copy();w=2*math.pi*frequency
+    def coord(name,base,offset,amplitude,phase):
+        i=names.index(name);phi=w*t+phase
+        f=offset+amplitude*math.sin(phi);fd=amplitude*w*math.cos(phi);fdd=-amplitude*w*w*math.sin(phi)
+        q[i]=base+e*f;v[i]=ed*f+e*fd;acc[i]=edd*f+2*ed*fd+e*fdd
+    for side,phase,sign in [('L',0.,-1.),('R',math.pi,1.)]:
+        coord(side+'_Hip_y',-5,0,-18,phase)
+        coord(side+'_Knee_y',8,16,16,phase-.55)
+        coord(side+'_Ankle_y',2,0,7,phase+.4)
+        coord(side+'_Toe_y',0,0,10,phase+1.)
+        coord(side+'_Shoulder_x',sign*80,0,0,0)
+        coord(side+'_Shoulder_z',0,0,-sign*15,phase)
+        coord(side+'_Elbow_z',sign*18,0,sign*5,phase+.5)
+    for side,phase in [('L',0.),('R',math.pi)]:
+        if side+'_Subtalar_x' in names:coord(side+'_Subtalar_x',0,0,4,phase+.6)
+    return tuple(np.deg2rad(x) for x in (q,v,acc))
+
+
 def isaaclab_validation_video(output, seed, *, render=True, frames=480, physics_fps=480, start_frame=0, position_iterations=32, velocity_iterations=1, external_forces_every_iteration=False, solver_type=1, joint_mode='serial', frame_mass=1e-6, audit_kinematics=False, scenario="stress", population_config=None):
     """L0/L1 fixed-base diagnostic: native rendered frames and matched measurements."""
+    suspended_gait=scenario=='suspended_gait'
+    v2_suite=scenario=='v2_suite'
     population_load=scenario=='population_load'
     population_joint=scenario=='population_joint'
-    protocol=json.loads(Path(population_config).read_text()) if population_joint else None
+    protocol=json.loads(Path(population_config).read_text()) if population_config else None
+    model_tag=protocol.get('model_id','healthy_adult_v1') if protocol else 'healthy_adult_v1'
     if protocol and protocol.get('cpu_force_evaluator',False):
         raise ValueError('Archived mixed CPU-force/GPU-physics assay: reproduce using its source bundle')
-    chapters=joint_demo_plan(scenario) if scenario not in ('stress','population_load','population_joint') else None
+    chapters=joint_demo_plan(scenario) if scenario not in ('stress','population_load','population_joint','suspended_gait','v2_suite') else None
+    if suspended_gait:
+        frames=round((protocol['duration_s']+protocol.get('settle_s',0))*30)
     if population_joint:
         chapters=protocol['chapters']
         for i,c in enumerate(chapters):
@@ -711,7 +745,7 @@ def isaaclab_validation_video(output, seed, *, render=True, frames=480, physics_
     import imageio.v2 as imageio
     os.environ['PROTOMOTIONS_HUMAN_MODEL_FEATURES']=''
     from isaaclab.app import AppLauncher
-    physics_device=protocol.get('physics_device','cuda:0') if population_joint else 'cuda:0'
+    physics_device=protocol.get('physics_device','cuda:0') if protocol else 'cuda:0'
     launcher=AppLauncher(headless=True,enable_cameras=render,device=physics_device)
     app=launcher.app
     from protomotions.robot_configs.smpl import SmplRobotConfig
@@ -723,29 +757,35 @@ def isaaclab_validation_video(output, seed, *, render=True, frames=480, physics_
     from protomotions.components.terrains.config import TerrainConfig
     from protomotions.simulator.base_simulator.simulator_state import ResetState, StateConversion
     output=Path(output);output.mkdir(parents=True,exist_ok=True)
-    assay_name='population_joint_gravity_contact' if population_joint else ('population_load_gravity_contact' if population_load else 'l0_l1_fixedbase')
-    raw=output/f'healthy_adult_v1_{assay_name}_seed{seed}_raw.mp4'
+    assay_name='v2_suite' if v2_suite else 'suspended_gait' if suspended_gait else 'population_joint_gravity_contact' if population_joint else ('population_load_gravity_contact' if population_load else 'l0_l1_fixedbase')
+    raw=output/f'{model_tag}_{assay_name}_seed{seed}_raw.mp4'
     trace=raw.with_suffix('.npz')
     if raw.exists() or trace.exists():raise FileExistsError(raw)
-    robot=SmplRobotConfig();robot.asset.fix_base_link=True;robot.asset.disable_gravity=True
+    if protocol and protocol.get("model_id")=="human_model_v2":
+        from ..human_model_v2.model_config import robot_config
+        robot=robot_config();joint_mode="anatomical"
+    else:robot=SmplRobotConfig()
+    robot.asset.fix_base_link=True;robot.asset.disable_gravity=True
     if population_load:
         robot.asset.fix_base_link=False;robot.asset.disable_gravity=False
         robot.contact_bodies=list(robot.kinematic_info.body_names)
-    if population_joint:
+    if population_joint or suspended_gait or v2_suite:
         robot.asset.disable_gravity=False
         robot.contact_bodies=list(robot.kinematic_info.body_names)
-    if population_load or population_joint:
+    if population_load or population_joint or suspended_gait:
         robot.validation_contact_capacity=128
     robot.human_model_usd_joint_mode=joint_mode;robot.human_model_joint_frame_mass=frame_mass
+    if protocol and protocol.get("assay")=="supported_feet":robot.asset.fix_base_link=False
     robot.asset.self_collisions=False;robot.default_root_height=1.5
     robot.control.control_type=ControlType.TORQUE
-    cfg=IsaacLabSimulatorConfig(num_envs=1,headless=True,experiment_name='human_model_l0_l1_video')
+    cfg=IsaacLabSimulatorConfig(num_envs=protocol.get('num_envs',1) if protocol else 1,headless=True,experiment_name='human_model_l0_l1_video')
     if physics_fps<=0 or physics_fps%30:raise ValueError('physics_fps must be a positive multiple of 30')
     cfg.sim=robot.simulation_params.isaaclab;cfg.sim.fps=physics_fps;cfg.sim.decimation=physics_fps//30;cfg.record_viewer=render
     cfg.sim.physx.num_position_iterations=position_iterations;cfg.sim.physx.num_velocity_iterations=velocity_iterations
     cfg.sim.physx.solver_type=solver_type
     device=torch.device(physics_device)
-    terrain=Terrain(TerrainConfig(num_levels=1,num_terrains=1,map_length=4.,map_width=4.,border_size=1.),num_envs=1,device=device)
+    terrain_size=max(4.,4.*math.ceil(math.sqrt(cfg.num_envs)))
+    terrain=Terrain(TerrainConfig(num_levels=1,num_terrains=1,map_length=terrain_size,map_width=terrain_size,border_size=1.),num_envs=cfg.num_envs,device=device)
     sim=IsaacLabSimulator(cfg,robot,terrain,device,app,SceneLib(SceneLibConfig()))
     if population_joint:
         # Visualize the already-declared fixed-pelvis constraint. These blue
@@ -786,9 +826,16 @@ def isaaclab_validation_video(output, seed, *, render=True, frames=480, physics_
         initial.root_pos[:]=torch.tensor(protocol['root_pos'],device=device)
         initial.root_rot[:]=torch.tensor(protocol.get('root_rot_xyzw',[0,0,0,1]),device=device)
         for name,angle in protocol['pose_deg'].items():initial.dof_pos[:,model.names.index(name)]=math.radians(angle)
+    if suspended_gait:
+        initial.root_pos[:]=torch.tensor([3.,3.,1.5],device=device)
+        initial.root_rot[:]=torch.tensor([0.,0.,0.,1.],device=device)
+        initial.dof_pos[:]=torch.as_tensor(suspended_gait_target(model.names,0.,duration=protocol['duration_s'])[0],device=device,dtype=initial.dof_pos.dtype)
     fixture_pose_common=initial.dof_pos.clone()
     population_base_pose_common=fixture_pose_common.clone()
     sim.reset_envs(initial)
+    if v2_suite:
+        from ..human_model_v2.validation import native_suite
+        return native_suite(sim,app,output,seed,protocol,initial)
     reset_checks=[]
     kinematic_audit=isaaclab_kinematic_audit(sim,initial,model) if audit_kinematics else None
     if kinematic_audit is not None:
@@ -798,14 +845,17 @@ def isaaclab_validation_video(output, seed, *, render=True, frames=480, physics_
     if render:
         from protomotions.simulator.isaaclab.utils.perspective_viewer import PerspectiveViewer
         pv=PerspectiveViewer(resolution=(720,720));pv.set_camera_view([2.4,-2.4,2.0],[0,0,1.25])
+        if suspended_gait:pv.set_camera_view([5.8,.1,2.0],[3.,3.,1.35])
         if population_load:pv.set_camera_view([4.6,.7,1.7],[3,3,.2])
         for _ in range(12):sim._sim.render()
     data={key:[] for key in ('time','q','qd','requested','active','elastic','damping','applied','engine','phase','target')}
+    if suspended_gait:
+        data.update({key:[] for key in ('root_pos','native_effort','gravity','coriolis')})
     if population_load:
         data.update({key:[] for key in ('contact_force_w','com_w','com_velocity_w','root_pos','incoming_joint_wrench')})
     if population_joint:
         data.update({key:[] for key in ('fixture','engine_total','gravity','coriolis','inertia_accel','projected_joint_force','contact_force_w','chapter_index')})
-    if population_load or population_joint:
+    if population_load or population_joint or suspended_gait:
         data.update({key:[] for key in ('contact_body_forces_w','contact_min_separation_m','contact_points_count')})
     start=sim._sim.current_time
     mass=sim._robot.root_physx_view.get_generalized_mass_matrices()
@@ -871,7 +921,7 @@ def isaaclab_validation_video(output, seed, *, render=True, frames=480, physics_
                     root_rot=torch.tensor([chapter.get('root_rot_xyzw',protocol.get('root_rot_xyzw',[0,0,0,1]))],device=device),
                     root_vel=torch.zeros((1,3),device=device),root_ang_vel=torch.zeros((1,3),device=device),
                     dof_pos=fixture_pose_common.clone(),dof_vel=fixture_pose_common*0,state_conversion=StateConversion.COMMON))
-        if frame==420 and chapters is None and not population_load:
+        if frame==420 and chapters is None and not population_load and not suspended_gait:
             sim.reset_envs(initial)
             reset_state=sim.get_dof_state()
             reset_checks.append(dict(frame=frame,q_error_rad=float((reset_state.dof_pos-initial.dof_pos).abs().max()),qd_error_rad_s=float((reset_state.dof_vel-initial.dof_vel).abs().max())))
@@ -882,6 +932,7 @@ def isaaclab_validation_video(output, seed, *, render=True, frames=480, physics_
         elif 8<=t<12:phase='passive release'
         elif 12<=t<14:phase='torque saturation'
         elif t>=14:phase='reset and hold'
+        if suspended_gait:phase='Synthetic alternating limb targets'
         if population_load:phase='Supine contact settling' if t<4 else 'Supported load equilibrium'
         if chapters is not None:
             ci=next(i for i,c in enumerate(chapters) if round(c['start_s']*30)<=frame<round((c['start_s']+c['duration_s'])*30)) if population_joint else frame//240
@@ -954,6 +1005,18 @@ def isaaclab_validation_video(output, seed, *, render=True, frames=480, physics_
                     for key,value in [('time',float(sim._sim.current_time-start)),('chapter_index',ci),
                         ('focus',focus),('target_rad',desired),('fixture_focus_nm',float(fixture[0,focus]))]:
                         active_audit[key].append(value)
+            if suspended_gait:
+                ref,ref_vel,ref_acc=suspended_gait_target(model.names,t+substep/physics_fps,
+                    duration=protocol['duration_s'],ramp=protocol['ramp_s'],frequency=protocol['frequency_hz'])
+                target=torch.as_tensor(ref,device=device,dtype=state.dof_pos.dtype).unsqueeze(0)
+                velocity=torch.as_tensor(ref_vel,device=device,dtype=state.dof_pos.dtype).unsqueeze(0)
+                feedforward=torch.as_tensor(ref_acc,device=device,dtype=state.dof_pos.dtype).unsqueeze(0)
+                gain=protocol['acceleration_gain']
+                acceleration=gain*(target-state.dof_pos)+2*math.sqrt(gain)*(velocity-state.dof_vel)+feedforward
+                command=(mass@acceleration.unsqueeze(-1)).squeeze(-1)
+                command+=view.get_gravity_compensation_forces()[:,order]
+                command+=view.get_coriolis_and_centrifugal_compensation_forces()[:,order]
+                command-=model.elastic_torque(state.dof_pos)+model.damping_torque(state.dof_vel)
             sim._common_actions=command
             sim._apply_control();sim._scene.write_data_to_sim()
             if population_joint:
@@ -968,7 +1031,7 @@ def isaaclab_validation_video(output, seed, *, render=True, frames=480, physics_
             if rgb is None:raise RuntimeError('Missing synchronized rendered frame')
             writer.append_data(rgb)
         after=sim.get_dof_state();data['time'].append(float(sim._sim.current_time-start));data['phase'].append(phase)
-        if population_load or population_joint:
+        if population_load or population_joint or suspended_gait:
             data['contact_body_forces_w'].append(sim.get_bodies_contact_buf().rigid_body_contact_forces[0].cpu().numpy().copy())
             minimum=0.;contact_count=0
             for sensor in sim._contact_sensor_map.values():
@@ -995,6 +1058,11 @@ def isaaclab_validation_video(output, seed, *, render=True, frames=480, physics_
                 ('projected_joint_force',view.get_dof_projected_joint_forces()[:,order]),
                 ('contact_force_w',sim.get_bodies_contact_buf().rigid_body_contact_forces.sum(dim=1))]:
                 data[key].append(value[0].detach().cpu().numpy().copy())
+        if suspended_gait:
+            data['root_pos'].append(sim.get_root_state().root_pos[0].cpu().numpy().copy())
+            data['native_effort'].append(view.get_dof_actuation_forces()[0,order].cpu().numpy().copy())
+            data['gravity'].append(view.get_gravity_compensation_forces()[0,order].cpu().numpy().copy())
+            data['coriolis'].append(view.get_coriolis_and_centrifugal_compensation_forces()[0,order].cpu().numpy().copy())
         data['target'].append(target[0].detach().cpu().numpy().copy())
         for key,value in [('q',after.dof_pos),('qd',after.dof_vel),('requested',sim.human_requested_torques),('active',sim.human_active_torques),('elastic',sim.human_elastic_torques),('damping',sim.human_damping_torques),('applied',sim.human_applied_torques),('engine',sim._robot.data.applied_torque[:,sim.data_conversion.dof_convert_to_common])]:
             data[key].append(value[0].detach().cpu().numpy().copy())
@@ -1014,6 +1082,7 @@ def isaaclab_validation_video(output, seed, *, render=True, frames=480, physics_
     metrics['sampling_grid']=sampling_grid_metrics(step_arrays['time'],expected_dt=1/physics_fps,
         expected_count=frames*(physics_fps//30),terminal_time=data['time'][-1])
     result=dict(status='candidate',raw=str(raw) if render else None,trace=str(trace),frames=frames,fps=30,seed=seed,features=[],physics_fps=480,position_iterations=32,velocity_iterations=8,condition='Fixed pelvis; gravity/self-collision disabled; full-inertia including native armature passive-compensated PD fixture at physics rate except passive release/torque saturation; no trained controller; baseline L0/L1 only',frame_alignment='post-step q/qd and RGB; torques from last physical substep; separate pre-step physics trace',engine_field='IsaacLab actuator applied_torque buffer; not independent PhysX reaction-force measurement',metrics=metrics,shutdown='pending')
+    result['model_id']=model_tag
     result['scenario']=scenario;result['chapters']=chapters
     result['physics_device']=physics_device
     result['trace_storage']='preallocated_cpu_arrays' if preallocated_trace else 'tensor_lists'
@@ -1055,6 +1124,22 @@ def isaaclab_validation_video(output, seed, *, render=True, frames=480, physics_
             result['active_rom_audit']=dict(path=str(raw.with_name(raw.stem+'_active_audit.npz')),
                 samples=len(active_audit['time']),external_torque_max_nm=float(np.max(np.abs(active_audit['fixture_focus_nm']))),
                 scope='Engineering reachability under specified support/controller; no active-ROM human cohort certification')
+        result['engine_gate']=dict(status='passed' if all(checks.values()) else 'candidate_failed_gate',checks=checks)
+    elif suspended_gait:
+        error=np.rad2deg(np.asarray(data['q'])-np.asarray(data['target']))
+        peak=float(np.abs(error).max())
+        checks=dict(finite=bool(np.isfinite(error).all()),tracking=peak<=2.,
+            caps=max(metrics['cap_violation_max_nm'])<=2e-4,
+            torque_sum=max(metrics['torque_accounting_max_nm'])<=2e-4,
+            rom=max(metrics['rom_excess_max_deg'])<=.01,
+            sampling=bool(metrics['sampling_grid']['passed']),
+            fixed_pelvis=bool(np.abs(np.asarray(data['root_pos'])-[3.,3.,1.5]).max()<1e-5),
+            no_external_joint_effort=bool(np.abs(np.asarray(data['native_effort'])-np.asarray(data['applied'])).max()<=2e-4),
+            gravity_enabled=not robot.asset.disable_gravity)
+        result.update(condition='Fixed elevated pelvis; gravity and terrain collision ON; feet airborne; self-collision OFF; synthetic q_ref; full mass-matrix PD/feedforward with gravity, Coriolis and passive compensation, all through human active caps; no policy or external joint servo',
+            protocol=protocol,tracking_max_deg=peak,tracking_rms_deg=float(np.sqrt(np.mean(error**2))),
+            tracking_per_axis_max_deg=dict(zip(model.names,np.abs(error).max(axis=0).tolist())),
+            scope='Multi-joint drive/ROM/torque accounting check only; not gait, balance or human trajectory validation')
         result['engine_gate']=dict(status='passed' if all(checks.values()) else 'candidate_failed_gate',checks=checks)
     elif population_load:
         settled=np.asarray(data['time'])>=4
@@ -1380,7 +1465,7 @@ if __name__ == '__main__':
     parser.add_argument('--joint-mode',choices=['d6','serial'],default='serial')
     parser.add_argument('--frame-mass',type=float,default=1e-6)
     parser.add_argument('--audit-kinematics',action='store_true')
-    parser.add_argument('--scenario',choices=['stress','lower_body','upper_body','population_load','population_joint'],default='stress')
+    parser.add_argument('--scenario',choices=['stress','lower_body','upper_body','population_load','population_joint','suspended_gait','v2_suite'],default='stress')
     parser.add_argument('--population-config')
     parser.add_argument('--video-worker',action='store_true',help=argparse.SUPPRESS)
     parser.add_argument('--features',default='')
@@ -1396,14 +1481,15 @@ if __name__ == '__main__':
             import sys
             seed=args.seed or 2400
             output=Path(args.output);output.mkdir(parents=True,exist_ok=True)
-            assay_name='population_joint_gravity_contact' if args.scenario=='population_joint' else ('population_load_gravity_contact' if args.scenario=='population_load' else 'l0_l1_fixedbase')
-            lifecycle=output/f'healthy_adult_v1_{assay_name}_seed{seed}_lifecycle.json'
+            assay_name='v2_suite' if args.scenario=='v2_suite' else 'suspended_gait' if args.scenario=='suspended_gait' else 'population_joint_gravity_contact' if args.scenario=='population_joint' else ('population_load_gravity_contact' if args.scenario=='population_load' else 'l0_l1_fixedbase')
+            model_tag=json.loads(Path(args.population_config).read_text()).get('model_id','healthy_adult_v1') if args.population_config else 'healthy_adult_v1'
+            lifecycle=output/f'{model_tag}_{assay_name}_seed{seed}_lifecycle.json'
             if lifecycle.exists():raise FileExistsError(lifecycle)
             record={'resources_before':resource_snapshot(),'source_sha256':sha256(__file__),
                     'command':[sys.executable,'-u','-m','protomotions.robot_configs.human_model.validation',*sys.argv[1:],'--video-worker']}
             # Execution evidence only: snapshots are archived, never imported.
             import zipfile
-            bundle=output/f'healthy_adult_v1_{assay_name}_seed{seed}_source.zip'
+            bundle=output/f'{model_tag}_{assay_name}_seed{seed}_source.zip'
             package_root=PROTOMOTIONS_ROOT
             source_files=list(PACKAGE_ROOT.rglob('*.py'))+list(PACKAGE_ROOT.rglob('*.json'))
             source_files += [package_root/'protomotions'/p for p in ('simulator/isaaclab/simulator.py','simulator/isaaclab/utils/scene.py','simulator/isaaclab/utils/perspective_viewer.py','simulator/base_simulator/simulator.py','robot_configs/smpl.py')]
@@ -1415,7 +1501,7 @@ if __name__ == '__main__':
             child=subprocess.Popen(record['command'])
             record['pid']=child.pid;record['exit_code']=child.wait()
             record['resources_after']=resource_snapshot()
-            result_path=output/f'healthy_adult_v1_{assay_name}_seed{seed}_raw.json'
+            result_path=output/f'{model_tag}_{assay_name}_seed{seed}_raw.json'
             record['result_saved']=result_path.exists()
             record['supervisor_exit_code']=record['exit_code'] or (0 if record['result_saved'] else 1)
             if result_path.exists():
