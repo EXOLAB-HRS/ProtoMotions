@@ -187,6 +187,7 @@ class SceneCfg(InteractiveSceneCfg):
                     max_depenetration_velocity=config.sim.physx.max_depenetration_velocity,
                 ),
                 articulation_props=sim_utils.ArticulationRootPropertiesCfg(
+                    fix_root_link=robot_config.asset.fix_base_link,
                     enabled_self_collisions=robot_config.asset.self_collisions,
                     solver_position_iteration_count=config.sim.physx.num_position_iterations,
                     solver_velocity_iteration_count=config.sim.physx.num_velocity_iterations,
@@ -225,6 +226,7 @@ class SceneCfg(InteractiveSceneCfg):
                     prim_path=f"{robot_config.asset.usd_bodies_root_prim_path}{body_name}",
                     filter_prim_paths_expr=sensing_filter,
                     history_length=config.sim.decimation,
+                    max_contact_data_count_per_prim=getattr(robot_config, "validation_contact_capacity", 4),
                 )
                 setattr(self, f"contact_sensor_{body_name}", contact_sensor_cfg)
 

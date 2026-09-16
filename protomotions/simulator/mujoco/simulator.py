@@ -433,7 +433,17 @@ class MujocoSimulator(Simulator):
         # Map: for each actuator, find which DOF it controls
         actuator_to_dof = {}
         for act_idx in range(self.model.nu):
+            if self.model.actuator_trntype[act_idx] != mujoco.mjtTrn.mjTRN_JOINT:
+                raise ValueError('MuJoCo simulator requires one joint transmission per controlled DOF')
             jnt_id = self.model.actuator_trnid[act_idx, 0]
+            if int(self.model.jnt_type[jnt_id]) not in (int(mujoco.mjtJoint.mjJNT_HINGE),int(mujoco.mjtJoint.mjJNT_SLIDE)):
+                raise ValueError('MuJoCo actuator mapping requires scalar hinge or slide joints')
+            # The simulator API supplies generalized joint torque/force and
+            # joint-position targets, not normalized motor inputs. Source MJCF
+            # gear (e.g. SMPL's 500) must not multiply those commands again.
+            # Change only the compiled model; preserve the original asset.
+            self.model.actuator_gear[act_idx,:]=0.
+            self.model.actuator_gear[act_idx,0]=1.
             dof_addr = self.model.jnt_dofadr[jnt_id]
             dof_idx = dof_addr - dof_start  # relative to actuated DOFs
             actuator_to_dof[act_idx] = dof_idx
@@ -587,11 +597,11 @@ class MujocoSimulator(Simulator):
             return
 
         if self._has_free_joint:
-            q = self.data.qpos[7:]
-            qd = self.data.qvel[6:]
+            q = self.data.qpos[7 : 7 + self._num_actuated_dofs]
+            qd = self.data.qvel[6 : 6 + self._num_actuated_dofs]
         else:
-            q = self.data.qpos[:]
-            qd = self.data.qvel[:]
+            q = self.data.qpos[: self._num_actuated_dofs]
+            qd = self.data.qvel[: self._num_actuated_dofs]
 
         torques = self._kp_sim * (self._pd_targets_sim - q) - self._kd_sim * qd
         torques = np.clip(torques, -self._effort_limits_sim, self._effort_limits_sim)
@@ -684,7 +694,14 @@ class MujocoSimulator(Simulator):
             self.data.qpos[7 : 7 + self._num_actuated_dofs] = dof_pos
 
             self.data.qvel[0:3] = root_vel
-            self.data.qvel[3:6] = root_ang_vel
+            rotation=np.empty(9)
+            mujoco.mju_quat2Mat(rotation,root_rot)
+            rotation=rotation.reshape(3,3)
+            # Common root velocities are world-oriented at the body's COM;
+            # free-joint qvel translates the link origin and rotates locally.
+            com_offset=rotation @ self.model.body_ipos[1]
+            self.data.qvel[0:3]=root_vel-np.cross(root_ang_vel,com_offset)
+            self.data.qvel[3:6]=rotation.T @ root_ang_vel
             self.data.qvel[6 : 6 + self._num_actuated_dofs] = dof_vel
         else:
             self.data.qpos[: self._num_actuated_dofs] = dof_pos
@@ -716,7 +733,10 @@ class MujocoSimulator(Simulator):
 
         # Apply control (base class calls _apply_simulator_pd_targets
         # or _apply_simulator_torques which write to data.ctrl)
-        self._apply_control()
+        # Stateful human activation advances only inside the physical-substep
+        # loop below. An extra pre-loop call advances time without mj_step.
+        if self._human_joint_model is None:
+            self._apply_control()
 
         use_implicit_pd = getattr(self.config, "use_implicit_pd", True)
         use_explicit_substep_pd = (
@@ -739,6 +759,9 @@ class MujocoSimulator(Simulator):
             for _ in range(self.decimation):
                 mujoco.mj_step(self.model, self.data)
 
+        # mj_step integrates qpos/qvel after its kinematics pass. Refresh the
+        # derived body/COM velocities before exposing the new observation.
+        mujoco.mj_forward(self.model,self.data)
         self._step_count += 1
 
         # Periodic state monitoring
@@ -792,18 +815,24 @@ class MujocoSimulator(Simulator):
         lin_vel = linear_velocity[0].cpu().numpy()
         ang_vel = angular_velocity[0].cpu().numpy()
 
-        self.data.qvel[0:3] += lin_vel
-        self.data.qvel[3:6] += ang_vel
+        rotation=np.empty(9)
+        mujoco.mju_quat2Mat(rotation,self.data.qpos[3:7])
+        rotation=rotation.reshape(3,3)
+        self.data.qvel[0:3] += lin_vel-np.cross(ang_vel,rotation @ self.model.body_ipos[1])
+        self.data.qvel[3:6] += rotation.T @ ang_vel
+        mujoco.mj_forward(self.model,self.data)
 
     def _get_simulator_root_state(
         self, env_ids: Optional[torch.Tensor] = None
     ) -> RootOnlyState:
-        """Get root state from qpos/qvel."""
+        """Get link pose and world-oriented root COM velocities."""
         if self._has_free_joint:
             root_pos = self.data.qpos[0:3].copy()
             root_rot = self.data.qpos[3:7].copy()
-            root_vel = self.data.qvel[0:3].copy()
-            root_ang_vel = self.data.qvel[3:6].copy()
+            velocity=np.empty(6)
+            mujoco.mj_objectVelocity(self.model,self.data,mujoco.mjtObj.mjOBJ_BODY,1,velocity,0)
+            root_ang_vel=velocity[:3].copy()
+            root_vel=velocity[3:].copy()
         else:
             root_pos = np.zeros(3, dtype=np.float32)
             root_rot = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
@@ -826,9 +855,13 @@ class MujocoSimulator(Simulator):
         body_pos = self.data.xpos[1 : 1 + nb, :].copy()
         body_rot = self.data.xquat[1 : 1 + nb, :].copy()
 
-        # cvel is [ang_vel(3), lin_vel(3)]
-        body_ang_vel = self.data.cvel[1 : 1 + nb, 0:3].copy()
-        body_vel = self.data.cvel[1 : 1 + nb, 3:6].copy()
+        # BODY selects each body's COM, world-oriented (matching the Lab/Gym
+        # state contract). Raw cvel uses the kinematic subtree's COM instead.
+        velocities=np.empty((nb,6))
+        for i in range(nb):
+            mujoco.mj_objectVelocity(self.model,self.data,mujoco.mjtObj.mjOBJ_BODY,i+1,velocities[i],0)
+        body_ang_vel=velocities[:,:3]
+        body_vel=velocities[:,3:]
 
         return RobotState(
             rigid_body_pos=_to_torch_f32(body_pos).unsqueeze(0),
@@ -858,8 +891,9 @@ class MujocoSimulator(Simulator):
     def _get_simulator_dof_forces(
         self, env_ids: Optional[torch.Tensor] = None
     ) -> RobotState:
-        """Get applied DOF forces (track from last control application)."""
-        dof_forces = self._last_applied_torques.copy()
+        """Get realized generalized actuator forces in both PD modes."""
+        start=6 if self._has_free_joint else 0
+        dof_forces=self.data.qfrc_actuator[start:start+self._num_actuated_dofs].copy()
 
         return RobotState(
             dof_forces=_to_torch_f32(dof_forces).unsqueeze(0),
@@ -871,7 +905,7 @@ class MujocoSimulator(Simulator):
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Get DOF limits from MuJoCo model."""
         start_idx = 1 if self._has_free_joint else 0
-        jnt_range = self.model.jnt_range[start_idx:, :]
+        jnt_range = self.model.jnt_range[start_idx:start_idx+self._num_actuated_dofs, :]
 
         lower_limits = _to_torch_f32(jnt_range[:, 0].copy())
         upper_limits = _to_torch_f32(jnt_range[:, 1].copy())

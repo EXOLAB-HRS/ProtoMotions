@@ -14,6 +14,11 @@ def load_profile(name="healthy_adult_v1"):
     if not path.is_file():
         raise ValueError(f"Unknown human model profile: {name!r}")
     profile = json.loads(path.read_text())
+    return validate_profile(profile)
+
+
+def validate_profile(profile):
+    """Validate both packaged data and explicitly supplied in-memory profiles."""
     if profile["schema_version"] != 1:
         raise ValueError("Unsupported human model profile schema")
     for name, joint in profile["joints"].items():

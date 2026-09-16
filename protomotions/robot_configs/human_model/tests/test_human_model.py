@@ -140,6 +140,22 @@ def test_anatomical_signs_by_forward_kinematics(side, sign):
     setq(f"{side}_Elbow_z", -sign * 0.3)
     mujoco.mj_forward(m, d)
     assert d.xpos[m.body(f"{side}_Wrist").id, 0] > x0
+    # In the assumed palm-down T-pose, wrist flexion moves the hand tip down.
+    setq(f"{side}_Shoulder_x", 0)
+    setq(f"{side}_Elbow_z", 0)
+    mujoco.mj_forward(m,d)
+    z0=d.xpos[m.body(f'{side}_Hand').id,2]
+    setq(f'{side}_Wrist_x',-sign*.3)
+    mujoco.mj_forward(m,d)
+    assert d.xpos[m.body(f'{side}_Hand').id,2]<z0
+    # Forearm-axis orientation is a lumped proxy; distal position cannot verify
+    # its pronation/supination anatomy. Radial deviation assumes thumb forward.
+    setq(f'{side}_Wrist_x',0)
+    mujoco.mj_forward(m,d)
+    x0=d.xpos[m.body(f'{side}_Hand').id,0]
+    setq(f'{side}_Wrist_z',-sign*.3)
+    mujoco.mj_forward(m,d)
+    assert d.xpos[m.body(f'{side}_Hand').id,0]>x0
 
 
 def test_frozen_checkpoint_reapplies_metadata_without_changing_pd_or_action_semantics(robot, tmp_path, monkeypatch):
@@ -206,7 +222,45 @@ def test_actual_usda_with_openusd(model):
     assert count == 69
 
 
+def test_usda_preserves_original_mjcf_body_mass_com_and_inertia():
+    Usd=pytest.importorskip('pxr.Usd')
+    stage=Usd.Stage.Open(str(HEALTHY_USDA))
+    source=mujoco.MjModel.from_xml_path(str(ASSETS/'mjcf/smpl_humanoid.xml'))
+    count=0
+    for i in range(1,source.nbody):
+        name=mujoco.mj_id2name(source,mujoco.mjtObj.mjOBJ_BODY,i)
+        prim=stage.GetPrimAtPath(f'/smpl_humanoid/bodies/{name}')
+        assert prim.GetAttribute('physics:mass').Get()==pytest.approx(source.body_mass[i],rel=1e-6)
+        np.testing.assert_allclose(prim.GetAttribute('physics:centerOfMass').Get(),source.body_ipos[i],atol=1e-7)
+        np.testing.assert_allclose(prim.GetAttribute('physics:diagonalInertia').Get(),source.body_inertia[i],rtol=1e-6)
+        quat=prim.GetAttribute('physics:principalAxes').Get()
+        np.testing.assert_allclose([quat.GetReal(),*quat.GetImaginary()],source.body_iquat[i],atol=1e-7)
+        count+=1
+    assert count==24
+
+
+def test_serial_usda_retains_69_axis_limits_and_explicit_numerical_mass(tmp_path,monkeypatch):
+    Usd=pytest.importorskip('pxr.Usd')
+    from protomotions.robot_configs.human_model.assets import derive_serial_usda
+    monkeypatch.setenv('PROTOMOTIONS_HUMAN_MODEL_CACHE',str(tmp_path))
+    before=HEALTHY_USDA.read_bytes()
+    derived=derive_serial_usda(HEALTHY_USDA)
+    stage=Usd.Stage.Open(str(derived));profile=load_profile()
+    hinges=[p for p in stage.Traverse() if p.GetTypeName()=='PhysicsRevoluteJoint']
+    assert len(hinges)==69
+    for prim in hinges:
+        name=prim.GetName();row=profile['joints'][name]
+        assert prim.GetAttribute('physics:axis').Get()==name[-1].upper()
+        assert prim.GetAttribute('physics:lowerLimit').Get()==pytest.approx(row['rom_deg'][0])
+        assert prim.GetAttribute('physics:upperLimit').Get()==pytest.approx(row['rom_deg'][1])
+    frames=[p for p in stage.Traverse() if p.GetName().startswith('_joint_frame_')]
+    assert len(frames)==46
+    assert sum(p.GetAttribute('physics:mass').Get() for p in frames)==pytest.approx(46e-6)
+    assert HEALTHY_USDA.read_bytes()==before
+
+
 def test_isaaclab_preparation_loads_committed_usda_without_generating_assets(robot, tmp_path, monkeypatch):
+    robot.human_model_usd_joint_mode='d6'  # Explicit legacy diagnostic representation.
     monkeypatch.setenv("PROTOMOTIONS_HUMAN_MODEL_CACHE", str(tmp_path / "unused_cache"))
     # An old checkpoint's nonexistent asset directory must not be used.
     robot.asset.asset_root = str(tmp_path / "old_training_machine")
@@ -244,3 +298,16 @@ def test_mujoco_runtime_uses_passive_forces_at_every_substep(robot):
     assert (sim.human_active_torques <= hm.positive + 1e-5).all()
     assert (sim.human_active_torques >= -hm.negative - 1e-5).all()
     assert (np.abs(sim.data.qvel) < 100).all()
+
+
+@pytest.mark.parametrize('field', ['active_nm','stiffness_nm_per_rad','rom_deg','damping_nms_per_rad'])
+@pytest.mark.parametrize('bad', [float('nan'),float('inf')])
+def test_direct_profile_constructor_rejects_nonfinite_joint_properties(field,bad):
+    profile=load_profile()
+    joint=profile['joints']['R_Knee_y']
+    if isinstance(joint[field],list):
+        joint[field][0]=bad
+    else:
+        joint[field]=bad
+    with pytest.raises(ValueError):
+        HumanJointModel(profile,list(profile['joints']))

@@ -20,13 +20,13 @@ import omni.replicator.core as rep
 
 
 class PerspectiveViewer(object):
-    def __init__(self):
+    def __init__(self, resolution=(500, 500)):
         self.viewport_api = None
         self.get_viewport_api()
         # Keep the render-product handle and attach an RGB annotator so we
         # can read rendered pixels synchronously in headless mode.
         self.render_product = rep.create.render_product(
-            "/OmniverseKit_Persp", resolution=(500, 500)
+            "/OmniverseKit_Persp", resolution=resolution
         )
         self.rgb_annotator = rep.AnnotatorRegistry.get_annotator("rgb")
         self.rgb_annotator.attach([self.render_product])

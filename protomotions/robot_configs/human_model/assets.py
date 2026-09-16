@@ -107,3 +107,57 @@ def derive_mjcf(xml_path, profile, backend_limits):
     if not derived_xml.exists():
         _atomic_write(derived_xml, render_mjcf(xml, profile, backend_limits))
     return destination
+
+
+def derive_serial_usda(usd_path, *, frame_mass=1e-6):
+    """Candidate XYZ hinge chain preserving the MJCF per-axis coordinates.
+
+    PhysX needs positive inertial properties on intermediate links. Each of the
+    46 invisible frames adds frame_mass kg and 1e-3*frame_mass kg m² isotropically;
+    these numerical masses are explicit approximation, not anatomical tissue.
+    The authored source is never changed and the generated asset is cached.
+    """
+    from pxr import Usd, UsdGeom, UsdPhysics, Gf
+    if not math.isfinite(frame_mass) or frame_mass<=0:
+        raise ValueError('frame_mass must be positive and finite')
+    source=Path(usd_path).read_text()
+    digest=hashlib.sha256((source+str(frame_mass)+Path(__file__).read_text()).encode()).hexdigest()
+    root=Path(os.environ.get('PROTOMOTIONS_HUMAN_MODEL_CACHE',str(Path(tempfile.gettempdir())/f'protomotions-human-model-{os.getuid()}')))/digest[:24]
+    root.mkdir(parents=True,exist_ok=True)
+    destination=root/'smpl_humanoid_serial.usda'
+    if destination.exists():return destination
+    stage=Usd.Stage.CreateInMemory();stage.GetRootLayer().ImportFromString(source)
+    joints=[prim for prim in stage.Traverse() if prim.GetTypeName()=='PhysicsJoint']
+    if len(joints)!=23:raise ValueError('Expected 23 three-axis SMPL joints')
+    for prim in joints:
+        joint=UsdPhysics.Joint(prim);name=prim.GetName();path=prim.GetPath()
+        parent=joint.GetBody0Rel().GetTargets()[0];child=joint.GetBody1Rel().GetTargets()[0]
+        pos0=joint.GetLocalPos0Attr().Get();pos1=joint.GetLocalPos1Attr().Get()
+        rot0=joint.GetLocalRot0Attr().Get();rot1=joint.GetLocalRot1Attr().Get()
+        if rot0!=Gf.Quatf(1) or rot1!=Gf.Quatf(1) or pos1!=Gf.Vec3f(0):
+            raise ValueError(f'Unsupported nonidentity SMPL joint frame: {name}')
+        bounds=[(prim.GetAttribute(f'limit:rot{axis}:physics:low').Get(),prim.GetAttribute(f'limit:rot{axis}:physics:high').Get()) for axis in 'XYZ']
+        transform=stage.GetPrimAtPath(child).GetAttribute('xformOp:transform').Get()
+        frames=[]
+        for axis in 'xy':
+            frame_path=child.GetParentPath().AppendChild(f'_joint_frame_{name}_{axis}')
+            frame=UsdGeom.Xform.Define(stage,frame_path)
+            frame.AddTransformOp().Set(transform)
+            UsdPhysics.RigidBodyAPI.Apply(frame.GetPrim())
+            mass=UsdPhysics.MassAPI.Apply(frame.GetPrim())
+            mass.CreateMassAttr(frame_mass);mass.CreateCenterOfMassAttr(Gf.Vec3f(0))
+            mass.CreateDiagonalInertiaAttr(Gf.Vec3f(frame_mass*1e-3));mass.CreatePrincipalAxesAttr(Gf.Quatf(1))
+            frames.append(frame_path)
+        stage.RemovePrim(path)
+        chain=[parent,*frames,child]
+        for i,axis in enumerate('XYZ'):
+            hinge=UsdPhysics.RevoluteJoint.Define(stage,path.GetParentPath().AppendChild(f'{name}_{axis.lower()}'))
+            hinge.CreateAxisAttr(axis);hinge.CreateBody0Rel().SetTargets([chain[i]])
+            hinge.CreateBody1Rel().SetTargets([chain[i+1]])
+            hinge.CreateLocalPos0Attr(pos0 if i==0 else Gf.Vec3f(0));hinge.CreateLocalPos1Attr(Gf.Vec3f(0))
+            hinge.CreateLocalRot0Attr(Gf.Quatf(1));hinge.CreateLocalRot1Attr(Gf.Quatf(1))
+            hinge.CreateLowerLimitAttr(bounds[i][0]);hinge.CreateUpperLimitAttr(bounds[i][1])
+            drive=UsdPhysics.DriveAPI.Apply(hinge.GetPrim(),'angular')
+            drive.CreateStiffnessAttr(0);drive.CreateDampingAttr(0);drive.CreateTypeAttr('force')
+    _atomic_write(destination,stage.GetRootLayer().ExportToString())
+    return destination

@@ -464,8 +464,11 @@ class IsaacLabSimulator(Simulator):
             coms = self._robot.root_physx_view.get_coms().clone()
 
             # Randomize the com in range
+            body_names=[self.robot_config.kinematic_info.body_names[int(i)]
+                        for i in self._domain_randomization['center_of_mass']['body_indices']]
+            native_ids,_=self._robot.find_bodies(body_names,preserve_order=True)
             coms[
-                :, self._domain_randomization["center_of_mass"]["body_indices"], :3
+                :, native_ids, :3
             ] += self._domain_randomization["center_of_mass"]["com"].to(coms.device)
 
             # Set the new COMs.
@@ -620,8 +623,13 @@ class IsaacLabSimulator(Simulator):
         Returns:
             SimBodyOrdering: An object containing the body names and DOF names.
         """
+        # Serial human joint assets contain invisible numerical frame links.
+        # Expose only the physical SMPL bodies in the existing 24-body contract.
+        names=self._robot.data.body_names
+        serial_human=getattr(self.robot_config,'human_model_usd_joint_mode','d6')=='serial' and self._human_joint_model is not None
+        self._physical_body_indices=[i for i,name in enumerate(names) if not (serial_human and name.startswith('_joint_frame_'))]
         return SimBodyOrdering(
-            body_names=self._robot.data.body_names,
+            body_names=[names[i] for i in self._physical_body_indices],
             dof_names=self._robot.data.joint_names,
         )
 
@@ -637,10 +645,11 @@ class IsaacLabSimulator(Simulator):
         Returns:
             RobotState: The state of the bodies.
         """
-        isaacsim_bodies_positions = self._robot.data.body_pos_w.clone()
-        isaacsim_bodies_rotations = self._robot.data.body_quat_w.clone()
-        isaacsim_bodies_velocities = self._robot.data.body_lin_vel_w.clone()
-        isaacsim_bodies_ang_velocities = self._robot.data.body_ang_vel_w.clone()
+        indices=self._physical_body_indices
+        isaacsim_bodies_positions = self._robot.data.body_pos_w[:,indices].clone()
+        isaacsim_bodies_rotations = self._robot.data.body_quat_w[:,indices].clone()
+        isaacsim_bodies_velocities = self._robot.data.body_lin_vel_w[:,indices].clone()
+        isaacsim_bodies_ang_velocities = self._robot.data.body_ang_vel_w[:,indices].clone()
 
         isaacsim_bodies_positions = isaacsim_bodies_positions.view(
             self.num_envs, self._num_bodies, 3
@@ -737,7 +746,7 @@ class IsaacLabSimulator(Simulator):
             RobotState: Robot state containing contact forces in simulator body order.
         """
         # Get simulator body ordering
-        sim_body_names = self._robot.data.body_names
+        sim_body_names = [self._robot.data.body_names[i] for i in self._physical_body_indices]
         num_bodies = len(sim_body_names)
 
         # Pre-allocate tensor for contact forces (initialized to zeros)

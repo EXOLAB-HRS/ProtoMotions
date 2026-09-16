@@ -23,6 +23,10 @@ def Xform "smpl_humanoid" (
         )
         {
             float physics:density = 0
+            float physics:mass = 5.12487152
+            point3f physics:centerOfMass = (-0.0055, -0, -0.0121)
+            float3 physics:diagonalInertia = (0.0284267227617, 0.0206734583852, 0.0312900909773)
+            quatf physics:principalAxes = (1, 0, 0, 0)
             matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (-0.0017999999690800905, -0.2232999950647354, 0.028200000524520874, 1) )
             uniform token[] xformOpOrder = ["xformOp:transform"]
 
@@ -58,6 +62,10 @@ def Xform "smpl_humanoid" (
         )
         {
             float physics:density = 0
+            float physics:mass = 7.47243807593
+            point3f physics:centerOfMass = (-0.00225, 0.01715, -0.1876)
+            float3 physics:diagonalInertia = (0.0673605160168, 0.0673605160168, 0.0133792274106)
+            quatf physics:principalAxes = (0.998952287298, 0.0453719874386, 0.00597582273582, -0)
             matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (-0.00860000029206276, -0.15379999577999115, -0.06319999694824219, 1) )
             uniform token[] xformOpOrder = ["xformOp:transform"]
 
@@ -100,6 +108,10 @@ def Xform "smpl_humanoid" (
         )
         {
             float physics:density = 0
+            float physics:mass = 3.54758828537
+            point3f physics:centerOfMass = (-0.02185, -0.0068, -0.199)
+            float3 physics:diagonalInertia = (0.0319174271088, 0.0319174271088, 0.00495190154661)
+            quatf physics:principalAxes = (0.998351486413, -0.0170842216178, 0.0547945156767, 0)
             rel physics:filteredPairs = [
                 </smpl_humanoid/bodies/L_Toe>,
                 </smpl_humanoid/bodies/R_Ankle>,
@@ -147,6 +159,10 @@ def Xform "smpl_humanoid" (
         )
         {
             float physics:density = 0
+            float physics:mass = 1.5239616
+            point3f physics:centerOfMass = (0.0242, 0.0233, -0.0239)
+            float3 physics:diagonalInertia = (0.00227875438112, 0.00476388364211, 0.00485528577901)
+            quatf physics:principalAxes = (1, 0, 0, 0)
             rel physics:filteredPairs = </smpl_humanoid/bodies/R_Knee>
             matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (-0.0568000003695488, -0.1331000030040741, -0.836400032043457, 1) )
             uniform token[] xformOpOrder = ["xformOp:transform"]
@@ -184,6 +200,10 @@ def Xform "smpl_humanoid" (
         )
         {
             float physics:density = 0
+            float physics:mass = 0.3793408
+            point3f physics:centerOfMass = (0.0248, -0.003, 0.0055)
+            float3 physics:diagonalInertia = (0.000339489784491, 0.000361658460843, 0.000599990698667)
+            quatf physics:principalAxes = (1, 0, 0, 0)
             rel physics:filteredPairs = [
                 </smpl_humanoid/bodies/L_Knee>,
                 </smpl_humanoid/bodies/R_Knee>,
@@ -224,6 +244,10 @@ def Xform "smpl_humanoid" (
         )
         {
             float physics:density = 0
+            float physics:mass = 7.33662887059
+            point3f physics:centerOfMass = (-0.00445, -0.01915, -0.1913)
+            float3 physics:diagonalInertia = (0.0672195530111, 0.0672195530111, 0.0127727276556)
+            quatf physics:principalAxes = (0.998699280687, -0.0496746554636, 0.0114967543213, 0)
             matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (-0.006099999882280827, -0.29100000858306885, -0.06229999661445618, 1) )
             uniform token[] xformOpOrder = ["xformOp:transform"]
 
@@ -266,6 +290,10 @@ def Xform "smpl_humanoid" (
         )
         {
             float physics:density = 0
+            float physics:mass = 3.54912449156
+            point3f physics:centerOfMass = (-0.02115, 0.0079, -0.1992)
+            float3 physics:diagonalInertia = (0.0319563263336, 0.0319563263336, 0.00495414963843)
+            quatf physics:principalAxes = (0.998419743851, 0.0195719942796, 0.0526778143909, -0)
             rel physics:filteredPairs = [
                 </smpl_humanoid/bodies/L_Ankle>,
                 </smpl_humanoid/bodies/L_Toe>,
@@ -313,6 +341,10 @@ def Xform "smpl_humanoid" (
         )
         {
             float physics:density = 0
+            float physics:mass = 1.59764808
+            point3f physics:centerOfMass = (0.0256, -0.0212, -0.0174)
+            float3 physics:diagonalInertia = (0.00245916915615, 0.00520145752856, 0.00522704652531)
+            quatf physics:principalAxes = (1, 0, 0, 0)
             rel physics:filteredPairs = </smpl_humanoid/bodies/L_Knee>
             matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (-0.05730000138282776, -0.3135000169277191, -0.8432999849319458, 1) )
             uniform token[] xformOpOrder = ["xformOp:transform"]
@@ -350,6 +382,10 @@ def Xform "smpl_humanoid" (
         )
         {
             float physics:density = 0
+            float physics:mass = 0.408062016
+            point3f physics:centerOfMass = (0.0227, 0.0042, 0.0045)
+            float3 physics:diagonalInertia = (0.000375548994772, 0.000394058687818, 0.000642684073133)
+            quatf physics:principalAxes = (1, 0, 0, 0)
             rel physics:filteredPairs = [
                 </smpl_humanoid/bodies/L_Knee>,
                 </smpl_humanoid/bodies/R_Knee>,
@@ -390,6 +426,10 @@ def Xform "smpl_humanoid" (
         )
         {
             float physics:density = 0
+            float physics:mass = 4.39972233102
+            point3f physics:centerOfMass = (0.00055, 0.00275, 0.06755)
+            float3 physics:diagonalInertia = (0.0116526223217, 0.0116526223217, 0.0107101990292)
+            quatf physics:principalAxes = (0.0188751635322, 0.98040598351, -0.196081196702, 0)
             rel physics:filteredPairs = </smpl_humanoid/bodies/Chest>
             matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (-0.02850000001490116, -0.22579999268054962, 0.1371999979019165, 1) )
             uniform token[] xformOpOrder = ["xformOp:transform"]
@@ -433,6 +473,10 @@ def Xform "smpl_humanoid" (
         )
         {
             float physics:density = 0
+            float physics:mass = 3.89481056494
+            point3f physics:centerOfMass = (0.0127, 0.00075, 0.02645)
+            float3 physics:diagonalInertia = (0.00934374733849, 0.00934374733849, 0.00900355761989)
+            quatf physics:principalAxes = (0.226207172528, 0.0374369053669, -0.97335953954, 0)
             matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (-0.027400000020861626, -0.22029998898506165, 0.27239999175071716, 1) )
             uniform token[] xformOpOrder = ["xformOp:transform"]
 
@@ -475,6 +519,10 @@ def Xform "smpl_humanoid" (
         )
         {
             float physics:density = 0
+            float physics:mass = 9.60386239357
+            point3f physics:centerOfMass = (-0.01925, -0.00095, 0.07575)
+            float3 physics:diagonalInertia = (0.0426403331455, 0.0426403331455, 0.0395772017116)
+            quatf physics:principalAxes = (0.126080619277, -0.0254280526, 0.991694051401, 0)
             rel physics:filteredPairs = [
                 </smpl_humanoid/bodies/Torso>,
                 </smpl_humanoid/bodies/Head>,
@@ -523,6 +571,10 @@ def Xform "smpl_humanoid" (
         )
         {
             float physics:density = 0
+            float physics:mass = 0.644535024333
+            point3f physics:centerOfMass = (0.0257, 0.00255, 0.0325)
+            float3 physics:diagonalInertia = (0.000964557747789, 0.000964557747789, 0.000546621126908)
+            quatf physics:principalAxes = (0.329198047748, 0.0945614855219, -0.939514114218, 0)
             matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (-0.04490000009536743, -0.2215999960899353, 0.539199948310852, 1) )
             uniform token[] xformOpOrder = ["xformOp:transform"]
 
@@ -565,6 +617,10 @@ def Xform "smpl_humanoid" (
         )
         {
             float physics:density = 0
+            float physics:mass = 4.25188992
+            point3f physics:centerOfMass = (-0.0116, -0.0042, 0.0876)
+            float3 physics:diagonalInertia = (0.0240791896112, 0.027060671515, 0.0133911288815)
+            quatf physics:principalAxes = (1, 0, 0, 0)
             rel physics:filteredPairs = </smpl_humanoid/bodies/Chest>
             matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0.006400000303983688, -0.21639999747276306, 0.6041999459266663, 1) )
             uniform token[] xformOpOrder = ["xformOp:transform"]
@@ -602,6 +658,10 @@ def Xform "smpl_humanoid" (
         )
         {
             float physics:density = 0
+            float physics:mass = 1.08551884821
+            point3f physics:centerOfMass = (-0.00445, 0.0455, 0.01525)
+            float3 physics:diagonalInertia = (0.00227979742418, 0.00227979742418, 0.00131247487349)
+            quatf physics:principalAxes = (0.584614085112, 0.807516020478, 0.0783852547351, -0)
             matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (-0.03610000014305115, -0.13999998569488525, 0.4469999670982361, 1) )
             uniform token[] xformOpOrder = ["xformOp:transform"]
 
@@ -644,6 +704,10 @@ def Xform "smpl_humanoid" (
         )
         {
             float physics:density = 0
+            float physics:mass = 1.89597860131
+            point3f physics:centerOfMass = (-0.01375, 0.1298, -0.0064)
+            float3 physics:diagonalInertia = (0.00952023134718, 0.00952023134718, 0.00237915295011)
+            quatf physics:principalAxes = (0.724034610982, 0.685927729728, 0.0726431806194, -0)
             rel physics:filteredPairs = </smpl_humanoid/bodies/Chest>
             matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (-0.04500000178813934, -0.04899998754262924, 0.47749996185302734, 1) )
             uniform token[] xformOpOrder = ["xformOp:transform"]
@@ -687,6 +751,10 @@ def Xform "smpl_humanoid" (
         )
         {
             float physics:density = 0
+            float physics:mass = 1.04966074109
+            point3f physics:centerOfMass = (-0.00055, 0.1246, 0.0045)
+            float3 physics:diagonalInertia = (0.00413105690741, 0.00413105690741, 0.000815211114206)
+            quatf physics:principalAxes = (0.69423613791, 0.719739427141, 0.00336776469919, -0)
             matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (-0.07250000536441803, 0.21060001850128174, 0.46469995379447937, 1) )
             uniform token[] xformOpOrder = ["xformOp:transform"]
 
@@ -729,6 +797,10 @@ def Xform "smpl_humanoid" (
         )
         {
             float physics:density = 0
+            float physics:mass = 0.298092780622
+            point3f physics:centerOfMass = (-0.0075, 0.042, -0.00405)
+            float3 physics:diagonalInertia = (0.000303500568344, 0.000303500568344, 0.000137100194493)
+            quatf physics:principalAxes = (0.740024620624, 0.662106082458, 0.11823322901, -0)
             matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (-0.07370000332593918, 0.45980000495910645, 0.4736999571323395, 1) )
             uniform token[] xformOpOrder = ["xformOp:transform"]
 
@@ -771,6 +843,10 @@ def Xform "smpl_humanoid" (
         )
         {
             float physics:density = 0
+            float physics:mass = 0.39781872
+            point3f physics:centerOfMass = (-0.0058, 0.0493, 0.001)
+            float3 physics:diagonalInertia = (0.000486915526594, 0.000416924627059, 0.000837632510146)
+            quatf physics:principalAxes = (1, 0, 0, 0)
             matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (-0.08860000222921371, 0.5437999963760376, 0.46549996733665466, 1) )
             uniform token[] xformOpOrder = ["xformOp:transform"]
 
@@ -807,6 +883,10 @@ def Xform "smpl_humanoid" (
         )
         {
             float physics:density = 0
+            float physics:mass = 1.05981491199
+            point3f physics:centerOfMass = (-0.00455, -0.048, 0.01625)
+            float3 physics:diagonalInertia = (0.00224131070008, 0.00224131070008, 0.00123775334123)
+            quatf physics:principalAxes = (0.583369208798, -0.808529535855, 0.0772033410972, 0)
             matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (-0.0406000018119812, -0.30059999227523804, 0.44409996271133423, 1) )
             uniform token[] xformOpOrder = ["xformOp:transform"]
 
@@ -849,6 +929,10 @@ def Xform "smpl_humanoid" (
         )
         {
             float physics:density = 0
+            float physics:mass = 1.98284415719
+            point3f physics:centerOfMass = (-0.0107, -0.12685, -0.0067)
+            float3 physics:diagonalInertia = (0.00989289781057, 0.00989289781057, 0.00261859146216)
+            quatf physics:principalAxes = (0.725352262036, -0.685959497503, 0.0576512250035, 0)
             rel physics:filteredPairs = </smpl_humanoid/bodies/Chest>
             matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (-0.04970000311732292, -0.39660000801086426, 0.47669994831085205, 1) )
             uniform token[] xformOpOrder = ["xformOp:transform"]
@@ -892,6 +976,10 @@ def Xform "smpl_humanoid" (
         )
         {
             float physics:density = 0
+            float physics:mass = 1.08569351314
+            point3f physics:centerOfMass = (-0.00275, -0.12765, 0.0039)
+            float3 physics:diagonalInertia = (0.00442621501012, 0.00442621501012, 0.000856286853236)
+            quatf physics:principalAxes = (0.696410367032, -0.717477134054, 0.0154648892383, 0)
             matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (-0.07110000401735306, -0.6503000259399414, 0.4633999466896057, 1) )
             uniform token[] xformOpOrder = ["xformOp:transform"]
 
@@ -934,6 +1022,10 @@ def Xform "smpl_humanoid" (
         )
         {
             float physics:density = 0
+            float physics:mass = 0.316438203268
+            point3f physics:centerOfMass = (-0.0052, -0.0423, -0.00305)
+            float3 physics:diagonalInertia = (0.000331347689621, 0.000331347689621, 0.000152725657189)
+            quatf physics:principalAxes = (0.732157756741, -0.676118140717, 0.0825183557568, 0)
             matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (-0.07670000195503235, -0.9056000113487244, 0.47119995951652527, 1) )
             uniform token[] xformOpOrder = ["xformOp:transform"]
 
@@ -976,6 +1068,10 @@ def Xform "smpl_humanoid" (
         )
         {
             float physics:density = 0
+            float physics:mass = 0.407604288
+            point3f physics:centerOfMass = (-0.0079, -0.0462, -0.0009)
+            float3 physics:diagonalInertia = (0.000476430989391, 0.000441587616172, 0.000844932439362)
+            quatf physics:principalAxes = (1, 0, 0, 0)
             matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (-0.08700000494718552, -0.9902000427246094, 0.465099960565567, 1) )
             uniform token[] xformOpOrder = ["xformOp:transform"]
 

@@ -3,10 +3,11 @@
 
 from copy import deepcopy
 import logging
+import hashlib
 import os
 from pathlib import Path
 
-from .assets import derive_mjcf, validate_usda_rom
+from .assets import derive_mjcf, derive_serial_usda, validate_usda_rom
 from .dynamics import HumanJointModel
 from .profile import load_profile
 
@@ -20,6 +21,23 @@ def selected_profile(robot_config):
     return None if name in (None, "legacy") else name
 
 
+def selected_model_parameters(robot_config):
+    """Explicit serialized plant parameters; old checkpoints default to empty.
+
+    The existing FEATURES environment override takes precedence when present.
+    No experiment file is discovered or silently promoted into runtime defaults.
+    """
+    parameters = deepcopy(getattr(robot_config,'human_model_parameters',{}))
+    allowed = {'features','strength_cohort','strength_reference_size','active_strength_scale','fatigue_regions','fatigue_rest_multiplier'}
+    if not isinstance(parameters,dict) or set(parameters)-allowed:
+        raise ValueError('human_model_parameters contains unsupported parameters')
+    if 'PROTOMOTIONS_HUMAN_MODEL_FEATURES' in os.environ:
+        parameters['features'] = tuple(filter(None,(s.strip() for s in os.environ['PROTOMOTIONS_HUMAN_MODEL_FEATURES'].split(','))))
+    if isinstance(parameters.get('features',()),str):
+        raise ValueError('human_model_parameters.features must be a sequence of feature names')
+    return parameters
+
+
 def apply_metadata(robot_config):
     """New configs expose physiological limits to rewards and action processors."""
     name = selected_profile(robot_config)
@@ -31,7 +49,8 @@ def apply_metadata(robot_config):
             info.dof_limits_lower.clone(), info.dof_limits_upper.clone(),
             {n: c.effort_limit for n, c in robot_config.control.control_info.items()},
         )
-    model = HumanJointModel(load_profile(name), info.dof_names, info.dof_limits_lower.device)
+    model = HumanJointModel(load_profile(name), info.dof_names, info.dof_limits_lower.device,
+                            **selected_model_parameters(robot_config))
     info.dof_limits_lower = model.lower
     info.dof_limits_upper = model.upper
     for i, dof in enumerate(info.dof_names):
@@ -63,7 +82,19 @@ def prepare_simulator(robot_config, simulator_config, device):
     profile = load_profile(name)
     apply_metadata(robot_config)
     backend = deepcopy(robot_config)
-    model = HumanJointModel(profile, backend.kinematic_info.dof_names, device)
+    model = HumanJointModel(profile, backend.kinematic_info.dof_names, device,
+                            **selected_model_parameters(robot_config))
+    if "activation" in model.features:
+        import torch
+        # Allocate before the first snapshot/reset; no hidden lazy state appears
+        # after capture of a fresh environment.
+        model._activation = torch.zeros((simulator_config.num_envs, len(model.names), 2),
+                                        device=device, dtype=model.lower.dtype)
+    if 'fatigue' in model.features:
+        import torch
+        model._fatigue = torch.zeros((simulator_config.num_envs,len(model.names),2,3),
+                                     device=device,dtype=model.lower.dtype)
+        model._fatigue[...,0] = 1
     limits = {n: float(model.backend_limit[i]) for i, n in enumerate(model.names)}
     for n, limit in limits.items():
         backend.control.control_info[n].effort_limit = limit
@@ -75,8 +106,15 @@ def prepare_simulator(robot_config, simulator_config, device):
         # file; actuator force settings are supplied by the IsaacLab scene.
         usd = packaged_assets / "usd" / f"smpl_humanoid_{name}.usda"
         validate_usda_rom(usd.read_text(), profile)
+        joint_mode=getattr(robot_config,'human_model_usd_joint_mode','serial')
+        backend.human_model_usd_joint_mode=joint_mode
+        if joint_mode=='serial':
+            usd=derive_serial_usda(usd,frame_mass=getattr(robot_config,'human_model_joint_frame_mass',1e-6))
+        elif joint_mode!='d6':
+            raise ValueError(f'Unsupported human model USD joint mode: {joint_mode}')
         asset.asset_root = str(usd.parent)
         asset.usd_asset_file_name = usd.name
+        backend._human_model_asset_sha256=hashlib.sha256(usd.read_bytes()).hexdigest()
     else:
         xml = Path(asset.asset_root) / asset.asset_file_name
         if not xml.is_file():

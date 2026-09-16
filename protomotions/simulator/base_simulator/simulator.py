@@ -719,6 +719,8 @@ class Simulator(RecordingMixin, ABC):
         self._previous_actions[env_ids] = 0.0
         self._prev_prev_actions[env_ids] = 0.0
         self._steps_since_reset[env_ids] = 0
+        if self._human_joint_model is not None:
+            self._human_joint_model.reset(env_ids)
         if new_object_states is not None:
             new_object_states = new_object_states.convert_to_sim(self.data_conversion)
         self._set_simulator_env_state(new_states, new_object_states, env_ids)

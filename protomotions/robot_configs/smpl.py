@@ -36,6 +36,9 @@ from dataclasses import dataclass, field
 @dataclass
 class SmplRobotConfig(RobotConfig):
     human_model_profile: str = "healthy_adult_v1"
+    human_model_usd_joint_mode: str = "serial"
+    human_model_joint_frame_mass: float = 1e-6
+    human_model_parameters: Dict = field(default_factory=dict)
 
     def __post_init__(self):
         super().__post_init__()

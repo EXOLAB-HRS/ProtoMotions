@@ -2,7 +2,7 @@
 
 이 디렉터리는 SMPL 강체 모델의 **관절 RoM, 방향별 능동 토크 한계, 수동 탄성·감쇠**를 관리한다. 기본 프로필은 `healthy_adult_v1.json`이다. 서로 다른 연구의 건강한 성인 측정 평균을 조합했으며, 근거가 없는 축은 가정 또는 미구현으로 명시했다. 하나의 모집단에서 측정한 전신 평균 데이터는 아니다.
 
-기존 SMPL의 24개 강체, 69개 hinge DOF와 순서, 형상, 관성, 질량은 유지한다. MJCF 총질량은 약 63.314 kg이다. 따라서 **평균 성인의 체형·질량까지 새로 만든 모델은 아니다.** 토크를 체중에 비례해 임의로 보정하지 않았다.
+기존 SMPL의 실제24부위,69개 hinge DOF 이름·순서,형상 및 원본 MJCF의 질량·관성을 보존한다. MJCF 총질량은 약63.314kg이다. IsaacLab은 XYZ 직렬 hinge 연결을 위해 보이지 않는 수치용 프레임46개(각1e-6kg, 등방관성1e-9kg·m²)를 추가하며 공개 body state는 실제24부위만 반환한다. 이 미세한 추가 질량은 해부학적 조직이 아니다. 따라서 **평균 성인의 체형·질량까지 새로 만든 모델은 아니다.** 토크를 체중에 비례해 임의로 보정하지 않았다.
 
 ## 파일과 실행
 
@@ -11,8 +11,8 @@
 | `healthy_adult_v1.json` | 69개 축의 값, 단위, 방향, 근거 ID, 가정; 향후 모델을 추가할 위치 |
 | `profile.py` | 프로필 로딩·검증 |
 | `dynamics.py` | 방향별 능동 토크 제한과 별도의 수동 관절 힘 |
-| `../../data/assets/usd/smpl_humanoid_healthy_adult_v1.usda` | **RoM을 직접 저장한 실제 모델 파일; IsaacLab에서 그대로 로딩** |
-| `assets.py` | USDA의 RoM 일치 검사; MuJoCo/IsaacGym용 MJCF 캐시 생성 |
+| `../../data/assets/usd/smpl_humanoid_healthy_adult_v1.usda` | **RoM·원본 부위 질량/COM/관성을 저장한 편집 원본; 기본 실행은 직렬 hinge 캐시로 변환** |
+| `assets.py` | USDA의 RoM 일치 검사; IsaacLab 직렬 hinge 및 MuJoCo/IsaacGym MJCF 캐시 생성 |
 | `integration.py` | 새 설정 및 이전 체크포인트에 프로필 적용 |
 | `tests/test_human_model.py` | 에너지·힘·축 방향·자산·실제 MuJoCo 경로 검증 |
 
@@ -29,11 +29,11 @@ PROTOMOTIONS_HUMAN_MODEL=legacy python ...
 python -m pytest -q protomotions/robot_configs/human_model/tests
 ```
 
-IsaacLab은 [smpl_humanoid_healthy_adult_v1.usda](../../data/assets/usd/smpl_humanoid_healthy_adult_v1.usda)를 직접 읽는다. 69축의 `limit:rotX/Y/Z:physics:low/high`에 아래의 RoM을 **도(°) 단위로 저장**했다. 이 약 115 KB의 텍스트 파일은 일반 Git으로 관리하므로 이 파일을 위한 LFS 다운로드는 필요 없다. 기존 `smpl_humanoid.usda`는 legacy 모델용으로 유지한다.
+IsaacLab은 [smpl_humanoid_healthy_adult_v1.usda](../../data/assets/usd/smpl_humanoid_healthy_adult_v1.usda)를 편집 원본으로 읽고, 기본 `human_model_usd_joint_mode="serial"`에서 X→Y→Z 단일축 연결 자산을 캐시하여 실행한다. 기존 D6 표현은 `"d6"`로 명시할 때 진단용으로 실행할 수 있지만 강한 토크 시험의 ROM 검증에 실패했다. 69축의 `limit:rotX/Y/Z:physics:low/high`에 아래의 RoM을 **도(°) 단위로 저장**했다. 이 텍스트 파일은 일반 Git으로 관리하므로 이 파일을 위한 LFS 다운로드는 필요 없다. 기존 `smpl_humanoid.usda`는 legacy 모델용으로 유지한다.
 
-실행 중 USDA를 생성하거나 RoM을 덮어쓰지 않는다. RoM을 변경할 때는 이 USDA와 JSON의 `rom_deg`를 함께 수정한다. JSON은 행동 범위와 MJCF 백엔드에 사용하며, IsaacLab 시작 시 USDA와 일치하는지 검사한다. MuJoCo/IsaacGym은 같은 JSON에서 만든 MJCF를 `/tmp/protomotions-human-model-<uid>/<content-hash>/`에 캐시한다. MJCF 캐시 위치는 `PROTOMOTIONS_HUMAN_MODEL_CACHE`로 지정할 수 있다.
+원본 USDA와 RoM은 실행 중 덮어쓰지 않는다. 직렬 hinge 캐시는 원본·변환 코드·수치 프레임 질량의 내용 해시로 구분해 생성한다. RoM을 변경할 때는 이 USDA와 JSON의 `rom_deg`를 함께 수정한다. JSON은 행동 범위와 MJCF 백엔드에 사용하며, IsaacLab 시작 시 USDA와 일치하는지 검사한다. MuJoCo/IsaacGym은 같은 JSON에서 만든 MJCF를 `/tmp/protomotions-human-model-<uid>/<content-hash>/`에 캐시한다. MJCF 캐시 위치는 `PROTOMOTIONS_HUMAN_MODEL_CACHE`로 지정할 수 있다.
 
-연결한 엔진은 MuJoCo, IsaacLab, IsaacGym이다. Genesis/Newton은 검증되지 않은 적용을 막기 위해 오류를 낸다. **CPU MuJoCo 실행을 검증했으며 GPU IsaacLab/IsaacGym 동역학 검증은 남아 있다.**
+연결한 엔진은 MuJoCo, IsaacLab, IsaacGym이다. Genesis/Newton은 검증되지 않은 적용을 막기 위해 오류를 낸다. **CPU MuJoCo 및 GPU IsaacLab의 고정 골반·무중력 L0/L1 16초 시험을 검증했다(seed2410). IsaacGym 동역학 및 전신 보행은 이 검증에 포함되지 않는다.**
 
 ## 값 선택과 근거
 
@@ -88,7 +88,7 @@ IsaacLab은 [smpl_humanoid_healthy_adult_v1.usda](../../data/assets/usd/smpl_hum
 
 `tau_total = clip_directional(tau_active_requested) + tau_elastic(q) + tau_damping(qdot)`
 
-PD 명령의 `Kp*(target-q)-Kd*qdot`는 능동 요청이다. 원래 XML의 stiffness 300–1000, damping 30–100을 인체 수동 특성으로 해석하지 않는다. USDA에서 바꾼 물리 속성은 **RoM뿐**이다. IsaacLab의 actuator 설정이 실행 시 drive 강성·감쇠를 0으로 지정하고, 최대 토크 제한과 passive 항은 코드에서 적용한다. MuJoCo/IsaacGym용 파생 MJCF도 기존 spring/damping을 0으로 한다. 수동 항은 매 물리 step에서 한 번만 더한다. 액추에이터는 이 합을 받을 수 있는 충분한 한계를 사용하고, 생체 최대 능동 토크는 합산 **전**에 방향별로 제한한다. 수동 토크나 관절 제한의 반력은 근육 최대 토크와 다른 양이다.
+PD 명령의 `Kp*(target-q)-Kd*qdot`는 능동 요청이다. 원래 XML의 stiffness 300–1000, damping 30–100을 인체 수동 특성으로 해석하지 않는다. USDA에는 RoM과 원본 MJCF의24부위 질량·COM·주관성·주축을 명시한다. 2026-09-13 조사에서 기존 USD의 부위별 밀도 누락으로45.28kg이던 native 질량을 원본63.31kg과 일치하도록 수정했다. IsaacLab의 actuator 설정이 실행 시 drive 강성·감쇠를 0으로 지정하고, 최대 토크 제한과 passive 항은 코드에서 적용한다. MuJoCo/IsaacGym용 파생 MJCF도 기존 spring/damping을 0으로 한다. 수동 항은 매 물리 step에서 한 번만 더한다. 액추에이터는 이 합을 받을 수 있는 충분한 한계를 사용하고, 생체 최대 능동 토크는 합산 **전**에 방향별로 제한한다. 수동 토크나 관절 제한의 반력은 근육 최대 토크와 다른 양이다.
 
 Silder 하지는 `q_h=-Hip_y`, `q_k=Knee_y`, `q_a=-Ankle_y`로 변환한다. JSON의 각 항은 `E=scale*exp(a·q+offset)`, `tau=-∂E/∂q` 형식이다. hip flexor/extensor, knee flexor/extensor, plantarflexor와 RF/HAM 연결을 구현한다. 논문 α(°)는 rad로 변환했다. **비복근의 2관절 항은 부호·각도 규약 교차 검증을 마치지 못해 이번 버전에서 제외했다.** 평균 계수를 비선형식에 넣은 결과가 개인별 수동 토크 곡선의 산술평균과 같다는 가정도 하지 않는다.
 
@@ -109,7 +109,7 @@ JSON의 `ASSUMPTION`, `PROXY`, `UNMEASURED`를 측정 평균과 구분해서 검
 
 ## 패치 적용 범위
 
-이 패치는 ProtoMotions 내부에 적용한다. 기존 파일 수정은 `robot_configs/smpl.py`와 simulator의 `base_simulator/simulator.py`, `isaaclab/utils/scene.py`, `mujoco/simulator.py` 네 곳의 모델 설정·로딩·힘 적용 부분이다. 모델 패키지와 실제 USDA를 추가하며 `data/assets/usd/.gitattributes`는 이 새 USDA 한 파일만 일반 텍스트로 관리한다. 원래 XML/USDA는 legacy 비교용으로 유지한다.
+이 패치는 ProtoMotions 내부에 적용한다. 연결 지점은 `robot_configs/smpl.py`, simulator의 `base_simulator/simulator.py`, `isaaclab/simulator.py`, `isaaclab/utils/scene.py`, `mujoco/simulator.py`의 설정·로딩·힘 적용·body 순서 처리다. 모델 패키지와 실제 USDA를 추가하며 `data/assets/usd/.gitattributes`는 이 새 USDA 한 파일만 일반 텍스트로 관리한다. 원래 XML/USDA는 legacy 비교용으로 유지한다.
 
 패치에는 상위 human-controller 저장소의 scripts, controller 구현, README, 설치 설정이나 ProtoMotions의 다른 기능 변경을 포함하지 않는다. 파일 경로와 변경 내용은 함께 배포하는 manifest에서 확인한다. 기존 상위 `human_model`의 bootstrap이 있는 브랜치에서는 중복 모델 연결을 건너뛰어 힘을 한 번만 계산한다.
 
@@ -127,6 +127,38 @@ git apply /tmp/human-model.patch
 
 ## 라이선스와 검증 범위
 
+### 2026-09-13 정량 검증 중인 선택 기능
+
+기본 `healthy_adult_v1` profile은 유지한다. `PROTOMOTIONS_HUMAN_MODEL_FEATURES`의 쉼표 구분 값으로 `strength`(각도·속도별 능동 상한), `activation`(방향별 유효 활성화 지연), `passive_fit`(수동 에너지 진폭 적합), `strength_coupling`(무릎 각도에 따른 발목 저측굴곡 상한 보정)을 선택한다. `strength_coupling`은 `strength`가 필요하다. 모두 기본 비활성·미채택 candidate이며 새로운 구현 버전이 아니다.
+
+활성화 상태는 물리 substep마다 갱신하고 환경 reset과 replay에서 복구한다. 근력 결합은 두 연구의 등척성 상대 토크로 식별한 가설이며 실제 GAS 근력을 재현한 모델이 아니다. 동적 적용의 분리 가능성은 미검증 가정으로 domain flag에 표시한다. 수동 적합 및 근력 후보 모두 외부 screening 기준 미달이 남아 있다.
+
+`validation_contract.json`은 고정 평가 조건과 목표, `metrics.py`는 계산, `calibration.py`는 출처와 연구 분리를 보존하는 비교·적합, `validation.py`는 MuJoCo/Isaac Lab 계측과 `--summarize` 결과 목록을 제공한다. 소유 실험 `output/260913/e01_human_model_validation/`(상위 저장소 기준), 최신 판단은 `docs_ghlee/archive/experiments/environment_and_baselines/README.md`에 누적한다. Lab 물리 추적은 확보했으나 종료 대기 문제로 정상 종료와 해당 실행의 reset 검증은 미완료다.
+
 ProtoMotions의 Apache-2.0 라이선스·기존 헤더를 유지하고 변경한 파일에는 변경 표시를 추가했다. 이 패키지는 자체 파라미터와 변환 코드를 제공하며 SMPL 원본 파라메트릭 모델이나 새 형상 자산을 배포하지 않는다. 기존 자산의 이용 조건은 그대로 적용된다. [ProtoMotions LICENSE](../../../LICENSE.md), [SMPL Model license](https://smpl.is.tue.mpg.de/modellicense.html), [SMPL-Body license](https://smpl.is.tue.mpg.de/license.html).
 
-검증은 단위·방향별 상한, 수동 에너지의 음의 기울기, 감쇠의 소산, 극단 입력 유한성, 기존 형상·질량·관절 순서 보존, MJCF 제한, 저장된 USDA의 69축 RoM, USDA 직접 로딩 경로, 이전 체크포인트 설정 적용, MuJoCo substep 실행을 포함한다. 안정적인 전신 보행이나 생체실험과의 일치를 입증하는 검증은 아니다.
+검증은 단위·방향별 상한, 수동 에너지의 음의 기울기, 감쇠의 소산, 극단 입력 유한성, 기존 형상·질량·관절 순서 보존, MJCF 제한, 저장된 USDA의 69축 RoM, USDA 원본 검사 및 직렬 hinge 파생 경로, 이전 체크포인트 설정 적용, MuJoCo substep 실행을 포함한다. 안정적인 전신 보행이나 생체실험과의 일치를 입증하는 검증은 아니다.
+
+수동 임피던스 계측: `HumanJointModel.passive_impedance(q, qd)`는 `delta_tau=-K@delta_q-B*delta_qd`의 전체 결합 강성 K와 대각 감쇠 B를 반환한다. 수치 포화 이후의 접선과 비미분 경계 표시를 포함한다. 엔진 제한/접촉 반력, 제어기 PD, 능동 공동수축은 포함하지 않는다. 미구현 조직 항의 0을 실측 0으로 해석하지 않는다. 기존 토크 적용 법칙을 변경하지 않는 계측이며 candidate 검증용이다.
+
+손목 감쇠 정의 후보: `wrist_damping`은 Nguyen2020 Methods/Figure2의 Hz 회귀 정의에 따라 VI를 `2*pi`로 나눠 양쪽 Wrist_x의 속도 감쇠계수로 사용한다(2.225→0.3541197484 Nms/rad). 논문의 표는 VI를 Nms/rad로 표기하지만 Figure2의 독립변수는 Hz다. 이 후보는 정의 변환 가설이며 비선형 주파수 응답·독립 생체 타당성까지 해결하지 않는다. 기본 비활성 candidate, ±10도·3~12Hz의 이완 손목 측정 조건 밖은 미검증이다. 기본 profile은 보존한다.
+
+근력 출처 집단 선택: `HumanJointModel(..., features=("strength",), strength_cohort="male" 또는 "female")`로 Anderson 원문의 해당 곡선을 선택한다. 기본 `equal_sex`는 기존 남녀 곡선 평균을 유지한다. 선택에 맞춰 backend 능동 상한도 계산한다. 다른 관절 파라미터·형상·체중·관성은 변경하지 않으므로 전신 개인화가 아니다. calibration의 `--match-strength-cohort`는 명시적 단일 성별 표본 수만 사용하고 혼합/미상은 추정하지 않는다. candidate 평가용이며 기본 시뮬레이터 설정은 그대로다.
+
+근력 참조 체격: 선택 인수 `strength_reference_size=(mass_kg,height_m)`는 Anderson의 체중×신장 토크 정규화에만 적용한다. 기본은 출처 집단의 원래 체격이다. 관절 ROM·수동 저항·몸체 질량·관성에는 적용하지 않으므로 전체 plant 개인화로 간주하지 않는다. calibration의 `--match-strength-size`는 명시적 단일 집단 cm/kg 평균만 읽고 범위·혼합·미상 값은 추정하지 않는다.
+
+방향별 근력 보정: `active_strength_scale={"L_Ankle_y":[1.0,1.3]}`은 해당 DOF의 음/양 방향 능동 상한에 각각 적용한다. 기본은 모든 방향1이며 수동 저항·ROM·반대쪽 관절은 변경하지 않는다. 각도/속도 의존 상한, activation 출력과 backend ceiling에 함께 반영한다.0은 해당 능동 방향 비활성화이고 음수/비유한값/미등록 DOF는 거부한다. 보정 자료와 평가 자료의 분리 책임은 평가 절차에 있으며 실험 배율을 기본 프로필로 자동 채택하지 않는다. 현재는 클래스 API 및 SmplRobotConfig의 명시적 설정으로 선택하는 candidate 기능이며, 설정이 없으면 기본1을 사용한다.
+
+시뮬레이터 연결: `SmplRobotConfig(human_model_parameters={"features":["strength"], "strength_cohort":"male", "strength_reference_size":[79,1.8], "active_strength_scale":{"L_Ankle_y":[1,1.75]}})`처럼 명시한다. 위 수치는 API 예시이며 채택된 대표 인체 파라미터가 아니다. metadata와 backend 힘 생성기가 같은 설정을 사용한다. 기존 체크포인트에 필드가 없으면 빈 설정을 사용한다. 기존 `PROTOMOTIONS_HUMAN_MODEL_FEATURES`가 명시돼 있으면 features에 우선한다. 미등록 설정 키는 거부하며 실험 산출물을 자동으로 읽지 않는다.
+
+수동 수치 제한 진단: `passive_guard_flags(q,qd)`는 지수 에너지 성분별·선형 spring DOF별·감쇠 DOF별 포화를 반환한다. 계측 호출에만 계산하며 일반 힘 적용 루프에 추가 연산을 넣지 않는다. 비활성 에너지 성분은 힘 포화로 세지 않는다. 이 표시는 수치 보호장치의 사용 여부이며 생체 ROM/조직 한계 판정이 아니다.
+
+근력 외삽 계측: `strength_caps(q, qd, directional_domain=True)`의 세 번째 반환값은 `[..., DOF, 2]`이며 마지막 축은 음/양 토크 방향이다. 기본 호출은 기존대로 두 방향의 OR를 반환한다. 해당 기능에서 확인하는 출처 영역의 초과 여부이며, false가 미구현 특성의 생체 타당성을 뜻하지 않는다. 무릎 의존 strength_coupling의 동적 가정 표시는 PF 방향에만 적용한다. 토크 수치·기본 후보 설정은 동일하다.
+
+공동수축 입력 후보: torques(requested, q, qd, dt=..., coactivation=...)에서 activation 후보 또는 fatigue에 명시적으로 대응한 축에서만 [..., DOF] 형상의 0–1 값을 받는다. 포화된 순토크 요구를 먼저 배분하고 남은 음/양 방향 capacity의 최솟값에 coactivation을 곱한 동일 Nm를 양쪽 effort에 더한다. 같은 정규화 activation을 더하는 방식과 달리 비대칭 방향 근력에서도 고정 자세·정상상태 순토크를 유지한다. 기존 방향별 activation 상태에 rise/fall을 적용하므로 입력 제거·반전에는 과도응답이 있고 partial reset은 같은 상태를 초기화한다. 생체 근육 force/EMG가 아닌 joint-level 배분 가정이며 active K/B 법칙은 미구현이다. 입력 생략 시 기존 동작 유지; simulator apply 입력은 확장하지 않았고 API candidate만 추가했다. 새 버전·기본 물성 채택 없음.
+
+피로 계산부 후보: dynamics.fatigue_compartment_step은 Frey-Law2012의 휴지/활성/피로3상태 ODE를 SSP RK2로 계산한다. target은0–1의 정규화 노력이며 F/R/L은초당 계수다. 양의 상태 보존을 위해 큰 dt를 나누고 부동소수점 질량 drift만 정규화한다. candidate_parameters.fatigue에 원문Table1 지역별F/R·L10을 보존했다. HumanJointModel의 선택 기능 fatigue로 토크·가용 상한·reset/replay에 연결했다. fatigue_regions={"R_Knee_y":"Knee"}처럼 지역 대응을 명시해야 하며 activation과 동시 사용은 거부한다. 음/양 방향의 독립 피로 저장소는 모델링 가정이다. strength_caps는 비피로 기준 상한, 물리 step 진단 상한은 피로 반영 값이다. 미대응 축은 기존 직접 토크 경로를 유지하며 기본값 변경은 없다. Hand/Grip을 손목이나 원문에 없는 부위에 자동 대응하지 않는다. 원문 검증은 지속 등척성 ET로 한정되며 force-time/간헐 수축/회복의 독립 검증은 남아 있다.
+
+피로 원문 곡선 재현 감사는 기존 calibration 명령의 `--audit-fatigue-endurance --output <기존 실험 루트>`로 실행한다. scratch/frey_law2010_endurance_bioc.json을 요구하며 Knee10–90%9강도를 평가한다. 현재 RMSE25.9254s로 원문6.7s 재현 미충족; 해당 곡선은 피로 계수의 적합 자료이므로 독립 생체 검증으로 세지 않는다.
+
+휴식 회복 후보: fatigue_rest_multiplier(기본1)는 fatigue 기능에서 target==0인 방향의 F→R 회복만 배가한다. 비기본값은 명시적으로 선택하며 Looft2018/2020의15/30은 검증 후보이지 전체관절 기본값이 아니다. simulator 설정과 replay 조건에 포함한다. 어깨 간헐 실측 참조를 확보했으나 MVC probe 배치·후기 표본 감소 조건 대응과 우리 실행 오차 평가는 남아 있다.
