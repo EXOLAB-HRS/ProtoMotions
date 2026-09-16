@@ -20,6 +20,30 @@
 
 ## v2 실행 계약 — teacher 연결 전
 
+### human_model_v2 사용 안내
+
+Teacher 학습용 plant 기준은 v2로 정하고, SMPL 모션 변환과 teacher 연결을 다음 단계로 구현한다. 현재 상태는 **candidate / implemented_pre_teacher**이며, teacher 학습·자율 보행까지 검증된 완성 패키지를 뜻하지 않는다.
+
+- **코드 기준:** ProtoMotions `e1723a8` 커밋. USD만 복사하지 말고 해당 커밋의 Python 연결 코드·profile·joint map을 함께 사용한다. 이 커밋은 모델 구현 기준이며 이후 문서 변경 커밋과 구분한다.
+- **실행 환경:** IsaacLab에서 검증했다. IsaacGym·MuJoCo 학습에 그대로 사용할 수 있다고 가정하지 않는다.
+- **모델 규격:** 관절 좌표59개, 물리 body26개. 기존 SMPL69차원 policy/checkpoint와 직접 호환되지 않는다.
+- **입력:** 59차원 요청 관절 토크. teacher가 `q_ref`를 출력한다면 별도의 PD 제어기로 토크로 변환한 뒤 plant에 전달한다. 좌표 순서는 `human_model_v2/joint_map.json`과 runtime metadata를 따른다.
+- **Plant 계산:** 자세·속도별 능동토크 제한 → 수동토크 합산 → PhysX에서 중력·접촉·ROM 제약 처리. 이 경로를 우회하거나 중복 적용하지 않는다. 동적 상한은 양측 hip/knee/ankle의6좌표12방향에 적용되며 나머지53좌표는 정적 상한이다.
+- **고정 대상:** 관절축·ROM·질량/관성·힘 profile을 기준값으로 유지한다. 학습 중 변경하면 별도 실험 조건으로 기록한다.
+
+### human_model_v2의 SMPL 모션 호환 방침
+
+아래는 **향후 구현 방침**이다. 현재 모션 변환기·teacher 연결의 구현 및 검증 완료를 뜻하지 않는다.
+
+- human_model_v2의59좌표 관절 구조와 물성은 유지한다.
+- 기존 SMPL 모션을 활용하기 위해 **SMPL → human_model_v2 retargeting 변환기를 추가할 예정**이다. 현재 구현·검증이 완료된 기능은 아니다.
+- 단순한 좌표 삭제가 아니라, v2의 관절축·ROM 안에서 원본의 골반 움직임, 발·손 위치와 방향을 최대한 보존하도록 변환한다.
+- 변환 모션은 미리 저장해 teacher 학습의 reference로 사용한다. 접촉 구간의 발 미끄러짐·지면 관통, 자세 오차, 관절 속도의 연속성을 검증한다.
+- 모션 데이터 변환과 기존 policy/checkpoint 호환은 별개다. teacher의 action·observation·보상·body mapping은 v2에 맞게 연결해야 한다.
+- 본격 학습은 변환기 검증과 소규모 학습 smoke test 통과 후 진행한다.
+
+### 실행 진입점과 상세 계약
+
 ```python
 from protomotions.robot_configs.human_model.human_model_v2.model_config import robot_config
 robot = robot_config()  # IsaacLab, 59 scalar coordinates; TORQUE input
