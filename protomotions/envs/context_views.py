@@ -407,6 +407,7 @@ class SteeringContext:
     All fields are FieldPath descriptors for dual class/instance access.
     """
 
+    walking_quality_penalty: Tensor = FieldPath()
     tar_dir: Tensor = FieldPath()
     tar_dir_theta: Tensor = FieldPath()
     tar_speed: Tensor = FieldPath()

@@ -657,13 +657,13 @@ def main():
         loggers.append(
             {
                 "_target_": "lightning.pytorch.loggers.WandbLogger",
-                "name": args.experiment_name,
+                "name": os.environ.get("WANDB_NAME") or Path(args.experiment_name).name,
                 "save_dir": save_dir,
-                "project": "physical_animation",
+                "project": os.environ.get("WANDB_PROJECT") or "physical_animation",
                 "tags": None,
-                "group": None,
+                "group": os.environ.get("WANDB_RUN_GROUP") or None,
                 "id": wandb_id,
-                "entity": None,
+                "entity": os.environ.get("WANDB_ENTITY") or None,
                 "resume": "allow",
             }
         )

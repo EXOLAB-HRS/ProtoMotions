@@ -222,3 +222,13 @@ ProtoMotions의 Apache-2.0 라이선스·기존 헤더를 유지하고 변경한
 피로 원문 곡선 재현 감사는 기존 calibration 명령의 `--audit-fatigue-endurance --output <기존 실험 루트>`로 실행한다. scratch/frey_law2010_endurance_bioc.json을 요구하며 Knee10–90%9강도를 평가한다. 현재 RMSE25.9254s로 원문6.7s 재현 미충족; 해당 곡선은 피로 계수의 적합 자료이므로 독립 생체 검증으로 세지 않는다.
 
 휴식 회복 후보: fatigue_rest_multiplier(기본1)는 fatigue 기능에서 target==0인 방향의 F→R 회복만 배가한다. 비기본값은 명시적으로 선택하며 Looft2018/2020의15/30은 검증 후보이지 전체관절 기본값이 아니다. simulator 설정과 replay 조건에 포함한다. 어깨 간헐 실측 참조를 확보했으나 MVC probe 배치·후기 표본 감소 조건 대응과 우리 실행 오차 평가는 남아 있다.
+
+## 2026-09-17 v2 steering 연결 후보 — 위 예정 방침의 진행 상태
+
+`examples/experiments/steering/human_model_v2.py`와 `human_model_v2/retarget.py`를 추가했다. 기본 steering PPO+AMP,59D PD→human torque, cadence·보폭·trunk/head·slip safeguard의 native8env/4epoch 연결 시험이 완료됐다. **Retargeting은 한 clip의 기구학 screening만 통과했으며 geometry 관통·속도 coverage 부족이 남아 정식 reference와 본학습은 미완료**다. 위 예정 방침을 완료 상태로 해석하지 않는다. plant 축·ROM·물성은 변경하지 않았다.
+
+기본 실행은 승인된 v2 reference를 요구한다. `HC_STEERING_SMOKE=1`은8env/1024환경 step 이하에서만 candidate reference를 허용하는 연결 시험 모드다. 모션은mixed-hinge pack이므로SMPL용 `lrs`를 넣지 않는다. 같은 이름의 모션이라도body/DOF 순서와 MJCF SHA가 다르면 거부한다. 소유 실험 `output/260917/e01_steering_teacher/`, 상태candidate. 상세 수치·남은 작업은상위 `docs_ghlee/archive/experiments/human_model_joint_design/README.md`를 참조한다.
+
+### 2026-09-18 smpl2hm 후보 진행
+
+공개 진입점은 `python -m protomotions.robot_configs.human_model.smpl2hm`이다. 로컬 ACCAD33clip 모두59좌표로 변환했고,33/33 geometry/FK 감사·31/33 접촉/보행 screening을 통과했다.2개는 짧은 자료/pivot로 이벤트가 부족하다. `HumanModelMotionLib`는 scalar q/root 보간 후 v2 FK/속도를 재계산한다. 최종 후보는 `output/260917/e02_smpl2hm/deliverables/smpl2hm_accad33_path_floor_seed0.pt`이며 metadata는 candidate_requires_confirmation이다. 원본 SMPL packed PT가 입력이고 raw AMASS importer는 아니다. 독립 자료/coverage/물리 추종 검증은 남아 본학습 승인은 아니다. 상세는 상위 저장소 `docs_ghlee/archive/experiments/smpl2hm_v2/README.md`.

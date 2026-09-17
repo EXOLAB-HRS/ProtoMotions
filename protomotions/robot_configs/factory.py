@@ -29,7 +29,10 @@ def robot_config(robot_name: str, **updates) -> RobotConfig:
     Raises:
         ValueError: If robot_name is not recognized
     """
-    if robot_name == "smpl":
+    if robot_name == "human_model_v2":
+        from protomotions.robot_configs.human_model.human_model_v2.model_config import robot_config as v2_config
+        config = v2_config()
+    elif robot_name == "smpl":
         from protomotions.robot_configs.smpl import SmplRobotConfig
 
         config = SmplRobotConfig()
