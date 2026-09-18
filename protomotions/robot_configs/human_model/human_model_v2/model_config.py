@@ -36,3 +36,36 @@ def robot_config():
         asset=RobotAssetConfig(asset_root=str(root/'assets'),asset_file_name='human_model_v2.xml',
             usd_asset_file_name='human_model_v2.usda',usd_bodies_root_prim_path='/World/envs/env_.*/Robot/bodies/',
             self_collisions=False,max_linear_velocity=1000.,max_angular_velocity=1000.,angular_damping=0.,linear_damping=0.))
+
+
+def configure_trunk_candidate(robot_cfg, simulator_cfg):
+    """Opt-in e05 trunk candidate; defaults and existing runs stay unchanged.
+
+    Call after the steering experiment's normal configuration. Coefficients
+    are embedded in the robot config, so saved configurations are self-contained.
+    The 480 Hz requirement belongs to this explicit-force numerical candidate;
+    it is not a biological parameter. See the source/mapping limits in JSON.
+    """
+    import json
+    from pathlib import Path
+    from protomotions.robot_configs.base import ControlType
+    if robot_cfg.human_model_profile!='human_model_v2':
+        raise ValueError('The trunk candidate requires human_model_v2')
+    if '.isaaclab.' not in simulator_cfg._target_:
+        raise ValueError('The trunk PD candidate was assessed on Isaac Lab only')
+    if robot_cfg.control.control_type!=ControlType.PROPORTIONAL:
+        raise ValueError('Configure the steering q-target PD interface first')
+    candidate=json.loads((Path(__file__).parent/'profiles/trunk_candidate.json').read_text())
+    if getattr(robot_cfg,'human_model_parameters',{}):
+        raise ValueError('Do not silently combine trunk candidate with another plant candidate')
+    robot_cfg.human_model_parameters=candidate['human_model_parameters']
+    pd=candidate['pd_candidate']
+    for body in ('Torso','Spine','Chest'):
+        for axis in 'xyz':
+            control=robot_cfg.control.control_info[f'{body}_{axis}']
+            # Do not depend on the caller's previous trunk gains.
+            base=control.effort_limit/1.5
+            control.stiffness=base*pd['trunk_kp_multiplier']
+            control.damping=base*.1*pd['trunk_kd_multiplier']
+    simulator_cfg.sim.fps=pd['physics_fps']
+    simulator_cfg.sim.decimation=pd['physics_fps']//pd['control_fps']

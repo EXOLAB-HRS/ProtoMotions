@@ -765,6 +765,8 @@ def isaaclab_validation_video(output, seed, *, render=True, frames=480, physics_
         from ..human_model_v2.model_config import robot_config
         robot=robot_config();joint_mode="anatomical"
     else:robot=SmplRobotConfig()
+    if protocol and 'human_model_parameters' in protocol:
+        robot.human_model_parameters=protocol['human_model_parameters']
     robot.asset.fix_base_link=True;robot.asset.disable_gravity=True
     if population_load:
         robot.asset.fix_base_link=False;robot.asset.disable_gravity=False

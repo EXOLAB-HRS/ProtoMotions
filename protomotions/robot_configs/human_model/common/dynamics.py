@@ -73,7 +73,7 @@ def fatigue_compartment_step(state, target, *, fatigue_rate, recovery_rate, dt, 
 
 
 class HumanJointModel:
-    def __init__(self, profile, dof_names, device="cpu", dtype=torch.float32, *, features=(), strength_cohort='equal_sex', strength_reference_size=None, active_strength_scale=None, fatigue_regions=None, fatigue_rest_multiplier=1.0):
+    def __init__(self, profile, dof_names, device="cpu", dtype=torch.float32, *, features=(), strength_cohort='equal_sex', strength_reference_size=None, active_strength_scale=None, fatigue_regions=None, fatigue_rest_multiplier=1.0, passive_joint_parameters=None):
         validate_profile(profile)
         self.features = frozenset(features)
         if (not math.isfinite(fatigue_rest_multiplier) or fatigue_rest_multiplier < 1
@@ -143,6 +143,19 @@ class HumanJointModel:
         self.k_negative = tensor([r["stiffness_nm_per_rad"][0] for r in rows])
         self.k_positive = tensor([r["stiffness_nm_per_rad"][1] for r in rows])
         self.damping = tensor([r["damping_nms_per_rad"] for r in rows])
+        # Explicit, checkpoint-serialized candidates. Reuse the conservative
+        # spring, dissipative damper, energy audit and backend force budget.
+        # No candidate file or environment-dependent coefficients are loaded.
+        for name, row in (passive_joint_parameters or {}).items():
+            if name not in self.names or set(row) != {'stiffness_nm_per_rad', 'damping_nms_per_rad'}:
+                raise ValueError('passive_joint_parameters requires named stiffness/damping pairs')
+            stiffness = row['stiffness_nm_per_rad']
+            damping = row['damping_nms_per_rad']
+            if (len(stiffness) != 2 or not all(math.isfinite(v) and v >= 0 for v in (*stiffness, damping))):
+                raise ValueError('passive stiffness/damping must be finite and nonnegative')
+            i = self.names.index(name)
+            self.k_negative[i], self.k_positive[i] = stiffness
+            self.damping[i] = damping
         if 'wrist_damping' in self.features:
             wrist = self.candidate_parameters['wrist_damping']
             # VI is a slope versus cycles/s. A velocity damper's quadrature

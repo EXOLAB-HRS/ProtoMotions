@@ -50,6 +50,54 @@ def test_v2_force_energy_and_directional_caps():
     torch.testing.assert_close(jac,jac.T,atol=1e-7,rtol=1e-7)
 
 
+def test_trunk_candidate_serial_mapping_passivity_and_isolation():
+    from pathlib import Path
+    root=get_model('human_model_v2').root
+    candidate=json.loads((root/'profiles/trunk_candidate.json').read_text())
+    p=load_profile('human_model_v2');names=list(p['joints'])
+    base=HumanJointModel(p,names,dtype=torch.float64)
+    model=HumanJointModel(p,names,dtype=torch.float64,**candidate['human_model_parameters'])
+    q=torch.zeros((1,len(names)),dtype=torch.float64,requires_grad=True)
+    theta=np.deg2rad(9.)
+    for axis,k in candidate['sources']['stiffness']['neutral_zone_stiffness_nm_per_degree'].items():
+        indices=[names.index(f'{body}_{axis}') for body in ('Torso','Spine','Chest')]
+        pose=q.detach().clone();pose[:,indices]=theta/3
+        torque=model.elastic_torque(pose)-base.elastic_torque(pose)
+        torch.testing.assert_close(torque[:,indices],torch.full((1,3),-k*9.,dtype=q.dtype))
+    torch.manual_seed(1818)
+    q=(torch.randn(32,len(names),dtype=torch.float64)*.2).requires_grad_();v=torch.randn_like(q)*20
+    grad=torch.autograd.grad(model.potential_energy(q).sum(),q)[0]
+    torch.testing.assert_close(model.elastic_torque(q),-grad)
+    assert (model.damping_torque(v)*v<=0).all()
+    total,active,passive=model.torques(q*1e6,q,v)
+    assert (total.abs()<=model.backend_limit+1e-8).all()
+    torch.testing.assert_close(active,base.torques(q*1e6,q,v)[1])
+    other=[i for i,n in enumerate(names) if n not in candidate['human_model_parameters']['passive_joint_parameters']]
+    torch.testing.assert_close(passive[:,other],base.passive_torque(q,v)[:,other])
+    for invalid in (-1.,float('nan')):
+        with pytest.raises(ValueError):
+            HumanJointModel(p,names,passive_joint_parameters={'Torso_x':{'stiffness_nm_per_rad':[1.,1.],'damping_nms_per_rad':invalid}})
+
+
+def test_trunk_candidate_config_serializes_parameters_and_preserves_legs():
+    from protomotions.robot_configs.human_model.human_model_v2.model_config import configure_trunk_candidate
+    from protomotions.robot_configs.human_model.common.integration import selected_model_parameters
+    from protomotions.robot_configs.base import ControlType
+    from protomotions.simulator.isaaclab.config import IsaacLabSimulatorConfig
+    import pickle
+    robot=robot_config();sim=IsaacLabSimulatorConfig(headless=True,num_envs=1,experiment_name='trunk_test');sim.sim=robot.simulation_params.isaaclab
+    robot.control.control_type=ControlType.PROPORTIONAL
+    before=pickle.dumps(robot.control.control_info['L_Hip_y'])
+    configure_trunk_candidate(robot,sim)
+    assert sim.sim.fps==480 and sim.sim.decimation==16
+    assert robot.control.control_info['Torso_x'].stiffness==160.
+    assert robot.control.control_info['Torso_x'].damping==2.
+    assert before==pickle.dumps(robot.control.control_info['L_Hip_y'])
+    restored=pickle.loads(pickle.dumps(robot))
+    model=HumanJointModel(load_profile('human_model_v2'),robot.kinematic_info.dof_names,**selected_model_parameters(restored))
+    assert float(model.k_positive[model.names.index('Torso_x')])>0
+
+
 def test_v2_strength_work_sign_domain_and_backend_bound():
     p=load_profile('human_model_v2');m=HumanJointModel(p,list(p['joints']),dtype=torch.float64)
     q=torch.zeros(1,59,dtype=torch.float64);q[:,m.names.index('R_Knee_y')]=1.

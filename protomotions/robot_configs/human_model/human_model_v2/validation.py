@@ -584,9 +584,15 @@ def native_retarget_tracking(sim, app, output, seed, protocol, initial):
     device=sim.device;model=sim._human_joint_model;fps=sim.config.sim.fps;dt=1/fps
     lib=HumanModelMotionLib(MotionLibConfig(motion_file=protocol['motion_file']),str(device))
     ids=torch.tensor(protocol['motion_ids'],device=device,dtype=torch.long)
+    time_scales=torch.tensor(protocol.get('time_scales',[1.]*len(ids)),device=device)
+    if time_scales.shape!=ids.shape or not bool(torch.isfinite(time_scales).all() and (time_scales>0).all()):
+        raise ValueError('Positive finite time scale per motion required')
     assert len(ids)==sim.num_envs and not sim._robot.is_fixed_base
     initial.convert_to_common(sim.data_conversion)
     initial_ref=lib.get_motion_state(ids,torch.zeros(len(ids),device=device))
+    initial_ref.dof_vel*=time_scales[:,None]
+    initial_ref.rigid_body_vel*=time_scales[:,None,None]
+    initial_ref.rigid_body_ang_vel*=time_scales[:,None,None]
     offset=torch.zeros(len(ids),3,device=device)
     spawn_xy=torch.stack((10.+10.*torch.arange(len(ids),device=device),torch.full((len(ids),),10.,device=device)),-1)
     offset[:,:2]=spawn_xy-initial_ref.rigid_body_pos[:,0,:2]
@@ -599,7 +605,7 @@ def native_retarget_tracking(sim, app, output, seed, protocol, initial):
     sim.reset_envs(initial)
     pelvis=sim._robot.body_names.index('Pelvis')
     masses=sim._robot.root_physx_view.get_masses().to(device).sum(-1)
-    duration=min(float(lib.motion_lengths[ids].min()),protocol.get('duration_s',6.))
+    duration=min(float((lib.motion_lengths[ids]/time_scales).min()),protocol.get('duration_s',6.))
     records={k:[] for k in ('time','q','qd','q_ref','qdot_ref','requested','active','passive','applied','negative_cap','positive_cap','root_pos','root_ref','harness_force','harness_torque','contact_forces')}
     saturation=torch.zeros(len(ids),59,device=device);squared=torch.zeros_like(saturation)
     maximum=torch.zeros_like(saturation);peak_cap=0.;peak_rom=0.;peak_sum=0.
@@ -615,9 +621,27 @@ def native_retarget_tracking(sim, app, output, seed, protocol, initial):
     # launches in the physics loop. The dynamics still runs every substep.
     query_ids=ids.repeat(steps)
     query_times=torch.arange(steps,device=device).repeat_interleave(len(ids))/fps
+    query_times*=time_scales.repeat(steps)
     trajectory=lib.get_motion_state(query_ids,query_times)
+    trajectory.dof_vel*=time_scales.repeat(steps)[:,None]
+    trajectory.rigid_body_vel*=time_scales.repeat(steps)[:,None,None]
+    trajectory.rigid_body_ang_vel*=time_scales.repeat(steps)[:,None,None]
     order=sim.data_conversion.dof_convert_to_common
     view=sim._robot.root_physx_view
+    training_pd=protocol.get('pd_mode')=='training_pd'
+    if training_pd:
+        # Match the teacher's q-target PD (zero desired velocity), with only
+        # trunk gains varied. The pelvis harness remains explicitly external.
+        settings=protocol['pd_settings']
+        if len(settings)!=len(ids):raise ValueError('One PD setting per environment required')
+        kp=torch.maximum(model.negative,model.positive).expand(len(ids),-1).clone()/1.5
+        kp=torch.where(kp>0,kp,torch.full_like(kp,500.))
+        kd=.1*kp
+        trunk=[model.names.index(f'{body}_{axis}') for body in ('Torso','Spine','Chest') for axis in 'xyz']
+        for env,setting in enumerate(settings):
+            kp[env,trunk]*=setting['trunk_kp_multiplier']
+            kd[env,trunk]*=setting['trunk_kd_multiplier']
+        target=initial_ref.dof_pos.clone()
     for step in range(steps):
         t=step*dt
         from types import SimpleNamespace
@@ -625,7 +649,10 @@ def native_retarget_tracking(sim, app, output, seed, protocol, initial):
         reference=SimpleNamespace(**{k:getattr(trajectory,k)[ix] for k in
             ('dof_pos','dof_vel','rigid_body_pos','rigid_body_rot','rigid_body_vel','rigid_body_ang_vel')})
         state=sim.get_dof_state();root=sim.get_root_state()
-        if protocol.get('pd_mode','fixed') in ('inertia_scaled','critical'):
+        if training_pd:
+            if step%(fps//30)==0:target=reference.dof_pos.clone()
+            command=kp*(target-state.dof_pos)-kd*state.dof_vel
+        elif protocol.get('pd_mode','fixed') in ('inertia_scaled','critical'):
             inertia=view.get_generalized_mass_matrices()[:,6:,6:][:,order][:,:,order].diagonal(dim1=-2,dim2=-1)
             inertia=inertia+view.get_dof_armatures().to(device)[:,order]
             if protocol.get('pd_mode')=='critical':
@@ -669,12 +696,14 @@ def native_retarget_tracking(sim, app, output, seed, protocol, initial):
         if step%fps==0:print('SMPL2HM_TRACKING_SECOND',round(t),'MAX_ERROR_DEG',float(torch.rad2deg(maximum).max()),flush=True)
     stem=Path(output)/f'human_model_v2_v2_suite_seed{seed}_raw'
     np.savez_compressed(stem.with_suffix('.npz'),**{k:np.asarray(v) for k,v in records.items()},names=model.names,body_names=sim.robot_config.kinematic_info.body_names)
+    if training_pd:
+        protocol=dict(protocol,measured_kp_nm_per_rad=kp.cpu().tolist(),measured_kd_nms_per_rad=kd.cpu().tolist())
     result=dict(scenario='smpl2hm_tracking',protocol=protocol,duration_s=duration,physics_fps=fps,
         rmse_deg=torch.rad2deg((squared/steps).sqrt()).cpu().tolist(),max_error_deg=torch.rad2deg(maximum).cpu().tolist(),
         saturation_fraction=(saturation/steps).cpu().tolist(),peak_cap_excess_nm=peak_cap,peak_rom_excess_deg=math.degrees(peak_rom),
         torque_sum_error_nm=peak_sum,native_fk_max_error_m=peak_fk_error,minimum_foot_geometry_z_m=minimum_foot_z,physical_tracking_status='diagnostic_no_performance_gate',
         engine_gate=dict(status='passed' if peak_cap<.0002 and peak_sum<.0002 and math.degrees(peak_rom)<=.1 else 'candidate_failed_gate'),
-        shutdown='pending',scope='Moving pelvis force/torque harness; joint PD with qdot_ref feedforward; gravity/contact ON; not autonomous walking')
+        shutdown='pending',scope='Moving pelvis force/torque harness; gravity/contact ON; not autonomous walking; '+('30 Hz held q-target, zero desired velocity' if training_pd else 'joint PD with qdot_ref feedforward'))
     stem.with_suffix('.json').write_text(json.dumps(result,indent=2)+'\n')
     print('SMPL2HM_TRACKING_SAVED',flush=True)
     sim._sim.clear_all_callbacks()
@@ -688,3 +717,55 @@ def joint_generalized_forces(forces, order, *, floating_base):
     if forces.shape[-1] != len(order)+offset:
         raise ValueError('Unexpected generalized force dimension')
     return forces[:,offset:][:,order]
+
+
+def trunk_inverse_dynamics(motion_file, *, human_model_parameters=None, time_scales=(1.,)):
+    """Prescribed-motion capacity diagnostic, NOT a free-gait feasibility test.
+
+    Pelvis wrench supplies support; contacts are disabled. For trunk joints,
+    this measures the generalized moment needed to move the prescribed upper
+    body, assuming no external hand/head forces. Finite-difference endpoints
+    are excluded. Retiming is a synthetic stress condition, not human data.
+    """
+    import mujoco
+    from ..common.paths import PACKAGE_ROOT
+    from ..common.profile import load_profile
+    from ..common.dynamics import HumanJointModel
+    pack=torch.load(motion_file,map_location='cpu',weights_only=False)
+    names=pack['human_model_metadata']['dof_names']
+    plant=HumanJointModel(load_profile('human_model_v2'),names,dtype=torch.float64,**(human_model_parameters or {}))
+    mj=mujoco.MjModel.from_xml_path(str(PACKAGE_ROOT/'human_model_v2/assets/human_model_v2.xml'))
+    mj.opt.disableflags|=mujoco.mjtDisableBit.mjDSBL_CONTACT
+    data=mujoco.MjData(mj)
+    joint_ids=[mujoco.mj_name2id(mj,mujoco.mjtObj.mjOBJ_JOINT,n) for n in names]
+    if min(joint_ids)<0:raise ValueError('Missing MJCF joint')
+    qp=mj.jnt_qposadr[joint_ids];qv=mj.jnt_dofadr[joint_ids]
+    trunk=[i for i,n in enumerate(names) if n.split('_')[0] in ('Torso','Spine','Chest')]
+    rows=[]
+    for scale in time_scales:
+        if not math.isfinite(scale) or scale<=0:raise ValueError('Positive time scales required')
+        for mid,(start,count) in enumerate(zip(pack['length_starts'],pack['motion_num_frames'])):
+            start=int(start);count=int(count);dt=float(pack['motion_dt'][mid])/scale
+            sl=slice(start,start+count);q=np.repeat(mj.qpos0[None],count,axis=0)
+            q[:,:3]=pack['gts'][sl,0].numpy();rot=pack['grs'][sl,0].numpy()
+            q[:,3:7]=rot[:,[3,0,1,2]];q[:,qp]=pack['dps'][sl].numpy()
+            velocity=np.zeros((count,mj.nv))
+            for t in range(1,count-1):mujoco.mj_differentiatePos(mj,velocity[t],2*dt,q[t-1],q[t+1])
+            acceleration=np.gradient(velocity,dt,axis=0)
+            torque=[]
+            for t in range(2,count-2):
+                data.qpos[:]=q[t];data.qvel[:]=velocity[t];data.qacc[:]=acceleration[t]
+                mujoco.mj_inverse(mj,data);torque.append(data.qfrc_inverse[qv].copy())
+            pos=torch.tensor(q[2:-2,qp]);vel=torch.tensor(velocity[2:-2,qv]);tau=torch.tensor(np.asarray(torque))
+            passive=plant.passive_torque(pos,vel);active=tau-passive
+            neg,positive,_=plant.strength_caps(pos,vel);caps=torch.where(active>=0,positive,neg)
+            ratio=active.abs()/caps.clamp_min(1e-9)
+            speed=float(pack['gvs'][sl,0,:2].norm(dim=-1).mean())*scale
+            rows.append(dict(motion_id=mid,time_scale=scale,mean_speed_m_s=speed,
+                source=str(pack['motion_files'][mid]),trunk={names[i]:dict(
+                    active_required_peak_nm=float(active[:,i].abs().max()),active_required_p95_nm=float(torch.quantile(active[:,i].abs(),.95)),
+                    capacity_ratio_peak=float(ratio[:,i].max()),capacity_ratio_p95=float(torch.quantile(ratio[:,i],.95)),
+                    capacity_exceeded_fraction=float((ratio[:,i]>1).double().mean()),
+                    passive_peak_nm=float(passive[:,i].abs().max())) for i in trunk}))
+    return dict(status='diagnostic',motion_file=str(motion_file),human_model_parameters=human_model_parameters or {},
+        scope='Prescribed pelvis wrench, no contact; static trunk capacity proxy, no trunk force-velocity model. Source retarget acceleration can contain artifacts. Not autonomous gait or vigorous human movement validation.',rows=rows)

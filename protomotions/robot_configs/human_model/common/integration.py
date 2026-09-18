@@ -44,7 +44,7 @@ def selected_model_parameters(robot_config):
     No experiment file is discovered or silently promoted into runtime defaults.
     """
     parameters = deepcopy(getattr(robot_config,'human_model_parameters',{}))
-    allowed = {'features','strength_cohort','strength_reference_size','active_strength_scale','fatigue_regions','fatigue_rest_multiplier'}
+    allowed = {'features','strength_cohort','strength_reference_size','active_strength_scale','fatigue_regions','fatigue_rest_multiplier','passive_joint_parameters'}
     if not isinstance(parameters,dict) or set(parameters)-allowed:
         raise ValueError('human_model_parameters contains unsupported parameters')
     if 'PROTOMOTIONS_HUMAN_MODEL_FEATURES' in os.environ:
