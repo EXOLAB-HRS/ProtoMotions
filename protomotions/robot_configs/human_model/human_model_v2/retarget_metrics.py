@@ -71,6 +71,126 @@ def derivative(x, dt):
     return torch.cat(((x[1]-x[0])[None], (x[2:]-x[:-2])/2, (x[-1]-x[-2])[None]))/dt
 
 
+def smooth_upper_hinges(q, names, dt, cutoff_hz):
+    """Offline Gaussian low-pass on torso/arm hinges only; no root/leg edits.
+
+    The cutoff is the Gaussian -3dB frequency in physical Hz. Odd reflection
+    preserves endpoint values and linear trends. Projection into the original
+    per-hinge range preserves ROM; all edge/clipping jerk remains audited.
+    """
+    import math
+    import torch.nn.functional as F
+    if dt <= 0 or not 0 < cutoff_hz < .5/dt:
+        raise ValueError('Upper smoothing cutoff must be between zero and Nyquist')
+    ids = [i for i, name in enumerate(names) if name.split('_')[0] in
+           ('Torso', 'Spine', 'Chest', 'Neck', 'Head') or any(
+               part in name for part in ('Thorax_', 'Shoulder_', 'Elbow_', 'Wrist_', 'Hand_'))]
+    if not ids or q.ndim != 2 or q.shape[1] != len(names):
+        raise ValueError('Upper smoothing requires named hinge trajectories')
+    sigma = math.sqrt(math.log(2))/(2*math.pi*cutoff_hz*dt)
+    radius = min(len(q)-1, max(1, math.ceil(4*sigma)))
+    x = torch.arange(-radius, radius+1, dtype=q.dtype, device=q.device)
+    kernel = torch.exp(-.5*(x/sigma).square()); kernel /= kernel.sum()
+    values = q[:,ids].T[:,None]
+    padded = F.pad(values, (radius,radius), mode='reflect')
+    padded[:,:,:radius] = 2*values[:,:,:1]-padded[:,:,:radius]
+    padded[:,:,-radius:] = 2*values[:,:,-1:]-padded[:,:,-radius:]
+    filtered = F.conv1d(padded, kernel[None,None])[:,0].T
+    filtered = filtered.maximum(q[:,ids].amin(0)).minimum(q[:,ids].amax(0))
+    filtered[0] = q[0,ids]; filtered[-1] = q[-1,ids]
+    result = q.clone(); result[:,ids] = filtered
+    return result
+
+
+def temporal_jerk_metrics(q, positions, rotations, dof_names, body_names, dt):
+    """Full-clip forward differences, including edge stencils (no trimming).
+
+    These are discrete sampled jerk measurements, not a claim that linear
+    MotionLib interpolation is C3-continuous. Relative rotations remove pelvis
+    motion; world-position jerk is also retained so root noise is not hidden.
+    """
+    from scipy.spatial.transform import Rotation
+    if len(q) < 4 or dt <= 0:
+        raise ValueError('Jerk needs at least four frames and positive dt')
+    def stats(values):
+        v=values.abs().double().flatten()
+        return dict(p95=float(torch.quantile(v,.95)),max=float(v.max()))
+    upper=[i for i,n in enumerate(dof_names) if n.split('_')[0] in
+           ('Torso','Spine','Chest','Neck','Head') or any(k in n for k in ('Thorax_','Shoulder_','Elbow_','Wrist_','Hand_'))]
+    body=[body_names.index(n) for n in ('Chest','L_Shoulder','R_Shoulder','L_Elbow','R_Elbow','L_Hand','R_Hand')]
+    p=positions.double();r=rotations.double()
+    relative=torch.einsum('tij,tbj->tbi',r[:,0].transpose(-1,-2),p[:,body]-p[:,0,None])
+    rr=r[:,0,None].transpose(-1,-2)@r[:,body]
+    delta=rr[1:]@rr[:-1].transpose(-1,-2)
+    omega=torch.tensor(Rotation.from_matrix(delta.cpu().numpy().reshape(-1,3,3)).as_rotvec().reshape(len(q)-1,len(body),3))/dt
+    angular_jerk=torch.diff(omega,n=2,dim=0)/dt**2
+    return dict(upper_hinge_jerk_rad_s3=stats(torch.diff(q[:,upper].double(),n=3,dim=0)/dt**3),
+                upper_relative_position_jerk_m_s3=stats(torch.diff(relative,n=3,dim=0).norm(dim=-1)/dt**3),
+                upper_world_position_jerk_m_s3=stats(torch.diff(p[:,body],n=3,dim=0).norm(dim=-1)/dt**3),
+                chest_shoulders_relative_angular_jerk_rad_s3=stats(angular_jerk[:,:3].norm(dim=-1)),
+                root_position_jerk_m_s3=stats(torch.diff(p[:,0],n=3,dim=0).norm(dim=-1)/dt**3),
+                scope='Forward finite differences; all valid stencils including endpoints; no physics/C3 continuity claim')
+
+
+TRUNK_SEGMENTS = ('Torso','Spine','Chest','L_Thorax','R_Thorax')
+
+
+def source_trunk_trajectory(q, source_rot, source_ki, target_ki, dt, cutoff_hz=2.):
+    """Source-local trunk trajectory; hand-position IK cannot drive these hinges.
+
+    Positive Gaussian averaging and clip-wide contraction keep each axis within
+    the source envelope/plant ROM. Rotation speed and discrete angular jerk are
+    limited by the source's own p95, measured separately for every segment.
+    """
+    import math
+    from scipy.spatial.transform import Rotation
+    result=q.detach().clone();rows=[]
+    sigma=math.sqrt(math.log(2))/(2*math.pi*cutoff_hz*dt)
+    radius=max(1,math.ceil(4*sigma));x=np.arange(-radius,radius+1)
+    kernel=np.exp(-.5*(x/sigma)**2);kernel/=kernel.sum()
+    sr=source_rot.detach().double().cpu().numpy()
+    def kinematics(local):
+        omega=Rotation.from_matrix(local[1:]@np.swapaxes(local[:-1],-1,-2)).as_rotvec()/dt
+        jerk=np.linalg.norm(np.diff(omega,n=2,axis=0),axis=-1)/dt**2
+        return np.linalg.norm(omega,axis=-1),jerk
+    for name in TRUNK_SEGMENTS:
+        si=source_ki.body_names.index(name);ti=target_ki.body_names.index(name)
+        parent=int(source_ki.parent_indices[si]);tp=int(target_ki.parent_indices[ti])
+        if source_ki.body_names[parent]!=target_ki.body_names[tp]:raise ValueError('Trunk topology differs')
+        ref=target_ki.local_rot_ref_mat[ti].double().cpu().numpy()
+        local=np.swapaxes(sr[:,parent],-1,-2)@sr[:,si]
+        raw=np.unwrap(Rotation.from_matrix(ref.T@local).as_euler('XYZ'),axis=0)
+        ids=[target_ki.dof_names.index(name+'_'+axis) for axis in 'xyz']
+        if not torch.allclose(target_ki.hinge_axes_map[ti],torch.eye(3,device=q.device),atol=1e-6):raise ValueError('Trunk requires intrinsic XYZ hinges')
+        lo=target_ki.dof_limits_lower[ids].cpu().numpy();hi=target_ki.dof_limits_upper[ids].cpu().numpy()
+        # SMPL clavicle neutral angles exceed the fixed plant ROM. Preserve
+        # the validated plant neutral and transfer source variation, explicitly.
+        offset=(q[:,ids].detach().double().cpu().numpy().mean(0)-raw.mean(0)) if 'Thorax' in name else np.zeros(3)
+        aligned=raw+offset
+        bounded=np.clip(aligned,lo,hi)
+        smooth=np.stack([np.convolve(np.pad(bounded[:,j],radius,mode='edge'),kernel,mode='valid') for j in range(3)],-1)
+        center=smooth.mean(0);delta=smooth-center
+        src_speed,src_jerk=kinematics(local)
+        speed_limit=max(float(np.quantile(src_speed,.95)),1e-5)
+        jerk_limit=max(float(np.quantile(src_jerk,.95)),1e-3)
+        scale=1.
+        for _ in range(12):
+            candidate=center+scale*delta
+            speed,jerk=kinematics(ref@Rotation.from_euler('XYZ',candidate).as_matrix())
+            factor=min(1.,speed_limit/max(float(speed.max()),1e-12),jerk_limit/max(float(jerk.max()),1e-12))
+            if factor>=.999999:break
+            scale*=factor*.995
+        result[:,ids]=torch.as_tensor(candidate,device=q.device,dtype=q.dtype)
+        rows.append(dict(segment=name,source_axis_min_rad=raw.min(0).tolist(),source_axis_max_rad=raw.max(0).tolist(),neutral_offset_rad=offset.tolist(),aligned_source_min_rad=aligned.min(0).tolist(),aligned_source_max_rad=aligned.max(0).tolist(),
+                         source_speed_p95_rad_s=float(np.quantile(src_speed,.95)),source_speed_max_rad_s=float(src_speed.max()),
+                         source_angular_jerk_p95_rad_s3=float(np.quantile(src_jerk,.95)),source_angular_jerk_max_rad_s3=float(src_jerk.max()),
+                         speed_limit_rad_s=speed_limit,jerk_limit_rad_s3=jerk_limit,variation_scale=scale,
+                         output_speed_max_rad_s=float(speed.max()),output_angular_jerk_max_rad_s3=float(jerk.max()),
+                         output_axis_min_rad=candidate.min(0).tolist(),output_axis_max_rad=candidate.max(0).tolist(),
+                         source_envelope_pass=bool((candidate>=aligned.min(0)-1e-6).all() and (candidate<=aligned.max(0)+1e-6).all())))
+    return result,rows
+
+
 def contact_metrics(points, phases, dt):
     rows = []
     for side, foot_ids in (('left', (0, 1)), ('right', (2, 3))):
@@ -176,7 +296,7 @@ def inventory(source, output):
     return result
 
 
-def audit_pack(pack_path, output_path):
+def audit_pack(pack_path, output_path, *, upper_position_diagnostic=False):
     """Independent saved-pack/FK/geometry audit including fractional timestamps."""
     import hashlib,json
     from pathlib import Path
@@ -185,6 +305,8 @@ def audit_pack(pack_path, output_path):
     from ..common.paths import PACKAGE_ROOT
     from .motion_lib import HumanModelMotionLib
     data=torch.load(pack_path,map_location='cpu',weights_only=False)
+    if upper_position_diagnostic and not data['human_model_metadata'].get('source_trunk'):
+        raise ValueError('Upper position diagnostic mode is restricted to explicit source-trunk packs')
     source=torch.load(data['human_model_metadata']['source'],map_location='cpu',weights_only=False)
     source_asset=PACKAGE_ROOT/'human_model_v1/assets/smpl_humanoid.xml'
     ski=extract_kinematic_info(str(source_asset))
@@ -237,13 +359,14 @@ def audit_pack(pack_path, output_path):
                     interpolated_fk=query_error<=1e-5,finite=finite,rom=rom<=1e-5,penetration=penetration<=.005,
                     position=body_rmse<=.04,foot_position=foot_max<=.05,query_velocity=float(state.dof_vel.abs().max())<=15,
                     root_path=path_error<=.1,root_heading_matrix=heading_error<=1e-4)
+        if upper_position_diagnostic:checks.pop('position')
         rows.append(dict(motion_id=data['human_model_metadata']['motions'][mid]['motion_id'],
                          stored_fk_max_m=stored_error,stored_rotation_matrix_max=stored_rotation_error,
                          position_rmse_m=body_rmse,foot_position_max_m=foot_max,root_path_max_m=path_error,root_heading_matrix_max=heading_error,
                          fractional_fk_max_m=query_error,penetration_max_m=penetration,rom_excess_rad=rom,
                          max_query_joint_velocity_rad_s=float(state.dof_vel.abs().max()),
                          checks=checks,status='passed' if all(checks.values()) else 'candidate_failed_gate'))
-    result=dict(source=str(pack_path),sha256=hashlib.sha256(Path(pack_path).read_bytes()).hexdigest(),motions=rows,
+    result=dict(upper_position_diagnostic=upper_position_diagnostic,source=str(pack_path),sha256=hashlib.sha256(Path(pack_path).read_bytes()).hexdigest(),motions=rows,
                 scope='Canonical FK, geometry and corrected-target error at stored/half-frame times; contact/gait/physics not certified',
                 status='passed' if all(r['status']=='passed' for r in rows) else 'candidate_failed_gate')
     Path(output_path).write_text(json.dumps(result,indent=2)+'\n')

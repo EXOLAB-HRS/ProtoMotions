@@ -27,6 +27,59 @@ def forward(ki, q, root_pos, root_rot):
 
 
 
+def refine_upper_trajectory(ki, original_q, root, target, target_rot, position_ids,
+                            rotation_ids, dt, cutoff_hz, iterations, arms_only=False):
+    """Source-position constrained temporal fitting; root and leg hinges frozen."""
+    from .retarget_metrics import smooth_upper_hinges
+    upper=([i for i,n in enumerate(ki.dof_names) if any(part in n for part in ('Shoulder_','Elbow_','Wrist_','Hand_'))] if arms_only else list(range(14,ki.num_dofs)))
+    baseline=original_q.detach().clone()
+    with torch.no_grad():
+        old_pos,_,_=forward(ki,baseline,root,target_rot[:,0])
+        start=smooth_upper_hinges(baseline,ki.dof_names,dt,cutoff_hz)
+    param=torch.nn.Parameter(start[:,upper].clone())
+    optimizer=torch.optim.Adam([param],lr=.003)
+    bodies=[ki.body_names.index(n) for n in ('Chest','L_Shoulder','R_Shoulder')]
+    for step in range(iterations):
+        optimizer.zero_grad()
+        q=baseline.clone();q[:,upper]=param
+        pos,rot,_=forward(ki,q,root,target_rot[:,0])
+        qjerk=torch.diff(param,n=3,dim=0)/dt**3
+        relative=target_rot[:,0,None].transpose(-1,-2)@rot[:,bodies]
+        delta=relative[1:]@relative[:-1].transpose(-1,-2)
+        omega=torch.stack((delta[...,2,1]-delta[...,1,2],delta[...,0,2]-delta[...,2,0],delta[...,1,0]-delta[...,0,1]),-1)/(2*dt)
+        angular_jerk=torch.diff(omega,n=2,dim=0)/dt**2
+        loss=10*(pos[:,position_ids]-target).square().mean()+.005*(rot[:,rotation_ids]-target_rot).square().mean()
+        loss+=1e-7*qjerk.square().mean()+1e-8*angular_jerk.square().mean()
+        if not arms_only:loss+=100*((pos-old_pos).norm(dim=-1)-.025).clamp_min(0).square().mean()
+        loss.backward();optimizer.step()
+        with torch.no_grad():
+            param.clamp_(ki.dof_limits_lower[upper],ki.dof_limits_upper[upper])
+            if not arms_only:
+                param[0]=baseline[0,upper];param[-1]=baseline[-1,upper]
+        if step in (iterations//2,3*iterations//4):
+            optimizer.param_groups[0]['lr']*=.1
+    result=baseline.clone();result[:,upper]=param.detach()
+    return result
+
+
+def project_upper_correction(ki, q, reference_q, root, root_rot, radius_m):
+    """One clip-wide blend bounds FK displacement without frame-wise clipping."""
+    if radius_m <= 0 or not torch.equal(q[:,:14],reference_q[:,:14]):
+        raise ValueError('Upper projection requires positive radius and identical legs')
+    with torch.no_grad():
+        reference_pos=forward(ki,reference_q,root,root_rot)[0]
+        def displacement(alpha):
+            trial=reference_q+alpha*(q-reference_q)
+            return float((forward(ki,trial,root,root_rot)[0]-reference_pos).norm(dim=-1).max())
+        if displacement(1.)<=radius_m:return q.clone(),1.
+        lo,hi=0.,1.
+        for _ in range(16):
+            mid=(lo+hi)/2
+            if displacement(mid)<=radius_m:lo=mid
+            else:hi=mid
+        return reference_q+lo*(q-reference_q),lo
+
+
 def audit_reference(pack_path, output_path):
     """Screen reference geometry, posture and forward speed coverage without training.
 
@@ -76,7 +129,7 @@ def audit_reference(pack_path, output_path):
     output_path.write_text(json.dumps(result,indent=2)+'\n');return result
 
 
-def convert(source, destination, *, iterations=800, device='cpu', motion_ids=None, seed=0, initial_pack=None):
+def convert(source, destination, *, iterations=800, device='cpu', motion_ids=None, seed=0, initial_pack=None, upper_smoothing_hz=None, upper_refine_iterations=0, trust_reference_pack=None, upper_trust_radius_m=.0295, source_trunk=False, source_trunk_arm_iterations=0):
     """smpl2hm bounded, per-clip optimization; failed clips are never approved.
 
     Whole-clip fitting keeps boundary continuity. Clips are processed sequentially
@@ -124,6 +177,14 @@ def convert(source, destination, *, iterations=800, device='cpu', motion_ids=Non
             raise ValueError('Warm start body/joint ordering mismatch')
         if iterations==0 and any(i not in warm_ids for i in selected):
             raise ValueError('Projection-only conversion requires every selected motion in warm pack')
+    trust = torch.load(trust_reference_pack,map_location='cpu',weights_only=False) if trust_reference_pack else None
+    if trust is not None:
+        tm=trust.get('human_model_metadata',{})
+        if (tm.get('source_sha256') != hashlib.sha256(source.read_bytes()).hexdigest()
+                or tm.get('asset_sha256') != hashlib.sha256(asset.read_bytes()).hexdigest()
+                or tm.get('dof_names') != ki.dof_names or tm.get('body_names') != ki.body_names):
+            raise ValueError('Trust reference provenance mismatch')
+        trust_ids={r['motion_id']:i for i,r in enumerate(tm['motions'])}
     fields = {k: [] for k in ('gts','grs','gvs','gavs','dps','dvs','contacts')}
     reports, frames, dts, files = [], [], [], []
     for mid in selected:
@@ -220,8 +281,35 @@ def convert(source, destination, *, iterations=800, device='cpu', motion_ids=Non
                 root_delta[:,:2]=0.  # preserve source horizontal turning trajectory exactly
             if step == int(iterations*.75):
                 for group in opt.param_groups: group['lr'] *= .25
+        if upper_refine_iterations:
+            if upper_smoothing_hz is None or warm is None:
+                raise ValueError('Upper refinement requires a warm pack and smoothing cutoff')
+            refined=refine_upper_trajectory(ki,q,target[:,0]+root_delta.detach(),target,target_rot,
+                                           position_ids,rotation_ids,dt,upper_smoothing_hz,upper_refine_iterations)
+            with torch.no_grad():q.copy_(refined)
         with torch.no_grad():
+            if upper_smoothing_hz is not None and not upper_refine_iterations:
+                from .retarget_metrics import smooth_upper_hinges
+                q.copy_(smooth_upper_hinges(q, ki.dof_names, dt, upper_smoothing_hz))
             root = target[:,0]+root_delta
+            retained_correction=1.
+            if trust is not None:
+                ti=trust_ids[mid];ta=int(trust['length_starts'][ti])
+                if int(trust['motion_num_frames'][ti])!=n or abs(float(trust['motion_dt'][ti])-dt)>1e-7:
+                    raise ValueError('Trust reference timing mismatch')
+                if not torch.allclose(root,trust['gts'][ta:ta+n,0].to(device),atol=1e-6,rtol=0):
+                    raise ValueError('Trust reference root trajectory mismatch')
+                projected,retained_correction=project_upper_correction(ki,q,trust['dps'][ta:ta+n].to(device),root,target_rot[:,0],upper_trust_radius_m)
+                q.copy_(projected)
+            trunk_report=None
+            if source_trunk:
+                from .retarget_metrics import source_trunk_trajectory
+                locked,trunk_report=source_trunk_trajectory(q,target_rot,ski,ki,dt)
+                q.copy_(locked)
+                if source_trunk_arm_iterations:
+                    with torch.enable_grad():
+                        arms=refine_upper_trajectory(ki,q,root.detach(),target,target_rot,position_ids,rotation_ids,dt,3.,source_trunk_arm_iterations,arms_only=True)
+                    q.copy_(arms)
             # Minimal upward translation projects sampled collision geometry
             # onto the floor inequality; q, root XY and heading stay unchanged.
             from protomotions.utils.rotations import slerp
@@ -277,6 +365,12 @@ def convert(source, destination, *, iterations=800, device='cpu', motion_ids=Non
                 source_support_fraction=float(contact.any(-1).float().mean()),
                 source_contact_rejected_fraction=float((raw_contact & ~contact).sum()/raw_contact.sum().clamp_min(1)),
                 finite=bool(torch.isfinite(qd).all() and torch.isfinite(pos).all()))
+            from .retarget_metrics import temporal_jerk_metrics
+            report['source_trunk'] = trunk_report
+            report['upper_correction_fraction'] = retained_correction
+            report['temporal_quality'] = temporal_jerk_metrics(q, pos, rot, ki.dof_names, ki.body_names, dt)
+            if 'source_anthropometry' in original:
+                report['source_anthropometry'] = original['source_anthropometry'][mid]
             checks=dict(finite=report['finite'],rom=bool(((q>=ki.dof_limits_lower-1e-5)&(q<=ki.dof_limits_upper+1e-5)).all()),
                 position=report['position_rmse_m']<=.04,foot_position=report['foot_position_max_m']<=.05,
                 penetration=penetration<=.005,velocity=report['max_joint_speed_rad_s']<=15,
@@ -287,6 +381,9 @@ def convert(source, destination, *, iterations=800, device='cpu', motion_ids=Non
                 speed=report['speed_mae_mps']<=.1,
                 cadence=source_gait['cadence_median_spm'] is not None and output_gait['cadence_median_spm'] is not None
                     and abs(output_gait['cadence_median_spm']-source_gait['cadence_median_spm'])<=.05*source_gait['cadence_median_spm'])
+            if source_trunk:
+                checks.pop('position')  # User prioritizes trunk/source rotation over hand position.
+                checks['source_trunk']=all(x['source_envelope_pass'] and x['output_speed_max_rad_s']<=x['speed_limit_rad_s']*1.001+1e-5 and x['output_angular_jerk_max_rad_s3']<=x['jerk_limit_rad_s3']*1.001+1e-3 for x in trunk_report)
             report['checks']=checks
             report['failed_gates']=[k for k,v in checks.items() if not v]
             report['status']='screening_passed' if all(checks.values()) else 'candidate_failed_gate'
@@ -314,7 +411,11 @@ def convert(source, destination, *, iterations=800, device='cpu', motion_ids=Non
         initial_pack_sha256=hashlib.sha256(Path(initial_pack).read_bytes()).hexdigest() if initial_pack else None,
         criteria=dict(position_rmse_m=.04,foot_position_max_m=.05,penetration_max_m=.005,slip_p95_mps=.1,
                       contact_drift_max_m=.02,joint_speed_max_rad_s=15,root_path_rmse_m=.05,root_path_max_m=.1,speed_mae_mps=.1),
-        physical_tracking='not_evaluated',motions=reports)
+        trust_reference_sha256=hashlib.sha256(Path(trust_reference_pack).read_bytes()).hexdigest() if trust_reference_pack else None,
+        upper_trust_radius_m=upper_trust_radius_m if trust_reference_pack else None,
+        initial_pack=str(initial_pack) if initial_pack else None,
+        source_trunk=source_trunk,source_trunk_arm_iterations=source_trunk_arm_iterations,upper_position_scope='diagnostic_only; source trunk prioritized' if source_trunk else 'original strict gate',
+        upper_smoothing_hz=upper_smoothing_hz,upper_refine_iterations=upper_refine_iterations,physical_tracking='not_evaluated',motions=reports)
     pack['human_model_metadata']=meta
     destination.parent.mkdir(parents=True,exist_ok=True)
     torch.save(pack,destination);destination.with_suffix('.json').write_text(json.dumps(meta,indent=2)+'\n')
@@ -322,7 +423,7 @@ def convert(source, destination, *, iterations=800, device='cpu', motion_ids=Non
 
 
 
-def render_comparison(source, converted_pack, destination, *, motion_ids=(0,12,13), duration=6.):
+def render_comparison(source, converted_pack, destination, *, motion_ids=(0,12,13), duration=6., video_label=None):
     """Render stored world poses, not a dynamics rollout. Owned by smpl2hm e02."""
     import os
     os.environ.setdefault('MUJOCO_GL','egl')
@@ -365,24 +466,27 @@ def render_comparison(source, converted_pack, destination, *, motion_ids=(0,12,1
         try:
             for mid in motion_ids:
                 ti=indices[mid];starts=[int(raw['length_starts'][mid]),int(target['length_starts'][ti])]
-                n=min(int(raw['motion_num_frames'][mid]),int(target['motion_num_frames'][ti]),round(duration*fps))
-                if abs(float(raw['motion_dt'][mid])-1/fps)>1e-6 or abs(float(target['motion_dt'][ti])-1/fps)>1e-6:
-                    raise ValueError('Comparison currently requires matching 30 Hz packs')
+                source_dt=float(raw['motion_dt'][mid]);target_dt=float(target['motion_dt'][ti])
+                if abs(source_dt-target_dt)>1e-6:
+                    raise ValueError('Comparison requires matching source/target timestamps')
+                available=min(int(raw['motion_num_frames'][mid]),int(target['motion_num_frames'][ti]))
+                n=min(round(duration*fps),int((available-1)*source_dt*fps)+1)
+                sample_indices=torch.round(torch.arange(n)/(fps*source_dt)).long().clamp_max(available-1)
                 arrays=[raw,target];poses=[];feet=[]
                 for j,pack in enumerate(arrays):
-                    a=starts[j];pos=pack['gts'][a:a+n].clone()
+                    a=starts[j];pos=pack['gts'][a+sample_indices].clone()
                     # Same source initial XY origin; preserve original world Z.
                     pos[:,:,:2]-=raw['gts'][starts[0],0,:2]
-                    rot=quaternion_to_matrix(pack['grs'][a:a+n],w_last=True)
+                    rot=quaternion_to_matrix(pack['grs'][a+sample_indices],w_last=True)
                     asset=PACKAGE_ROOT/('human_model_v1/assets/smpl_humanoid.xml' if j==0 else 'human_model_v2/assets/human_model_v2.xml')
                     corners=box_corners(asset,FOOT_NAMES)
                     ids=[kin[j].body_names.index(x) for x in FOOT_NAMES]
                     feet.append(world_points(pos,rot,ids,corners).numpy());poses.append(pos.numpy())
-                label={0:'Straight walking',12:'Left 90-degree turn',13:'Right 90-degree turn'}.get(mid,Path(raw['motion_files'][mid]).stem)
-                segments.append(dict(source_motion_id=mid,start_video_frame=count,frames=n,source_start_frame=0,label=label))
+                label=Path(raw['motion_files'][mid]).stem
+                segments.append(dict(source_motion_id=mid,start_video_frame=count,frames=n,source_start_frame=0,label=label,source_dt=source_dt,source_frame_indices=sample_indices.tolist()))
                 for frame in range(n):
                     canvas=Image.new('RGB',(width,height),(15,20,29));draw=ImageDraw.Draw(canvas)
-                    draw.text((32,17),'SMPL -> human_model_v2 | synchronized motion comparison',font=title,fill='white')
+                    draw.text((32,17),'SMPL -> human_model_v2 | synchronized motion comparison' + (f' | {video_label}' if video_label else ''),font=title,fill='white')
                     draw.text((32,64),f'{label}   |   source ID {mid}   |   t = {frame/fps:.2f} s   |   1x speed',font=font,fill='#cbd5e1')
                     for side in range(2):
                         xyz=poses[side][frame];camera.lookat[:]=[*poses[0][frame,0,:2],.85]
@@ -411,7 +515,7 @@ def render_comparison(source, converted_pack, destination, *, motion_ids=(0,12,1
         finally:
             process.stdin.close();renderer.close();returncode=process.wait()
         if returncode:raise RuntimeError(f'ffmpeg failed: {returncode}')
-    report=dict(source=str(source),source_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),converted_pack=str(converted_pack),converted_sha256=hashlib.sha256(converted_pack.read_bytes()).hexdigest(),fps=fps,frames=count,segments=segments,scope='Stored world-pose kinematic playback; original raw source height; identical view and source XY origin; schematic bones and actual foot box corners, not muscles/skin or physics tracking')
+    report=dict(video_label=video_label,source=str(source),source_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),converted_pack=str(converted_pack),converted_sha256=hashlib.sha256(converted_pack.read_bytes()).hexdigest(),fps=fps,frames=count,segments=segments,scope='Stored world-pose kinematic playback; original raw source height; identical view and source XY origin; schematic bones and actual foot box corners, not muscles/skin or physics tracking')
     destination.with_suffix('.comparison.json').write_text(json.dumps(report,indent=2)+'\n')
     return report
 
@@ -422,15 +526,22 @@ def main():
     parser.add_argument('--iterations',type=int,default=800);parser.add_argument('--device',default='cpu')
     parser.add_argument('--motion-ids',type=int,nargs='+');parser.add_argument('--seed',type=int,default=0)
     parser.add_argument('--initial-pack')
+    parser.add_argument('--upper-smoothing-hz',type=float)
+    parser.add_argument('--upper-refine-iterations',type=int,default=0)
+    parser.add_argument('--trust-reference-pack')
+    parser.add_argument('--upper-trust-radius-m',type=float,default=.0295)
+    parser.add_argument('--source-trunk',action='store_true')
+    parser.add_argument('--source-trunk-arm-iterations',type=int,default=0)
     parser.add_argument('--render-comparison',action='store_true')
     parser.add_argument('--converted-pack')
     parser.add_argument('--duration',type=float,default=6.)
+    parser.add_argument('--video-label',help='Display label only; does not change the retargeting implementation')
     args=parser.parse_args()
     if args.render_comparison:
         if not args.converted_pack:parser.error('--converted-pack is required for comparison')
-        render_comparison(args.source,args.converted_pack,args.output,motion_ids=args.motion_ids or [0,12,13],duration=args.duration)
+        render_comparison(args.source,args.converted_pack,args.output,motion_ids=args.motion_ids or [0,12,13],duration=args.duration,video_label=args.video_label)
         return
-    convert(args.source,args.output,iterations=args.iterations,device=args.device,motion_ids=args.motion_ids,seed=args.seed,initial_pack=args.initial_pack)
+    convert(args.source,args.output,iterations=args.iterations,device=args.device,motion_ids=args.motion_ids,seed=args.seed,initial_pack=args.initial_pack,upper_smoothing_hz=args.upper_smoothing_hz,upper_refine_iterations=args.upper_refine_iterations,trust_reference_pack=args.trust_reference_pack,upper_trust_radius_m=args.upper_trust_radius_m,source_trunk=args.source_trunk,source_trunk_arm_iterations=args.source_trunk_arm_iterations)
 
 
 if __name__ == '__main__':

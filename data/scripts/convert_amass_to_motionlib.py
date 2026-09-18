@@ -32,6 +32,7 @@ This will create:
 """
 
 import argparse
+import json
 import os
 import subprocess
 import sys
@@ -101,6 +102,7 @@ Examples:
         action="store_true",
         help="Overwrite existing .motion files",
     )
+    parser.add_argument('--body-model-dir', type=Path, help='SMPL-H subject shape models')
 
     # Optional arguments for motion_lib.py
     parser.add_argument(
@@ -153,6 +155,8 @@ Examples:
 
     if args.force_remake:
         convert_cmd.append("--force-remake")
+    if args.body_model_dir:
+        convert_cmd.extend(['--body-model-dir', str(args.body_model_dir.resolve())])
 
     for config in args.motion_configs:
         convert_cmd.extend(["--motion-config", str(config)])
@@ -221,6 +225,12 @@ Examples:
             )
             sys.exit(result.returncode)
 
+        if args.body_model_dir:
+            import torch
+            pack = torch.load(output_file, map_location='cpu', weights_only=False)
+            pack['source_anthropometry'] = [json.loads(Path(file).with_suffix('.anthropometry.json').read_text())
+                                            for file in pack['motion_files']]
+            torch.save(pack, output_file)
         print(f"Created: {output_file}")
 
     # Done
