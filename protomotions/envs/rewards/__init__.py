@@ -66,6 +66,7 @@ from protomotions.envs.rewards.tracking import (
 from protomotions.envs.rewards.task import (
     compute_heading_velocity_rew,
     compute_split_heading_velocity_rew,
+    compute_split_heading_velocity_stop_rew,
     compute_path_following_rew,
 )
 
@@ -116,6 +117,7 @@ __all__ = [
     # Task reward kernels
     "compute_heading_velocity_rew",
     "compute_split_heading_velocity_rew",
+    "compute_split_heading_velocity_stop_rew",
     "compute_path_following_rew",
     # Regularization reward kernels
     "compute_action_smoothness",

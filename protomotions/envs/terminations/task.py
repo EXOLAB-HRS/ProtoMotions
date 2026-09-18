@@ -90,7 +90,8 @@ def check_path_height_term(
 # ==============================================================================
 
 
-@torch.jit.script
+# Not scripted: this is bound into an MdpComponent that train_agent pickles into
+# resolved_configs.pt, and a ScriptFunction cannot be pickled.
 def check_steering_velocity_error(
     root_pos: Tensor,
     prev_root_pos: Tensor,

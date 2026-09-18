@@ -188,6 +188,73 @@ def compute_split_heading_velocity_rew(
     return (1.0 - upright_reward_w) * motion_reward + upright_reward_w * upright_reward
 
 
+def compute_split_heading_velocity_stop_rew(
+    root_pos: Tensor,
+    prev_root_pos: Tensor,
+    root_rot: Tensor,
+    tar_dir: Tensor,
+    tar_speed: Tensor,
+    tar_face_dir: Tensor,
+    dt: float,
+    speed_err_scale: float = 8.0,
+    tangent_err_scale: float = 0.025,
+    speed_reward_w: float = 0.35,
+    direction_reward_w: float = 0.35,
+    facing_reward_w: float = 0.30,
+    stop_speed_eps: float = 0.05,
+    upright_reward_w: float = 0.0,
+    upright_height_min: float = 0.5,
+    upright_height_margin: float = 0.4,
+) -> Tensor:
+    """Split steering reward that also scores zero-speed (stop) commands.
+
+    :func:`compute_split_heading_velocity_rew` gates its speed and direction
+    channels on ``projected_speed > 0``, so a correctly standing character earns
+    nothing while a stop command is active. Below ``stop_speed_eps`` the target
+    direction carries no information, so both channels switch to the planar
+    speed magnitude and the forward gate is dropped. Above the threshold the
+    kernel matches the split reward exactly.
+    """
+    root_vel = (root_pos - prev_root_pos) / dt
+    planar_vel = root_vel[..., :2]
+    projected_speed = torch.sum(tar_dir * planar_vel, dim=-1)
+
+    tangent_velocity = planar_vel - projected_speed.unsqueeze(-1) * tar_dir
+    tangent_error = torch.sum(torch.square(tangent_velocity), dim=-1)
+    planar_speed_sq = torch.sum(torch.square(planar_vel), dim=-1)
+
+    stopped = tar_speed <= stop_speed_eps
+    speed_error_sq = torch.where(
+        stopped, planar_speed_sq, torch.square(tar_speed - projected_speed)
+    )
+    direction_error = torch.where(stopped, planar_speed_sq, tangent_error)
+
+    speed_reward = torch.exp(-speed_err_scale * speed_error_sq)
+    direction_reward = torch.exp(-tangent_err_scale * direction_error)
+
+    forward_gate = torch.where(stopped, torch.ones_like(projected_speed), (projected_speed > 0).float())
+    speed_reward = speed_reward * forward_gate
+    direction_reward = direction_reward * forward_gate
+
+    heading_rot = calc_heading_quat(root_rot, w_last=True)
+    facing_dir = torch.zeros_like(root_pos)
+    facing_dir[..., 0] = 1.0
+    facing_dir = quat_rotate(heading_rot, facing_dir, w_last=True)
+    facing_alignment = torch.sum(tar_face_dir * facing_dir[..., 0:2], dim=-1)
+    facing_reward = torch.clamp_min(facing_alignment, 0.0)
+
+    motion_reward = (
+        speed_reward_w * speed_reward
+        + direction_reward_w * direction_reward
+        + facing_reward_w * facing_reward
+    )
+
+    upright_reward = torch.clamp(
+        (root_pos[..., 2] - upright_height_min) / upright_height_margin, min=0.0, max=1.0
+    )
+    return (1.0 - upright_reward_w) * motion_reward + upright_reward_w * upright_reward
+
+
 def compute_foot_plant_rew(
     rigid_body_pos: Tensor,
     rigid_body_vel: Tensor,
@@ -280,5 +347,6 @@ def compute_path_following_rew(
 __all__ = [
     "compute_heading_velocity_rew",
     "compute_split_heading_velocity_rew",
+    "compute_split_heading_velocity_stop_rew",
     "compute_path_following_rew",
 ]
