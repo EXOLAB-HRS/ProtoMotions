@@ -28,7 +28,7 @@ def forward(ki, q, root_pos, root_rot):
 
 
 def refine_upper_trajectory(ki, original_q, root, target, target_rot, position_ids,
-                            rotation_ids, dt, cutoff_hz, iterations, arms_only=False):
+                            rotation_ids, dt, cutoff_hz, iterations, arms_only=False, source_ki=None):
     """Source-position constrained temporal fitting; root and leg hinges frozen."""
     from .retarget_metrics import smooth_upper_hinges
     upper=([i for i,n in enumerate(ki.dof_names) if any(part in n for part in ('Shoulder_','Elbow_','Wrist_','Hand_'))] if arms_only else list(range(14,ki.num_dofs)))
@@ -36,6 +36,14 @@ def refine_upper_trajectory(ki, original_q, root, target, target_rot, position_i
     with torch.no_grad():
         old_pos,_,_=forward(ki,baseline,root,target_rot[:,0])
         start=smooth_upper_hinges(baseline,ki.dof_names,dt,cutoff_hz)
+    reference=None
+    if source_ki is not None:
+        if not arms_only:raise ValueError('Proximal priority requires arms-only fitting')
+        from .retarget_metrics import source_arm_reference
+        reference=source_arm_reference(target_rot,source_ki,ki,dt)
+        start[:,upper]=reference['q'][:,upper]
+        angle_scale=reference['angle_scale'][upper]
+        rate_scale=reference['rate_scale'][upper]
     param=torch.nn.Parameter(start[:,upper].clone())
     optimizer=torch.optim.Adam([param],lr=.003)
     bodies=[ki.body_names.index(n) for n in ('Chest','L_Shoulder','R_Shoulder')]
@@ -48,8 +56,16 @@ def refine_upper_trajectory(ki, original_q, root, target, target_rot, position_i
         delta=relative[1:]@relative[:-1].transpose(-1,-2)
         omega=torch.stack((delta[...,2,1]-delta[...,1,2],delta[...,0,2]-delta[...,2,0],delta[...,1,0]-delta[...,0,1]),-1)/(2*dt)
         angular_jerk=torch.diff(omega,n=2,dim=0)/dt**2
-        loss=10*(pos[:,position_ids]-target).square().mean()+.005*(rot[:,rotation_ids]-target_rot).square().mean()
-        loss+=1e-7*qjerk.square().mean()+1e-8*angular_jerk.square().mean()
+        if reference is None:
+            loss=10*(pos[:,position_ids]-target).square().mean()+.005*(rot[:,rotation_ids]-target_rot).square().mean()
+            loss+=1e-7*qjerk.square().mean()+1e-8*angular_jerk.square().mean()
+        else:
+            residual=param-reference['q'][:,upper]
+            # Dimensionless source-angle/rate errors dominate weak distal IK.
+            loss=(residual/angle_scale).square().mean()
+            loss+=(torch.diff(residual,dim=0)/dt/rate_scale).square().mean()
+            loss+=.05*((pos[:,position_ids]-target)/.1).square().mean()
+            loss+=1e-8*(torch.diff(residual,n=3,dim=0)/dt**3).square().mean()
         if not arms_only:loss+=100*((pos-old_pos).norm(dim=-1)-.025).clamp_min(0).square().mean()
         loss.backward();optimizer.step()
         with torch.no_grad():
@@ -59,6 +75,12 @@ def refine_upper_trajectory(ki, original_q, root, target, target_rot, position_i
         if step in (iterations//2,3*iterations//4):
             optimizer.param_groups[0]['lr']*=.1
     result=baseline.clone();result[:,upper]=param.detach()
+    if reference is not None:
+        # Clip-wide per-axis residual scaling preserves continuity, phase and ROM.
+        residual=result[:,upper]-reference['q'][:,upper]
+        scale=torch.minimum(torch.ones_like(angle_scale),angle_scale/residual.abs().amax(0).clamp_min(1e-12))
+        scale=torch.minimum(scale,rate_scale/(torch.diff(residual,dim=0)/dt).abs().amax(0).clamp_min(1e-12))
+        result[:,upper]=reference['q'][:,upper]+residual*scale
     return result
 
 
@@ -129,7 +151,7 @@ def audit_reference(pack_path, output_path):
     output_path.write_text(json.dumps(result,indent=2)+'\n');return result
 
 
-def convert(source, destination, *, iterations=800, device='cpu', motion_ids=None, seed=0, initial_pack=None, upper_smoothing_hz=None, upper_refine_iterations=0, trust_reference_pack=None, upper_trust_radius_m=.0295, source_trunk=False, source_trunk_arm_iterations=0):
+def convert(source, destination, *, iterations=800, device='cpu', motion_ids=None, seed=0, initial_pack=None, upper_smoothing_hz=None, upper_refine_iterations=0, trust_reference_pack=None, upper_trust_radius_m=.0295, source_trunk=False, source_trunk_arm_iterations=0, proximal_arms=False):
     """smpl2hm bounded, per-clip optimization; failed clips are never approved.
 
     Whole-clip fitting keeps boundary continuity. Clips are processed sequentially
@@ -142,6 +164,8 @@ def convert(source, destination, *, iterations=800, device='cpu', motion_ids=Non
         raise FileExistsError(destination)
     if iterations < 0 or (iterations == 0 and initial_pack is None):
         raise ValueError('zero iterations requires a provenance-checked warm pack')
+    if proximal_arms and (not source_trunk or not source_trunk_arm_iterations or initial_pack is None):
+        raise ValueError('Proximal arms requires source-trunk, positive arm iterations and frozen v3 warm pack')
     torch.manual_seed(seed)
     code_fingerprint = {p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in
                         (Path(__file__),Path(__file__).with_name('retarget_metrics.py'),Path(__file__).with_name('motion_lib.py'))}
@@ -304,11 +328,15 @@ def convert(source, destination, *, iterations=800, device='cpu', motion_ids=Non
             trunk_report=None
             if source_trunk:
                 from .retarget_metrics import source_trunk_trajectory
-                locked,trunk_report=source_trunk_trajectory(q,target_rot,ski,ki,dt)
-                q.copy_(locked)
+                if proximal_arms:
+                    if not wm.get('source_trunk'):raise ValueError('Proximal fitting requires validated source-trunk warm data')
+                    trunk_report=wm['motions'][warm_ids[mid]]['source_trunk']
+                else:
+                    locked,trunk_report=source_trunk_trajectory(q,target_rot,ski,ki,dt)
+                    q.copy_(locked)
                 if source_trunk_arm_iterations:
                     with torch.enable_grad():
-                        arms=refine_upper_trajectory(ki,q,root.detach(),target,target_rot,position_ids,rotation_ids,dt,3.,source_trunk_arm_iterations,arms_only=True)
+                        arms=refine_upper_trajectory(ki,q,root.detach(),target,target_rot,position_ids,rotation_ids,dt,3.,source_trunk_arm_iterations,arms_only=True,source_ki=ski if proximal_arms else None)
                     q.copy_(arms)
             # Minimal upward translation projects sampled collision geometry
             # onto the floor inequality; q, root XY and heading stay unchanged.
@@ -367,6 +395,7 @@ def convert(source, destination, *, iterations=800, device='cpu', motion_ids=Non
                 finite=bool(torch.isfinite(qd).all() and torch.isfinite(pos).all()))
             from .retarget_metrics import temporal_jerk_metrics
             report['source_trunk'] = trunk_report
+            report['proximal_arms'] = proximal_arms
             report['upper_correction_fraction'] = retained_correction
             report['temporal_quality'] = temporal_jerk_metrics(q, pos, rot, ki.dof_names, ki.body_names, dt)
             if 'source_anthropometry' in original:
@@ -414,7 +443,7 @@ def convert(source, destination, *, iterations=800, device='cpu', motion_ids=Non
         trust_reference_sha256=hashlib.sha256(Path(trust_reference_pack).read_bytes()).hexdigest() if trust_reference_pack else None,
         upper_trust_radius_m=upper_trust_radius_m if trust_reference_pack else None,
         initial_pack=str(initial_pack) if initial_pack else None,
-        source_trunk=source_trunk,source_trunk_arm_iterations=source_trunk_arm_iterations,upper_position_scope='diagnostic_only; source trunk prioritized' if source_trunk else 'original strict gate',
+        source_trunk=source_trunk,source_trunk_arm_iterations=source_trunk_arm_iterations,proximal_arms=proximal_arms,upper_position_scope='diagnostic_only; source trunk prioritized' if source_trunk else 'original strict gate',
         upper_smoothing_hz=upper_smoothing_hz,upper_refine_iterations=upper_refine_iterations,physical_tracking='not_evaluated',motions=reports)
     pack['human_model_metadata']=meta
     destination.parent.mkdir(parents=True,exist_ok=True)
@@ -531,6 +560,7 @@ def main():
     parser.add_argument('--trust-reference-pack')
     parser.add_argument('--upper-trust-radius-m',type=float,default=.0295)
     parser.add_argument('--source-trunk',action='store_true')
+    parser.add_argument('--proximal-arms',action='store_true',help='v4 candidate: frozen v3 trunk; source-angle/rate priority decreases distally')
     parser.add_argument('--source-trunk-arm-iterations',type=int,default=0)
     parser.add_argument('--render-comparison',action='store_true')
     parser.add_argument('--converted-pack')
@@ -541,7 +571,7 @@ def main():
         if not args.converted_pack:parser.error('--converted-pack is required for comparison')
         render_comparison(args.source,args.converted_pack,args.output,motion_ids=args.motion_ids or [0,12,13],duration=args.duration,video_label=args.video_label)
         return
-    convert(args.source,args.output,iterations=args.iterations,device=args.device,motion_ids=args.motion_ids,seed=args.seed,initial_pack=args.initial_pack,upper_smoothing_hz=args.upper_smoothing_hz,upper_refine_iterations=args.upper_refine_iterations,trust_reference_pack=args.trust_reference_pack,upper_trust_radius_m=args.upper_trust_radius_m,source_trunk=args.source_trunk,source_trunk_arm_iterations=args.source_trunk_arm_iterations)
+    convert(args.source,args.output,iterations=args.iterations,device=args.device,motion_ids=args.motion_ids,seed=args.seed,initial_pack=args.initial_pack,upper_smoothing_hz=args.upper_smoothing_hz,upper_refine_iterations=args.upper_refine_iterations,trust_reference_pack=args.trust_reference_pack,upper_trust_radius_m=args.upper_trust_radius_m,source_trunk=args.source_trunk,source_trunk_arm_iterations=args.source_trunk_arm_iterations,proximal_arms=args.proximal_arms)
 
 
 if __name__ == '__main__':

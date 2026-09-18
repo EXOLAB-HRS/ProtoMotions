@@ -191,6 +191,42 @@ def source_trunk_trajectory(q, source_rot, source_ki, target_ki, dt, cutoff_hz=2
     return result,rows
 
 
+
+def source_arm_reference(source_rot, source_ki, target_ki, dt):
+    """v4 candidate: common local XYZ frames, no shoulder neutral-offset fitting.
+
+    A symmetric Gaussian preserves timing (no causal delay). ROM conflicts are
+    clipped explicitly and must be assessed against RAW source in validation.
+    Per-axis residual limits increase with distance from the trunk.
+    """
+    import math
+    from scipy.spatial.transform import Rotation
+    if dt <= 0:raise ValueError('Positive dt required')
+    sr=source_rot.detach().double().cpu().numpy()
+    q=torch.zeros(len(sr),target_ki.num_dofs,device=source_rot.device,dtype=source_rot.dtype)
+    angle=torch.ones(target_ki.num_dofs,device=q.device,dtype=q.dtype)
+    rate=angle.clone()
+    sigma=math.sqrt(math.log(2))/(2*math.pi*4.*dt)
+    radius=max(1,math.ceil(4*sigma));x=np.arange(-radius,radius+1)
+    kernel=np.exp(-.5*(x/sigma)**2);kernel/=kernel.sum()
+    rows=[]
+    for part,angle_deg,rate_deg_s in [('Shoulder',2.,10.),('Elbow',5.,30.),('Wrist',10.,60.),('Hand',15.,90.)]:
+        for side in ('L','R'):
+            name=side+'_'+part;si=source_ki.body_names.index(name);ti=target_ki.body_names.index(name)
+            sp=int(source_ki.parent_indices[si]);tp=int(target_ki.parent_indices[ti])
+            if source_ki.body_names[sp]!=target_ki.body_names[tp]:raise ValueError('Arm topology differs')
+            if not torch.allclose(target_ki.hinge_axes_map[ti].cpu(),torch.eye(3),atol=1e-6):raise ValueError('Intrinsic XYZ arm axes required')
+            ids=[target_ki.dof_names.index(name+'_'+a) for a in 'xyz']
+            local=np.swapaxes(sr[:,sp],-1,-2)@sr[:,si]
+            raw=np.unwrap(Rotation.from_matrix(target_ki.local_rot_ref_mat[ti].double().cpu().numpy().T@local).as_euler('XYZ'),axis=0)
+            lo=target_ki.dof_limits_lower[ids].cpu().numpy();hi=target_ki.dof_limits_upper[ids].cpu().numpy()
+            bounded=np.clip(raw,lo,hi)
+            smooth=np.stack([np.convolve(np.pad(bounded[:,j],radius,mode='edge'),kernel,mode='valid') for j in range(3)],-1)
+            q[:,ids]=torch.as_tensor(smooth,device=q.device,dtype=q.dtype)
+            angle[ids]=math.radians(angle_deg);rate[ids]=math.radians(rate_deg_s)
+            rows.append(dict(segment=name,raw_rom_violation_max_deg=float(np.rad2deg(np.maximum(lo-raw,raw-hi).clip(0).max()))))
+    return dict(q=q,angle_scale=angle,rate_scale=rate,rom_diagnostics=rows)
+
 def contact_metrics(points, phases, dt):
     rows = []
     for side, foot_ids in (('left', (0, 1)), ('right', (2, 3))):

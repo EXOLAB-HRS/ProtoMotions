@@ -229,3 +229,30 @@ def test_source_trunk_stays_in_source_range_with_source_speed_and_jerk_limits():
     assert all(x['output_angular_jerk_max_rad_s3']<=x['jerk_limit_rad_s3']*1.001+1e-3 for x in report)
     assert torch.all(q>=ki.dof_limits_lower-1e-6) and torch.all(q<=ki.dof_limits_upper+1e-6)
     assert abs(next(x for x in report if x['segment']=='L_Thorax')['neutral_offset_rad'][1]+.7)<1e-5
+
+
+def test_proximal_arm_fit_preserves_frozen_trunk_and_source_swing_under_bad_hand_targets():
+    from protomotions.robot_configs.human_model.human_model_v2.retarget import refine_upper_trajectory
+    from protomotions.robot_configs.human_model.human_model_v2.retarget_metrics import source_arm_reference
+    ski=extract_kinematic_info(str(PACKAGE_ROOT/'human_model_v1/assets/smpl_humanoid.xml'))
+    ki=extract_kinematic_info(str(PACKAGE_ROOT/'human_model_v2/assets/human_model_v2.xml'))
+    for fps in (30,50):
+        n=2*fps;dt=1/fps;t=torch.arange(n)*dt
+        sq=torch.zeros(n,69);sq[:,ski.dof_names.index('L_Shoulder_y')]=.3*torch.sin(2*torch.pi*t)
+        root=torch.zeros(n,3);rr=torch.eye(3).expand(n,3,3)
+        target,sr,_=forward(ski,sq,root,rr)
+        target[:,ski.body_names.index('L_Hand'),0]+=1.  # deliberately incompatible distal target
+        base=torch.zeros(n,59);base[:,ki.dof_names.index('Chest_x')]=.04
+        posids=[ki.body_names.index(name.replace('Ankle','Talus')) for name in ski.body_names]
+        rotids=[ki.body_names.index(name) for name in ski.body_names]
+        out=refine_upper_trajectory(ki,base,root,target,sr,posids,rotids,dt,3.,20,arms_only=True,source_ki=ski)
+        ref=source_arm_reference(sr,ski,ki,dt);arms=[j for j,name in enumerate(ki.dof_names) if any(part in name for part in ('Shoulder_','Elbow_','Wrist_','Hand_'))]
+        frozen=[j for j in range(59) if j not in arms]
+        assert torch.equal(out[:,frozen],base[:,frozen])
+        residual=out[:,arms]-ref['q'][:,arms]
+        assert bool((residual.abs().amax(0)<=ref['angle_scale'][arms]+1e-6).all())
+        assert bool(((torch.diff(residual,dim=0)/dt).abs().amax(0)<=ref['rate_scale'][arms]+1e-5).all())
+        assert bool((out>=ki.dof_limits_lower-1e-6).all() and (out<=ki.dof_limits_upper+1e-6).all())
+        j=ki.dof_names.index('L_Shoulder_y');original=sq[:,ski.dof_names.index('L_Shoulder_y')]
+        assert torch.corrcoef(torch.stack((original,out[:,j])))[0,1]>.99
+        assert .9<float((out[:,j].max()-out[:,j].min())/(original.max()-original.min()))<1.1
