@@ -23,7 +23,7 @@ import torch
 from pathlib import Path
 
 
-def subset_motion_lib(input_path: str, output_path: str, sample_every: int = 200):
+def subset_motion_lib(input_path: str, output_path: str, sample_every: int = 200, indices=None):
     """
     Load a motion library and create a subset by sampling every N motions.
     
@@ -31,6 +31,9 @@ def subset_motion_lib(input_path: str, output_path: str, sample_every: int = 200
         input_path: Path to input .pt motion library
         output_path: Path to output .pt file
         sample_every: Take every Nth motion (default: 200)
+        indices: Explicit motion indices to keep. Overrides sample_every, which
+            cannot express a content-based selection such as "locomotion classes
+            that match the task being trained".
     """
     print(f"Loading motion library from {input_path}")
     data = torch.load(input_path, map_location="cpu", weights_only=False)
@@ -39,10 +42,17 @@ def subset_motion_lib(input_path: str, output_path: str, sample_every: int = 200
     num_motions = len(data["motion_lengths"])
     print(f"Original motion library has {num_motions} motions")
     
-    # Select motion indices (every sample_every motions)
-    selected_indices = list(range(0, num_motions, sample_every))
+    # Select motion indices
+    if indices is not None:
+        selected_indices = [int(i) for i in indices]
+        out_of_range = [i for i in selected_indices if not 0 <= i < num_motions]
+        if out_of_range:
+            raise ValueError(f"motion indices outside the library: {out_of_range}")
+        print(f"Selecting {len(selected_indices)} motions by explicit index")
+    else:
+        selected_indices = list(range(0, num_motions, sample_every))
+        print(f"Selecting {len(selected_indices)} motions (every {sample_every}th)")
     num_selected = len(selected_indices)
-    print(f"Selecting {num_selected} motions (every {sample_every}th)")
     
     # Get the frame ranges for each selected motion
     length_starts = data["length_starts"]
@@ -105,4 +115,16 @@ def subset_motion_lib(input_path: str, output_path: str, sample_every: int = 200
     print(f"\nSaved subset to {output_path}")
     print(f"  Motions: {num_motions} -> {num_selected}")
     print(f"  Total frames: {len(data['gts'])} -> {len(new_data['gts'])}")
+
+
+if __name__ == "__main__":
+    import argparse
+
+    cli = argparse.ArgumentParser(description=__doc__)
+    cli.add_argument("--input", required=True)
+    cli.add_argument("--output", required=True)
+    cli.add_argument("--sample-every", type=int, default=200)
+    cli.add_argument("--indices", type=int, nargs="+", default=None)
+    parsed = cli.parse_args()
+    subset_motion_lib(parsed.input, parsed.output, parsed.sample_every, parsed.indices)
 

@@ -68,8 +68,8 @@ scene_lib_config = _BASE.scene_lib_config
 motion_lib_config = _BASE.motion_lib_config
 apply_inference_overrides = _BASE.apply_inference_overrides
 
-# Joint-group PD gains carried over from the v1 steering teacher. Subtalar is
-# new in v2 and is grouped with the rest of the ankle complex.
+# Fallback gains for the ten upper-body coordinates that carry no active
+# strength; a strength-scaled gain is undefined for them.
 PD_GAINS = (
     (r".*_(Hip|Knee|Ankle|Subtalar)_.*", 800.0, 80.0),
     (r".*_Toe_.*", 500.0, 50.0),
@@ -77,6 +77,16 @@ PD_GAINS = (
     (r"(Neck|Head|.*_Thorax|.*_Shoulder|.*_Elbow)_.*", 500.0, 50.0),
     (r".*_(Wrist|Hand)_.*", 300.0, 30.0),
 )
+
+# Every coordinate with a strength budget gets stiffness = cap / SATURATION_ANGLE,
+# so SATURATION_ANGLE is the tracking error at which that coordinate maxes out.
+# Swept on the plant against the retargeted walking reference (jobs 902/903/904):
+# v1's carried-over stiffness 800 sits at a 0.27 rad saturation angle and clips
+# 89-93% of substeps; 1.5 rad gives the lowest leg tracking RMSE (0.233 rad) and
+# cuts clipping to 0.37. Adding gravity compensation moved these by under 0.01,
+# so the ceiling contact is not a missing feedforward term.
+SATURATION_ANGLE_RAD = 1.5
+DAMPING_TIME_S = 0.1
 
 TARGET_SPEED_MIN = 0.5
 TARGET_SPEED_MAX = 1.2
@@ -100,6 +110,11 @@ def configure_robot_and_simulator(robot_cfg, simulator_cfg, args):
 
     robot_cfg.control.control_type = ControlType.PROPORTIONAL
     for name, info in robot_cfg.control.control_info.items():
+        cap = float(info.effort_limit or 0.0)
+        if cap > 0.0:
+            info.stiffness = cap / SATURATION_ANGLE_RAD
+            info.damping = info.stiffness * DAMPING_TIME_S
+            continue
         for pattern, stiffness, damping in PD_GAINS:
             if re.fullmatch(pattern, name):
                 info.stiffness = stiffness
