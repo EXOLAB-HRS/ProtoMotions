@@ -20,6 +20,8 @@ Might be useful if you realize your GPU cannot load large motion libraries.
 """
 
 import torch
+import copy
+import hashlib
 from pathlib import Path
 
 
@@ -53,6 +55,8 @@ def subset_motion_lib(input_path: str, output_path: str, sample_every: int = 200
         selected_indices = list(range(0, num_motions, sample_every))
         print(f"Selecting {len(selected_indices)} motions (every {sample_every}th)")
     num_selected = len(selected_indices)
+    if not selected_indices or len(set(selected_indices)) != num_selected:
+        raise ValueError("Select at least one motion without duplicate indices")
     
     # Get the frame ranges for each selected motion
     length_starts = data["length_starts"]
@@ -106,9 +110,26 @@ def subset_motion_lib(input_path: str, output_path: str, sample_every: int = 200
     
     if new_motion_files:
         new_data["motion_files"] = tuple(new_motion_files)
+
+    # Keep the model contract and clip-level screening evidence for v2 loaders.
+    # Selection never upgrades candidate references to training-approved data.
+    if "human_model_metadata" in data:
+        metadata = copy.deepcopy(data["human_model_metadata"])
+        if "motions" in metadata:
+            if len(metadata["motions"]) != num_motions:
+                raise ValueError("Reference metadata does not match the motion count")
+            metadata["motions"] = [metadata["motions"][i] for i in selected_indices]
+        metadata["subset_parent"] = {
+            "path": str(input_path),
+            "sha256": hashlib.sha256(Path(input_path).read_bytes()).hexdigest(),
+            "indices": selected_indices,
+        }
+        new_data["human_model_metadata"] = metadata
     
     # Save
     output_path = Path(output_path)
+    if output_path.exists():
+        raise FileExistsError(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(new_data, output_path)
     
@@ -127,4 +148,3 @@ if __name__ == "__main__":
     cli.add_argument("--indices", type=int, nargs="+", default=None)
     parsed = cli.parse_args()
     subset_motion_lib(parsed.input, parsed.output, parsed.sample_every, parsed.indices)
-

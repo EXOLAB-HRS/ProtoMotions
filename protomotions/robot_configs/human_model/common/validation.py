@@ -775,7 +775,7 @@ def isaaclab_validation_video(output, seed, *, render=True, frames=480, physics_
     if population_load or population_joint or suspended_gait:
         robot.validation_contact_capacity=128
     robot.human_model_usd_joint_mode=joint_mode;robot.human_model_joint_frame_mass=frame_mass
-    if protocol and protocol.get("assay")=="supported_feet":robot.asset.fix_base_link=False
+    if protocol and protocol.get("assay") in ("supported_feet", "smpl2hm_tracking"):robot.asset.fix_base_link=False
     robot.asset.self_collisions=False;robot.default_root_height=1.5
     robot.control.control_type=ControlType.TORQUE
     cfg=IsaacLabSimulatorConfig(num_envs=protocol.get('num_envs',1) if protocol else 1,headless=True,experiment_name='human_model_l0_l1_video')
@@ -784,7 +784,7 @@ def isaaclab_validation_video(output, seed, *, render=True, frames=480, physics_
     cfg.sim.physx.num_position_iterations=position_iterations;cfg.sim.physx.num_velocity_iterations=velocity_iterations
     cfg.sim.physx.solver_type=solver_type
     device=torch.device(physics_device)
-    terrain_size=max(4.,4.*math.ceil(math.sqrt(cfg.num_envs)))
+    terrain_size=max(4.,4.*math.ceil(math.sqrt(cfg.num_envs)),float(protocol.get("terrain_size",0)) if protocol else 0.)
     terrain=Terrain(TerrainConfig(num_levels=1,num_terrains=1,map_length=terrain_size,map_width=terrain_size,border_size=1.),num_envs=cfg.num_envs,device=device)
     sim=IsaacLabSimulator(cfg,robot,terrain,device,app,SceneLib(SceneLibConfig()))
     if population_joint:

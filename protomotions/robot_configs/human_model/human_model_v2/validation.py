@@ -157,6 +157,7 @@ def native_suite(sim,app,output,seed,protocol,initial):
     the original limits and receives human torque only, except labelled zero-
     strength limit probes. Measures every physical step, saves all-axis 30Hz trace.
     """
+    if protocol.get('assay')=='smpl2hm_tracking':return native_retarget_tracking(sim,app,output,seed,protocol,initial)
     if protocol.get('assay')=='strength':return native_strength(sim,app,output,seed,protocol,initial)
     if protocol.get('assay')=='benchmark':return native_benchmark(sim,app,output,seed,protocol,initial)
     if protocol.get('assay')=='supported_feet':return native_supported_feet(sim,app,output,seed,protocol,initial)
@@ -569,3 +570,121 @@ def population_strength_scale_audit(output):
             rows.append(dict(source=source,label=ref['label'],joint=ref['joint'],direction=ref['direction'],n=ref['n'],model_active_nm=value,model_net_nm=net,mean_nm=ref['mean_nm'],sd_nm=ref['sd_nm'],active_z=az,net_z=nz,model_active_nm_per_kg=value/mass,reference_mean_nm_per_kg=ref['mean_nm']/body['mass_kg'],model_active_over_mgh=value/(mass*9.81*height),reference_mean_over_mgh=ref['mean_nm']/(body['mass_kg']*9.81*body['height_m']),cohort_body=body,preferred_body_match=size_match,status='within_2sd_scale_proxy' if size_match and max(abs(az),abs(nz))<=2 else 'review_required',scope='Cohort mean morphology, apparatus-axis and passive/gravity correction mismatch retained; Morin knee support angle unspecified for ankle assay. Morin was used by historical static baseline, not a wholly untouched dataset. No tuning to these values.'))
     result=dict(status='plausible_scale_with_limits' if all(r['status']=='within_2sd_scale_proxy' for r in rows) else 'review_required',model_body=dict(mass_kg=mass,height_proxy_m=height),criteria=dict(mass_fraction=.15,height_fraction=.05,absolute_z_max=2,interpretation='Broad descriptive project criteria, not clinical standards; preserve variation rather than fit means'),rows=rows,limitations=['No individual body-linked torque observations or subject-matched inertias available.','Nm/kg and Nm/(mgh) use cohort mean denominators and are descriptive, not independent normalized distribution estimates.','Isometric morphology matching does not establish gait validity or active ROM under arbitrary fixture loads.','Two literature populations, not repeated sessions counted as extra independent people.'])
     output=Path(output);output.mkdir(parents=True,exist_ok=True);(output/'population_strength_scale.json').write_text(json.dumps(result,indent=2)+'\n');return result
+
+
+def native_retarget_tracking(sim, app, output, seed, protocol, initial):
+    """Diagnostic PD tracking with an explicit moving pelvis force harness.
+
+    Gravity/contact on, no joint teleport/clamps, fixed strength profile. This
+    does not establish self-supported gait or policy performance.
+    """
+    from .motion_lib import HumanModelMotionLib
+    from protomotions.components.motion_lib import MotionLibConfig
+    from protomotions.utils.rotations import quat_mul, quat_conjugate
+    device=sim.device;model=sim._human_joint_model;fps=sim.config.sim.fps;dt=1/fps
+    lib=HumanModelMotionLib(MotionLibConfig(motion_file=protocol['motion_file']),str(device))
+    ids=torch.tensor(protocol['motion_ids'],device=device,dtype=torch.long)
+    assert len(ids)==sim.num_envs and not sim._robot.is_fixed_base
+    initial.convert_to_common(sim.data_conversion)
+    initial_ref=lib.get_motion_state(ids,torch.zeros(len(ids),device=device))
+    offset=torch.zeros(len(ids),3,device=device)
+    spawn_xy=torch.stack((10.+10.*torch.arange(len(ids),device=device),torch.full((len(ids),),10.,device=device)),-1)
+    offset[:,:2]=spawn_xy-initial_ref.rigid_body_pos[:,0,:2]
+    offset[:,2]=protocol.get('root_clearance_m',0.)
+    initial.root_pos[:]=initial_ref.rigid_body_pos[:,0]+offset
+    initial.root_rot[:]=initial_ref.rigid_body_rot[:,0]
+    initial.root_vel[:]=initial_ref.rigid_body_vel[:,0]
+    initial.root_ang_vel[:]=initial_ref.rigid_body_ang_vel[:,0]
+    initial.dof_pos[:]=initial_ref.dof_pos;initial.dof_vel[:]=initial_ref.dof_vel
+    sim.reset_envs(initial)
+    pelvis=sim._robot.body_names.index('Pelvis')
+    masses=sim._robot.root_physx_view.get_masses().to(device).sum(-1)
+    duration=min(float(lib.motion_lengths[ids].min()),protocol.get('duration_s',6.))
+    records={k:[] for k in ('time','q','qd','q_ref','qdot_ref','requested','active','passive','applied','negative_cap','positive_cap','root_pos','root_ref','harness_force','harness_torque','contact_forces')}
+    saturation=torch.zeros(len(ids),59,device=device);squared=torch.zeros_like(saturation)
+    maximum=torch.zeros_like(saturation);peak_cap=0.;peak_rom=0.;peak_sum=0.
+    peak_fk_error=0.;minimum_foot_z=float('inf')
+    from .retarget import forward
+    from .retarget_metrics import box_corners, world_points, FOOT_NAMES
+    from ..common.paths import PACKAGE_ROOT
+    from protomotions.utils.rotations import quaternion_to_matrix
+    foot_ids=[lib.kinematics.body_names.index(n) for n in FOOT_NAMES]
+    foot_corners=box_corners(PACKAGE_ROOT/'human_model_v2/assets/human_model_v2.xml',FOOT_NAMES,str(device))
+    steps=round(duration*fps)
+    # Precompute reference FK once, rather than thousands of Python/GPU FK
+    # launches in the physics loop. The dynamics still runs every substep.
+    query_ids=ids.repeat(steps)
+    query_times=torch.arange(steps,device=device).repeat_interleave(len(ids))/fps
+    trajectory=lib.get_motion_state(query_ids,query_times)
+    order=sim.data_conversion.dof_convert_to_common
+    view=sim._robot.root_physx_view
+    for step in range(steps):
+        t=step*dt
+        from types import SimpleNamespace
+        ix=slice(step*len(ids),(step+1)*len(ids))
+        reference=SimpleNamespace(**{k:getattr(trajectory,k)[ix] for k in
+            ('dof_pos','dof_vel','rigid_body_pos','rigid_body_rot','rigid_body_vel','rigid_body_ang_vel')})
+        state=sim.get_dof_state();root=sim.get_root_state()
+        if protocol.get('pd_mode','fixed') in ('inertia_scaled','critical'):
+            inertia=view.get_generalized_mass_matrices()[:,6:,6:][:,order][:,:,order].diagonal(dim1=-2,dim2=-1)
+            inertia=inertia+view.get_dof_armatures().to(device)[:,order]
+            if protocol.get('pd_mode')=='critical':
+                kp=protocol.get('joint_kp',500.)
+                kd=2*torch.sqrt(kp*inertia.clamp_min(.001))
+                command=kp*(reference.dof_pos-state.dof_pos)+kd*(reference.dof_vel-state.dof_vel)
+            else:
+                command=inertia*(200*(reference.dof_pos-state.dof_pos)+28.284*(reference.dof_vel-state.dof_vel))
+            gravity=joint_generalized_forces(view.get_gravity_compensation_forces(),order,floating_base=True)
+            command+=gravity-model.passive_torque(state.dof_pos,state.dof_vel)
+        else:
+            command=500*(reference.dof_pos-state.dof_pos)+50*(reference.dof_vel-state.dof_vel)
+        root_ref=reference.rigid_body_pos[:,0]+offset
+        force=4000*(root_ref-root.root_pos)+400*(reference.rigid_body_vel[:,0]-root.root_vel)
+        force[:,2]+=.5*masses*9.81
+        error=quat_mul(reference.rigid_body_rot[:,0],quat_conjugate(root.root_rot,True),True)
+        torque=protocol.get('harness_rotation_kp',100.)*2*error[:,:3]*torch.sign(error[:,3:])+protocol.get('harness_rotation_kd',5.)*(reference.rigid_body_ang_vel[:,0]-root.root_ang_vel)
+        torque=torque.clamp(-protocol.get('harness_torque_limit_nm',200.),protocol.get('harness_torque_limit_nm',200.))
+        sim._robot.set_external_force_and_torque(force[:,None],torque[:,None],body_ids=[pelvis],is_global=True)
+        sim._common_actions=command;sim._apply_control();sim._scene.write_data_to_sim()
+        saturation+=(command>sim.human_positive_caps+1e-5)|(command < -sim.human_negative_caps-1e-5)
+        peak_cap=max(peak_cap,float(torch.maximum(sim.human_active_torques-sim.human_positive_caps,-sim.human_active_torques-sim.human_negative_caps).clamp_min(0).max()))
+        peak_sum=max(peak_sum,float((sim.human_applied_torques-sim.human_active_torques-sim.human_passive_torques).abs().max()))
+        sim._sim.step(render=False);sim._scene.update(dt=dt)
+        after=sim.get_dof_state()
+        if not bool(torch.isfinite(after.dof_pos).all() and torch.isfinite(after.dof_vel).all()):
+            raise RuntimeError('Non-finite native retarget tracking state')
+        err=(after.dof_pos-reference.dof_pos).abs();squared+=err.square();maximum=torch.maximum(maximum,err)
+        peak_rom=max(peak_rom,float(torch.maximum(model.lower-after.dof_pos,after.dof_pos-model.upper).clamp_min(0).max()))
+        if step%(fps//30)==0:
+            native=sim.get_robot_state()
+            predicted,_,_=forward(lib.kinematics,native.dof_pos,native.rigid_body_pos[:,0],quaternion_to_matrix(native.rigid_body_rot[:,0],w_last=True))
+            fk_error=float((predicted-native.rigid_body_pos).norm(dim=-1).max())
+            peak_fk_error=max(peak_fk_error,fk_error)
+            bottom=float(world_points(native.rigid_body_pos,quaternion_to_matrix(native.rigid_body_rot,w_last=True),foot_ids,foot_corners)[...,2].min())
+            minimum_foot_z=min(minimum_foot_z,bottom)
+            if step<fps:print('SMPL2HM_FK_CONTACT',round(t,3),'FK_M',fk_error,'FOOT_Z',bottom,flush=True)
+            records['time'].append(t)
+            for key,value in [('q',after.dof_pos),('qd',after.dof_vel),('q_ref',reference.dof_pos),('qdot_ref',reference.dof_vel),('requested',command),('active',sim.human_active_torques),('passive',sim.human_passive_torques),('applied',sim.human_applied_torques),('negative_cap',sim.human_negative_caps),('positive_cap',sim.human_positive_caps),('root_pos',sim.get_root_state().root_pos),('root_ref',root_ref),('harness_force',force),('harness_torque',torque),('contact_forces',sim.get_bodies_contact_buf().rigid_body_contact_forces)]:
+                records[key].append(value.detach().cpu().numpy().copy())
+        if step%fps==0:print('SMPL2HM_TRACKING_SECOND',round(t),'MAX_ERROR_DEG',float(torch.rad2deg(maximum).max()),flush=True)
+    stem=Path(output)/f'human_model_v2_v2_suite_seed{seed}_raw'
+    np.savez_compressed(stem.with_suffix('.npz'),**{k:np.asarray(v) for k,v in records.items()},names=model.names,body_names=sim.robot_config.kinematic_info.body_names)
+    result=dict(scenario='smpl2hm_tracking',protocol=protocol,duration_s=duration,physics_fps=fps,
+        rmse_deg=torch.rad2deg((squared/steps).sqrt()).cpu().tolist(),max_error_deg=torch.rad2deg(maximum).cpu().tolist(),
+        saturation_fraction=(saturation/steps).cpu().tolist(),peak_cap_excess_nm=peak_cap,peak_rom_excess_deg=math.degrees(peak_rom),
+        torque_sum_error_nm=peak_sum,native_fk_max_error_m=peak_fk_error,minimum_foot_geometry_z_m=minimum_foot_z,physical_tracking_status='diagnostic_no_performance_gate',
+        engine_gate=dict(status='passed' if peak_cap<.0002 and peak_sum<.0002 and math.degrees(peak_rom)<=.1 else 'candidate_failed_gate'),
+        shutdown='pending',scope='Moving pelvis force/torque harness; joint PD with qdot_ref feedforward; gravity/contact ON; not autonomous walking')
+    stem.with_suffix('.json').write_text(json.dumps(result,indent=2)+'\n')
+    print('SMPL2HM_TRACKING_SAVED',flush=True)
+    sim._sim.clear_all_callbacks()
+    from isaaclab.sim import SimulationContext
+    SimulationContext.clear_instance();app.close(wait_for_replicator=False)
+
+
+def joint_generalized_forces(forces, order, *, floating_base):
+    """Strip the six floating-base wrench entries before indexing joint forces."""
+    offset=6 if floating_base else 0
+    if forces.shape[-1] != len(order)+offset:
+        raise ValueError('Unexpected generalized force dimension')
+    return forces[:,offset:][:,order]
