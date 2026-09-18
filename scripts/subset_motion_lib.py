@@ -25,7 +25,8 @@ import hashlib
 from pathlib import Path
 
 
-def subset_motion_lib(input_path: str, output_path: str, sample_every: int = 200, indices=None):
+def subset_motion_lib(input_path: str, output_path: str, sample_every: int = 200, indices=None,
+                      weights=None):
     """
     Load a motion library and create a subset by sampling every N motions.
     
@@ -36,6 +37,11 @@ def subset_motion_lib(input_path: str, output_path: str, sample_every: int = 200
         indices: Explicit motion indices to keep. Overrides sample_every, which
             cannot express a content-based selection such as "locomotion classes
             that match the task being trained".
+        weights: Sampling weight per selected motion, in the selection order.
+            Motion weights drive both reference-state initialisation and the
+            expert batches an adversarial discriminator is trained against, so
+            they are how a library is matched to the command range being trained.
+            Stored normalised; the source weights are kept when omitted.
     """
     print(f"Loading motion library from {input_path}")
     data = torch.load(input_path, map_location="cpu", weights_only=False)
@@ -106,7 +112,15 @@ def subset_motion_lib(input_path: str, output_path: str, sample_every: int = 200
     new_data["motion_num_frames"] = new_motion_num_frames_tensor
     new_data["motion_lengths"] = torch.tensor(new_motion_lengths, dtype=torch.float32)
     new_data["motion_dt"] = torch.tensor(new_motion_dt, dtype=torch.float32)
-    new_data["motion_weights"] = torch.tensor(new_motion_weights, dtype=torch.float32)
+    if weights is None:
+        new_data["motion_weights"] = torch.tensor(new_motion_weights, dtype=torch.float32)
+    else:
+        requested = torch.tensor([float(w) for w in weights], dtype=torch.float32)
+        if len(requested) != num_selected:
+            raise ValueError(f"got {len(requested)} weights for {num_selected} motions")
+        if not torch.isfinite(requested).all() or (requested < 0).any() or requested.sum() <= 0:
+            raise ValueError("weights must be finite, non-negative and not all zero")
+        new_data["motion_weights"] = requested / requested.sum()
     
     if new_motion_files:
         new_data["motion_files"] = tuple(new_motion_files)
@@ -123,6 +137,7 @@ def subset_motion_lib(input_path: str, output_path: str, sample_every: int = 200
             "path": str(input_path),
             "sha256": hashlib.sha256(Path(input_path).read_bytes()).hexdigest(),
             "indices": selected_indices,
+            "weights_overridden": weights is not None,
         }
         new_data["human_model_metadata"] = metadata
     
@@ -146,5 +161,7 @@ if __name__ == "__main__":
     cli.add_argument("--output", required=True)
     cli.add_argument("--sample-every", type=int, default=200)
     cli.add_argument("--indices", type=int, nargs="+", default=None)
+    cli.add_argument("--weights", type=float, nargs="+", default=None)
     parsed = cli.parse_args()
-    subset_motion_lib(parsed.input, parsed.output, parsed.sample_every, parsed.indices)
+    subset_motion_lib(parsed.input, parsed.output, parsed.sample_every, parsed.indices,
+                      parsed.weights)
