@@ -84,9 +84,11 @@ class HumanJointModel:
             raise ValueError('fatigue includes recruitment dynamics; do not combine with activation')
         if bool(fatigue_regions) != ('fatigue' in self.features):
             raise ValueError('fatigue requires an explicit nonempty fatigue_regions mapping')
+        if strength_reference_size is None:
+            strength_reference_size = profile.get('strength_reference_size')
         if strength_reference_size is not None:
-            if 'strength' not in self.features or len(strength_reference_size) != 2:
-                raise ValueError('strength_reference_size requires strength and (mass_kg, height_m)')
+            if ('strength' not in self.features and not profile.get('active_strength_model')) or len(strength_reference_size) != 2:
+                raise ValueError('strength_reference_size requires a strength model and (mass_kg, height_m)')
             strength_reference_size = tuple(float(x) for x in strength_reference_size)
             if not all(math.isfinite(x) and x > 0 for x in strength_reference_size):
                 raise ValueError('strength reference mass and height must be positive finite values')
@@ -100,7 +102,7 @@ class HumanJointModel:
             raise ValueError(f"Unknown human-model candidate features: {self.features}")
         if 'strength_coupling' in self.features and 'strength' not in self.features:
             raise ValueError('strength_coupling requires strength')
-        if self.features and profile["id"] == "human_model_v2":
+        if self.features and profile["id"] in ("human_model_v2", "human_model_v3"):
             raise ValueError("v1 optional force candidates have not been calibrated on v2 axes")
         if self.features:
             self.candidate_parameters = json.loads(v1_resource("candidate_parameters.json").read_text())

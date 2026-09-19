@@ -1,0 +1,134 @@
+"""Reproducible v3 candidate, explicit evidence and sensitivity scenarios."""
+import copy
+import json
+from pathlib import Path
+
+ROOT=Path(__file__).parent
+TARGET_MASS_KG=63.31
+TARGET_HEIGHT_M=1.754
+
+
+def build():
+    base=json.loads((ROOT.parent/'human_model_v2/profiles/healthy_adult_v2.json').read_text())
+    trunk=json.loads((ROOT.parent/'human_model_v2/profiles/trunk_candidate.json').read_text())
+    profile=copy.deepcopy(base)
+    profile['id']='human_model_v3'
+    profile['strength_reference_size']=[TARGET_MASS_KG,TARGET_HEIGHT_M]
+    profile['strength_basis']={
+        'target_mass_kg':TARGET_MASS_KG,'target_height_m':TARGET_HEIGHT_M,
+        'population':'Healthy adult mixed-sex reference, not a measured individual or normative percentile',
+        'selection_order':['source MVC normalization','documented anthropometric approximation','explicit unresolved proxy'],
+        'gait_data_role':'Independent demand validation, NEVER a multiplier used to define MVC',
+        'automatic_cap_increase':False,
+    }
+    profile['description']='Candidate on v2 kinematics: evidence-audited strength, explicit uncertainty, independently fixed PD. Not a certified population model.'
+    profile['sources'].update({
+        'PAN2025_V3':{'url':'https://doi.org/10.1186/s40001-025-02742-w','location':'Results: weight-normalized isometric medians, sex-average multiplied by 63.31kg; bilateral direction averages','scope':'Seated aggregate trunk; serial thoracolumbar transfer remains an assumption'},
+        'VASAVADA2001_V3':{'url':'https://pubmed.ncbi.nlm.nih.gov/11568704/','location':'C7 male/female mean: extension52/21 flexion30/15 lateral36/16 axial15/6 Nm','scope':'Equal-sex average, identical serial moment proxy; no posture curve validated'},
+        'DELP1996_V3':{'url':'https://pubmed.ncbi.nlm.nih.gov/8884484/','location':'Peak radial11.0, ulnar9.5 Nm; task-specific isometric sample','scope':'Clinical direction mapped explicitly'},
+    })
+    audit={}
+    for name,row in profile['joints'].items():
+        state='measured_magnitude_coordinate_transfer'
+        reason='Retain existing cited direction-specific measurement; no unvalidated OpenSim curve transfer.'
+        if name.startswith(('Torso_','Spine_','Chest_')):
+            axis=name[-1]
+            values={'x':[.93*63.31]*2,'y':[1.685*63.31,1.10*63.31],'z':[.675*63.31]*2}[axis]
+            row['active_nm']=values
+            row['note']='Pan2025 mass-normalized seated whole-trunk reference; same moment at serial joints, not a sum. Constant angle/speed envelope pending validation.'
+            row['evidence']['active']='PAN2025_V3'
+            reason='Use body-mass-normalized measured aggregate torque; avoid mixing digitized posture curves from a different study.'
+        elif name.startswith(('Neck_','Head_')):
+            row['active_nm']={'x':[26.,26.],'y':[36.5,22.5],'z':[10.5,10.5]}[name[-1]]
+            row['evidence']['active']='VASAVADA2001_V3'
+            row['note']='Equal-sex C7 moment; identical serial-coordinate proxy, not independent anatomical segment capacity.'
+        elif name.endswith('Wrist_z'):
+            row['active_nm']=[9.5,11.] if name.startswith('R') else [11.,9.5]
+            row['evidence']['active']='DELP1996_V3'
+            row['note']='Right positive radial, left negative radial. Constant peak envelope; posture dependence unvalidated.'
+        elif '_Thorax_' in name:
+            state='engineering_proxy_unresolved'
+            reason='Retain20/20Nm existing shoulder-girdle actuator. Zeroing it is not justified by lack of data; no glenohumeral torque duplication assumption is accepted.'
+        elif '_Toe_' in name:
+            state='engineering_proxy_unresolved'
+            reason='Retain5/10Nm lumped-toe prior. First-MTP2.1Nm cannot be transferred to the whole distal-foot axis without mapping all toes.'
+        elif '_Subtalar_' in name:
+            state='measured_proxy_unresolved'
+            reason='Retain20.6/20.6Nm ankle inversion/eversion proxy; external-moment sign and weight-bearing protocol must be reconciled before adopting Ottaviani.'
+        elif max(row['active_nm'])==0:
+            state='structural_zero'
+            reason='Near-lock elbow auxiliary axis or rigid hand axis; not missing physiological strength.'
+        elif name.endswith(('Hip_y','Knee_y','Ankle_y')):
+            state='measured_angle_velocity_with_boundary_hold'
+            reason='Anderson young equal-sex source curves preserved; dynamic runtime envelope overrides static metadata. Outside-domain flags audited separately.'
+        elif name.endswith('Shoulder_z'):
+            state='measured_flexion_extension_proxy'
+            reason='Measured70.1Nm flexion; same extension remains a proxy. Elevation-plane torque is not a validated flexion coordinate transform.'
+        elif row['evidence']['active']=='PROXY':
+            state='measured_proxy_coordinate_transfer'
+            reason=row['note']
+        source_values=list(row['active_nm'])
+        norm={'method':'unscaled_source_missing_transfer_model','scale_negative_positive':[1.,1.],
+              'source_mass_kg':None,'source_height_m':None,
+              'uncertainty':'Unresolved anthropometric or coordinate transfer; not certified for target size'}
+        if name.endswith(('Hip_y','Knee_y','Ankle_y')):
+            norm.update(method='source_body_weight_times_height',
+                        source_mass_kg=[72.8,62.1],source_height_m=[1.748,1.606],
+                        scale_negative_positive=None,
+                        uncertainty='Each cohort C1 is dimensionalized at target m*g*h BEFORE equal-sex averaging; metadata caps are not dynamic caps')
+        elif name.startswith(('Torso_','Spine_','Chest_')):
+            norm.update(method='source_nm_per_kg',uncertainty='Pan2025 normalized medians; serial-segment transfer still a proxy')
+            norm['source_negative_positive_nm_per_kg']=[v/TARGET_MASS_KG for v in source_values]
+        elif name.startswith(('Neck_','Head_')):
+            male=TARGET_MASS_KG*TARGET_HEIGHT_M/(77.*1.77)
+            female=TARGET_MASS_KG*TARGET_HEIGHT_M/(65.*1.64)
+            data={'x':[(36,16),(36,16)],'y':[(52,21),(30,15)],'z':[(15,6),(15,6)]}[name[-1]]
+            norm['source_direction_cohort_nm']=data
+            row['active_nm']=[(m*male+f*female)/2 for m,f in data]
+            norm.update(method='body_mass_times_height_proxy',source_mass_kg=[77.,65.],source_height_m=[1.77,1.64],
+                        scale_negative_positive=[b/a for a,b in zip(source_values,row['active_nm'])],
+                        uncertainty='Geometric m*h approximation, NOT the paper neck-geometry regression; no target neck circumference available')
+        elif row['evidence']['active']=='MORIN2023' or name.endswith(('Shoulder_z','Subtalar_x')):
+            scale=TARGET_MASS_KG/71.8
+            row['active_nm']=[v*scale for v in source_values]
+            norm.update(method='body_mass_proxy',source_mass_kg=71.8,scale_negative_positive=[scale,scale],
+                        uncertainty='Aggregate-cohort Nm/kg approximation; age/sex/height and muscle-mass residuals unresolved')
+        elif name.endswith(('Hip_x','Shoulder_x')):
+            # Only abduction originates in Morin; adduction remains a separate source.
+            index=1 if name.startswith('L_') else 0
+            scale=TARGET_MASS_KG/71.8
+            row['active_nm'][index]*=scale
+            scales=[1.,1.];scales[index]=scale
+            norm.update(method='direction_specific_mixed_source',source_mass_kg={'Morin_abduction':71.8,'Danneskiold_adduction':None},
+                        scale_negative_positive=scales,
+                        uncertainty='Morin abduction mass-scaled; Danneskiold adduction unscaled pending source unit/anthropometry resolution')
+        elif max(source_values)==0:
+            norm.update(method='structural_zero',uncertainty='No independent actuator by design')
+        elif row['evidence']['active']=='ASSUMPTION':
+            norm.update(method='engineering_prior_at_target_geometry',uncertainty='No measured MVC: target-model engineering prior only')
+        norm['pre_normalization_negative_positive_nm']=source_values
+        if row['active_nm']!=source_values:
+            row['note']+=' MVC size transfer: '+norm['method']+'; source values retained in joint_decisions.'
+        audit[name]={'negative_peak_metadata_nm':row['active_nm'][0],
+                     'positive_peak_metadata_nm':row['active_nm'][1],
+                     'status':state,'decision':reason,'evidence':copy.deepcopy(row['evidence']),
+                     'rom_deg':row['rom_deg'],'normalization':norm}
+    pd={}
+    for name,row in base['joints'].items():
+        cap=max(row['active_nm'])
+        # Structural-zero gains never create active torque, and are set to zero.
+        kp=cap/1.5;kd=kp*.1
+        if name.startswith(('Torso_','Spine_','Chest_')):kp*=4;kd*=.5
+        pd[name]={'kp':kp,'kd':kd}
+    scenarios={'pd_gains':pd}
+    for label,scale in [('low',.8),('reference',1.),('high',1.2)]:
+        parameters=copy.deepcopy(trunk['human_model_parameters'])
+        parameters['active_strength_scale']={n:[scale,scale] for n,r in profile['joints'].items() if max(r['active_nm'])>0}
+        scenarios[label]={'status':'sensitivity_scenario_not_population_percentile',
+                          'scale':scale,'parameters':parameters}
+    dest=ROOT/'profiles';dest.mkdir(exist_ok=True)
+    for name,data in [('healthy_adult_v3.json',profile),('strength_scenarios.json',scenarios),('joint_decisions.json',audit)]:
+        (dest/name).write_text(json.dumps(data,indent=2)+'\n')
+
+
+if __name__=='__main__':build()

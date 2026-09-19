@@ -121,7 +121,7 @@ def prepare_simulator(robot_config, simulator_config, device):
         # Load the committed, editable USDA directly. RoM is authored in the
         # file; actuator force settings are supplied by the IsaacLab scene.
         usd = get_model(name).asset_path("usd")
-        if name == "human_model_v2":
+        if name in ("human_model_v2", "human_model_v3"):
             from ..human_model_v2.assets.builder import validate_assets
             validate_assets(profile)
         else:validate_usda_rom(usd.read_text(), profile)
@@ -139,7 +139,7 @@ def prepare_simulator(robot_config, simulator_config, device):
         if not xml.is_file():
             # Checkpoint may contain an absolute path on its training machine.
             xml = packaged_assets / "mjcf/smpl_humanoid.xml"
-        if name == "human_model_v2":
+        if name in ("human_model_v2", "human_model_v3"):
             raise NotImplementedError("v2 runtime currently verified on IsaacLab only")
         asset.asset_root = str(derive_mjcf(xml, profile, limits))
         asset.asset_file_name = "smpl_humanoid.xml"

@@ -20,6 +20,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from .human_model_v1.model_config import MODEL as V1
 from .human_model_v2.model_config import MODEL as V2
+from .human_model_v3.model_config import MODEL as V3
+
+_DEFINITIONS = {d['model_id']: d for d in (V1,V2,V3)}
 
 _PACKAGE = Path(__file__).resolve().parent
 
@@ -37,7 +40,7 @@ class ModelDefinition:
     def asset_path(self, kind):
         if not self.runnable:
             raise NotImplementedError(f"{self.model_id} is design-only; no executable assets")
-        return self.root / (V1 if self.model_id == "human_model_v1" else V2)["assets"][kind]
+        return self.root / _DEFINITIONS[self.model_id]["assets"][kind]
 
 
 def get_model(name="human_model_v1", *, require_runnable=True):
@@ -45,6 +48,8 @@ def get_model(name="human_model_v1", *, require_runnable=True):
         data = V1
     elif name == "human_model_v2":
         data = V2
+    elif name == "human_model_v3":
+        data = V3
     else:
         raise ValueError(f"Unknown human model: {name!r}")
     model = ModelDefinition(data["model_id"], data["profile_id"], data["status"], data["runnable"])
@@ -55,4 +60,4 @@ def get_model(name="human_model_v1", *, require_runnable=True):
 
 def profile_path(name="healthy_adult_v1"):
     model = get_model(name)
-    return model.root / (V1 if model.model_id == "human_model_v1" else V2)["profile"]
+    return model.root / _DEFINITIONS[model.model_id]["profile"]

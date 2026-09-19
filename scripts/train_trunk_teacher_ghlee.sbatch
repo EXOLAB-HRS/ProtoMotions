@@ -25,6 +25,8 @@ SEED=${SEED:-2933}
 MAX_STEPS=${MAX_STEPS:-500000000}
 RUN_ROOT=${RUN_ROOT:-$REPO_ROOT/results/trunk_teacher_ghlee}
 RUN_NAME=${RUN_NAME:-hm_v2_trunk_v3_stage_a_seed${SEED}_ghlee}
+ROBOT_NAME=${ROBOT_NAME:-human_model_v2}
+EXPERIMENT_PATH=${EXPERIMENT_PATH:-examples/experiments/steering/mlp_human_model_v2_stage_a_trunk_ghlee.py}
 MODE=${1:-train}
 if [[ "$MODE" == smoke ]]; then
     MAX_STEPS=$((ENVS * 32 * 6))
@@ -34,7 +36,7 @@ elif [[ "$MODE" != train ]]; then
     exit 2
 fi
 test -f "$MOTION_FILE"
-test -f examples/experiments/steering/mlp_human_model_v2_stage_a_trunk_ghlee.py
+test -f "$EXPERIMENT_PATH"
 export PYTHONPATH="$REPO_ROOT:$REPO_ROOT/src:${PYTHONPATH:-}"
 export OMP_NUM_THREADS=${OMP_NUM_THREADS:-8} MKL_NUM_THREADS=${MKL_NUM_THREADS:-8}
 export OMNI_KIT_ACCEPT_EULA=YES
@@ -61,8 +63,8 @@ if m['MemAvailable'] < 4 * 1024**2 or (swap_fraction >= .75 and swap_io):
     raise SystemExit('Insufficient system memory or sustained swap I/O; launch stopped')
 PY
 "$PYTHON_BIN" -u protomotions/train_agent.py \
-    --robot-name human_model_v2 --simulator isaaclab \
-    --experiment-path examples/experiments/steering/mlp_human_model_v2_stage_a_trunk_ghlee.py \
+    --robot-name "$ROBOT_NAME" --simulator isaaclab \
+    --experiment-path "$EXPERIMENT_PATH" \
     --experiment-name "$RUN_ROOT/models/$RUN_NAME" \
     --motion-file "$MOTION_FILE" --num-envs "$ENVS" --batch-size "$BATCH" \
     --seed "$SEED" --training-max-steps "$MAX_STEPS"
