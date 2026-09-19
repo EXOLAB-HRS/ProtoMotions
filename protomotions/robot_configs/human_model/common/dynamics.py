@@ -26,7 +26,7 @@ from .paths import v1_resource, PACKAGE_ROOT, PROTOMOTIONS_ROOT, WORKSPACE_ROOT,
 
 import torch
 
-from .profile import validate_profile
+from .profile import validate_profile, validate_pose_strength_model
 
 
 def fatigue_compartment_step(state, target, *, fatigue_rate, recovery_rate, dt, tracking_rate=10.0, rest_multiplier=1.0):
@@ -73,7 +73,7 @@ def fatigue_compartment_step(state, target, *, fatigue_rate, recovery_rate, dt, 
 
 
 class HumanJointModel:
-    def __init__(self, profile, dof_names, device="cpu", dtype=torch.float32, *, features=(), strength_cohort='equal_sex', strength_reference_size=None, active_strength_scale=None, fatigue_regions=None, fatigue_rest_multiplier=1.0, passive_joint_parameters=None):
+    def __init__(self, profile, dof_names, device="cpu", dtype=torch.float32, *, features=(), strength_cohort='equal_sex', strength_reference_size=None, active_strength_scale=None, fatigue_regions=None, fatigue_rest_multiplier=1.0, passive_joint_parameters=None, pose_strength_model=None):
         validate_profile(profile)
         self.features = frozenset(features)
         if (not math.isfinite(fatigue_rest_multiplier) or fatigue_rest_multiplier < 1
@@ -184,6 +184,7 @@ class HumanJointModel:
         self.backend_limit = self.backend_limit.clamp_min(0.01)
         self._activation = None
         self._strength_rows = []
+        self._pose_strength_rows = []
         if self.features:
             params = self.candidate_parameters
             self.activation_rise_s = params["activation"]["rise_s"]
@@ -210,6 +211,20 @@ class HumanJointModel:
                         bound*=math.exp(-coupling['beta_per_rad']*(coupling['knee_domain_rad'][0]-coupling['reference_knee_rad']))
                     previous = torch.maximum(self.negative[i], self.positive[i])
                     self.backend_limit[i] += (bound - previous).clamp_min(0)
+        pose_strength = pose_strength_model if pose_strength_model is not None else profile.get("pose_strength_model")
+        if pose_strength is not None:
+            validate_pose_strength_model(pose_strength, profile)
+            for row in pose_strength["curves"]:
+                joint = self.names.index(row["joint"])
+                conditioning = [self.names.index(name) for name in row["conditioning_joints"]]
+                weights = tensor(row["conditioning_weights"])
+                angles = tensor(row["angles_rad"])
+                torques = tensor(row["torques_nm"])
+                direction = int(row["direction"] == "positive")
+                torques = torques * self.active_strength_scale[joint, direction]
+                self._pose_strength_rows.append((joint, conditioning, weights, direction, angles, torques))
+                (self.positive if direction else self.negative)[joint] = torques.max()
+                self.backend_limit[joint] = torch.maximum(self.backend_limit[joint], torques.max())
 
     def strength_caps(self, q, qd, *, directional_domain=False):
         """Caps and extrapolation flags for enabled candidates; stateless.
@@ -242,6 +257,23 @@ class HumanJointModel:
             magnitude *= 1 + c[:, 5] * (-velocity).clamp_min(0)
             target = positive if row["sign"] > 0 else negative
             target[..., i] = (magnitude * self.strength_cohort_weights).sum(-1) * self.active_strength_scale[i,int(row['sign']>0)]
+        for i, conditioning, weights, direction, angles, torques in self._pose_strength_rows:
+            value = (q[..., conditioning] * weights).sum(-1)
+            flag = (value < angles[0]) | (value > angles[-1])
+            clamped = value.clamp(angles[0], angles[-1])
+            upper_index = torch.searchsorted(angles, clamped.contiguous(), right=True).clamp(1, len(angles) - 1)
+            lower_index = upper_index - 1
+            angle0 = angles[lower_index]
+            angle1 = angles[upper_index]
+            torque0 = torques[lower_index]
+            torque1 = torques[upper_index]
+            magnitude = torque0 + (torque1 - torque0) * (clamped - angle0) / (angle1 - angle0)
+            target = positive if direction else negative
+            target[..., i] = magnitude
+            if directional_domain:
+                outside[..., i, direction] |= flag
+            else:
+                outside[..., i] |= flag
         if 'strength_coupling' in self.features:
             coupling=self.candidate_parameters['strength_coupling']
             lo,hi=coupling['knee_domain_rad']

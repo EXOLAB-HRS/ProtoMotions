@@ -51,4 +51,43 @@ def validate_profile(profile):
         for source in joint["evidence"].values():
             if source not in profile["sources"]:
                 raise ValueError(f"Unknown evidence reference: {source}")
+    pose_strength = profile.get("pose_strength_model")
+    if pose_strength is not None:
+        validate_pose_strength_model(pose_strength, profile)
     return profile
+
+
+def validate_pose_strength_model(pose_strength, profile):
+    """Validate a serialized, opt-in table of posture-dependent torque caps."""
+    if set(pose_strength) != {"status", "sources", "curves"} or not isinstance(pose_strength["status"], str):
+        raise ValueError("pose_strength_model requires status, sources, and curves")
+    if not isinstance(pose_strength["sources"], dict):
+        raise ValueError("pose_strength_model sources must be a mapping")
+    known_sources = set(profile["sources"]) | set(pose_strength["sources"])
+    seen = set()
+    for curve in pose_strength["curves"]:
+        required = {"joint", "conditioning_joints", "conditioning_weights", "direction", "angles_rad", "torques_nm", "source"}
+        if set(curve) != required:
+            raise ValueError("Invalid pose strength curve fields")
+        joint = curve["joint"]
+        conditioning = curve["conditioning_joints"]
+        weights = curve["conditioning_weights"]
+        direction = curve["direction"]
+        if (joint not in profile["joints"] or not conditioning
+                or any(name not in profile["joints"] for name in conditioning)):
+            raise ValueError(f"Unknown pose strength joint: {joint}/{conditioning}")
+        if len(conditioning) != len(weights) or any(not math.isfinite(x) for x in weights):
+            raise ValueError(f"Invalid pose strength conditioning: {joint}")
+        if direction not in ("negative", "positive") or (joint, direction) in seen:
+            raise ValueError(f"Duplicate or invalid pose strength direction: {joint}/{direction}")
+        seen.add((joint, direction))
+        angles = curve["angles_rad"]
+        torques = curve["torques_nm"]
+        if (len(angles) < 2 or len(angles) != len(torques)
+                or any(not math.isfinite(x) for x in (*angles, *torques))
+                or any(x < 0 for x in torques)
+                or any(b <= a for a, b in zip(angles, angles[1:]))):
+            raise ValueError(f"Invalid pose strength samples: {joint}/{direction}")
+        if curve["source"] not in known_sources:
+            raise ValueError(f"Unknown pose strength source: {curve['source']}")
+    return pose_strength

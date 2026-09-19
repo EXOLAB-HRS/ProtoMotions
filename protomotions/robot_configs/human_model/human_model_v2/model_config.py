@@ -69,3 +69,22 @@ def configure_trunk_candidate(robot_cfg, simulator_cfg):
             control.damping=base*.1*pd['trunk_kd_multiplier']
     simulator_cfg.sim.fps=pd['physics_fps']
     simulator_cfg.sim.decimation=pd['physics_fps']//pd['control_fps']
+
+
+def configure_full_joint_strength_candidate(robot_cfg):
+    """Opt in to screened posture-dependent caps for every active v2 axis.
+
+    The table is serialized into the robot configuration/checkpoint. Ten
+    structural near-lock/rigid axes remain at zero and the six shoulder-girdle
+    proxy axes are made passive to avoid counting shoulder strength twice.
+    """
+    import json
+    from pathlib import Path
+    if robot_cfg.human_model_profile != 'human_model_v2':
+        raise ValueError('The full-joint strength candidate requires human_model_v2')
+    parameters = dict(getattr(robot_cfg, 'human_model_parameters', {}) or {})
+    if 'pose_strength_model' in parameters:
+        raise ValueError('A posture-strength model is already configured')
+    candidate = json.loads((Path(__file__).parent/'profiles/full_joint_strength_candidate.json').read_text())
+    parameters['pose_strength_model'] = candidate
+    robot_cfg.human_model_parameters = parameters

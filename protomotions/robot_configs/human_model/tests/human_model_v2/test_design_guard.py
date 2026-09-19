@@ -1,5 +1,6 @@
 """v2 plant contracts; incompatible v1 coordinates must not silently run."""
 import json
+import copy
 import numpy as np
 import pytest
 import torch
@@ -118,6 +119,55 @@ def test_v2_strength_work_sign_domain_and_backend_bound():
     assert torch.isfinite(neg).all() and torch.isfinite(pos).all()
     assert (neg>=0).all() and (pos>=0).all()
     assert (torch.maximum(neg,pos)<=m.backend_limit).all()
+
+
+def test_pose_strength_tables_interpolate_flag_and_bound():
+    profile=copy.deepcopy(load_profile('human_model_v2'))
+    profile['pose_strength_model']={
+        'status':'synthetic_test_only',
+        'sources':{},
+        'curves':[
+            {'joint':'R_Wrist_x','conditioning_joints':['R_Elbow_z'],'conditioning_weights':[1.],'direction':'negative',
+             'angles_rad':[0.,1.,2.],'torques_nm':[2.,6.,4.],'source':'MORIN2023'},
+            {'joint':'R_Wrist_x','conditioning_joints':['R_Elbow_z'],'conditioning_weights':[1.],'direction':'positive',
+             'angles_rad':[0.,1.,2.],'torques_nm':[3.,9.,5.],'source':'MORIN2023'},
+        ]}
+    model=HumanJointModel(profile,list(profile['joints']),dtype=torch.float64)
+    q=torch.zeros(4,59,dtype=torch.float64)
+    elbow=model.names.index('R_Elbow_z');wrist=model.names.index('R_Wrist_x')
+    q[:,elbow]=torch.tensor([-.5,.5,1.5,2.5],dtype=q.dtype)
+    negative,positive,flags=model.strength_caps(q,torch.zeros_like(q),directional_domain=True)
+    torch.testing.assert_close(negative[:,wrist],torch.tensor([2.,4.,5.,4.],dtype=q.dtype))
+    torch.testing.assert_close(positive[:,wrist],torch.tensor([3.,6.,7.,5.],dtype=q.dtype))
+    assert flags[:,wrist,0].tolist()==[True,False,False,True]
+    assert flags[:,wrist,1].tolist()==[True,False,False,True]
+    assert model.backend_limit[wrist]>=9.
+
+
+def test_full_joint_strength_candidate_covers_every_nonstructural_axis():
+    from protomotions.robot_configs.human_model.human_model_v2.model_config import configure_full_joint_strength_candidate
+    from protomotions.robot_configs.human_model.common.integration import selected_model_parameters
+    robot=robot_config();configure_full_joint_strength_candidate(robot)
+    model=HumanJointModel(load_profile('human_model_v2'),robot.kinematic_info.dof_names,
+                          dtype=torch.float64,**selected_model_parameters(robot))
+    covered={model.names[i] for i,*_ in model._pose_strength_rows}
+    dynamic={f'{side}_{joint}' for side in ('L','R') for joint in ('Hip_y','Knee_y','Ankle_y')}
+    structural={f'{side}_{joint}_{axis}' for side in ('L','R') for joint,axes in (('Elbow','xy'),('Hand','xyz')) for axis in axes}
+    assert covered | dynamic | structural == set(model.names)
+    assert len(covered)==43 and len(dynamic)==6 and len(structural)==10
+    q=torch.zeros((2,len(model.names)),dtype=torch.float64)
+    n,p,flags=model.strength_caps(q,torch.zeros_like(q),directional_domain=True)
+    assert torch.isfinite(n).all() and torch.isfinite(p).all()
+    for side in ('L','R'):
+        for axis in 'xyz':
+            i=model.names.index(f'{side}_Thorax_{axis}')
+            assert n[:,i].eq(0).all() and p[:,i].eq(0).all()
+    # Aggregate trunk conditioning: redistributing the same total angle must
+    # preserve each serial joint's cap.
+    indices=[model.names.index(f'{body}_y') for body in ('Torso','Spine','Chest')]
+    a=q.clone();b=q.clone();a[:,indices[0]]=.15;b[:,indices]=.05
+    an,ap,_=model.strength_caps(a,torch.zeros_like(a));bn,bp,_=model.strength_caps(b,torch.zeros_like(b))
+    torch.testing.assert_close(an[:,indices],bn[:,indices]);torch.testing.assert_close(ap[:,indices],bp[:,indices])
 
 
 def test_v2_strength_preserves_unmodelled_axes_and_correct_clinical_labels():
