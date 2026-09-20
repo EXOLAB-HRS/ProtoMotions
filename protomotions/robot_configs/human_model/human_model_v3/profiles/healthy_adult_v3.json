@@ -1817,6 +1817,7 @@
       "explicit unresolved proxy"
     ],
     "gait_data_role": "Independent demand validation, NEVER a multiplier used to define MVC",
-    "automatic_cap_increase": false
+    "automatic_cap_increase": false,
+    "mvc_accounting": "Active and passive are matched to the source quantity at the source test condition. Net MVC is not a global clamp on runtime total torque."
   }
 }

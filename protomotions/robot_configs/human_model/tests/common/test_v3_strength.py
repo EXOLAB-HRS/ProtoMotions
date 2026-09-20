@@ -87,6 +87,35 @@ def test_mvc_target_size_and_direction_specific_provenance():
     assert profile['joints']['R_Hip_x']['active_nm']==profile['joints']['L_Hip_x']['active_nm'][::-1]
 
 
+def test_mvc_measurement_convention_and_matched_pose_net_torque():
+    """Net/unspecified MVC sources are reconciled at the test pose, not globally."""
+    profile=load_profile('human_model_v3');robot=robot_config()
+    model=HumanJointModel(profile,robot.kinematic_info.dof_names,**robot.human_model_parameters)
+    decisions=json.loads((Path(__file__).parents[2]/'human_model_v3/profiles/joint_decisions.json').read_text())
+    q=torch.zeros(1,len(model.names));qd=torch.zeros_like(q)
+    passive=model.passive_torque(q,qd)
+    negative,positive,_=model.strength_caps(q,qd)
+    net_sources={'PAN2025_V3','VASAVADA2001_V3','MORIN2023','KOYKKA2025','DELP1996_V3'}
+    checked=0
+    for i,name in enumerate(model.names):
+        convention=decisions[name]['measurement_convention']
+        assert convention['source_quantity']
+        source=decisions[name]['evidence']['active']
+        if source in net_sources:
+            assert convention['runtime_mapping']=='source_net_minus_model_passive_at_matched_test_pose'
+            assert convention['model_test_q_rad']==0.0
+            assert abs(passive[0,i])<1e-9
+            # Infinite requested torque realizes the active cap. At the matched
+            # neutral isometric pose the final torque therefore equals source MVC.
+            assert abs((positive[0,i]+passive[0,i])-profile['joints'][name]['active_nm'][1])<1e-6
+            assert abs((-negative[0,i]+passive[0,i])+profile['joints'][name]['active_nm'][0])<1e-6
+            checked+=1
+    assert checked==27
+    for name in ('L_Hip_y','R_Knee_y','L_Ankle_y'):
+        assert decisions[name]['measurement_convention']['source_quantity']=='active_mvc_after_passive_and_gravity_subtraction'
+        assert decisions[name]['measurement_convention']['runtime_mapping']=='active_cap_direct'
+
+
 def test_gait_cycle_comparison_uses_net_torque_and_contact_onsets():
     import math
     from protomotions.robot_configs.human_model.common.strength_audit import gait_cycle_moments

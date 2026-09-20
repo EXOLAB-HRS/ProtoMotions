@@ -7,6 +7,67 @@ ROOT=Path(__file__).parent
 TARGET_MASS_KG=63.31
 TARGET_HEIGHT_M=1.754
 
+# A reported "MVC" is not automatically an active-muscle torque.  Keep the
+# source measurement convention separate from the runtime active/passive split.
+# Net or unspecified isometric measurements are matched at their documented
+# test pose; they must not be used as a global clamp on active+passive torque.
+MEASUREMENT_CONVENTIONS={
+    'ANDERSON2007_DYNAMIC': {
+        'source_quantity':'active_mvc_after_passive_and_gravity_subtraction',
+        'runtime_mapping':'active_cap_direct',
+        'test_pose_mapping':'angle_velocity_surface',
+        'passive_correction':'none_source_already_separated',
+    },
+    'PAN2025_V3': {
+        'source_quantity':'net_isometric_mvc_passive_baseline_not_reported',
+        'runtime_mapping':'source_net_minus_model_passive_at_matched_test_pose',
+        'test_pose_mapping':'model_neutral_q0_qd0_proxy_for_seated_neutral',
+        'passive_correction':'zero_in_current_model_at_test_pose',
+    },
+    'VASAVADA2001_V3': {
+        'source_quantity':'net_isometric_mvc_passive_baseline_not_reported',
+        'runtime_mapping':'source_net_minus_model_passive_at_matched_test_pose',
+        'test_pose_mapping':'model_neutral_q0_qd0_proxy_for_neutral_neck',
+        'passive_correction':'zero_in_current_model_at_test_pose',
+    },
+    'MORIN2023': {
+        'source_quantity':'max_isometric_muscle_torque_passive_baseline_not_reported',
+        'runtime_mapping':'source_net_minus_model_passive_at_matched_test_pose',
+        'test_pose_mapping':'model_q0_qd0_proxy; source_protocol_pose_not_an_anatomical_coordinate_fit',
+        'passive_correction':'zero_in_current_model_at_test_pose',
+    },
+    'DANNESKIOLD2009': {
+        'source_quantity':'max_isometric_torque_passive_baseline_not_reported',
+        'runtime_mapping':'source_net_minus_model_passive_at_matched_test_pose',
+        'test_pose_mapping':'model_q0_qd0_proxy; source_protocol_pose_transfer_unresolved',
+        'passive_correction':'zero_in_current_model_at_test_pose',
+    },
+    'KOYKKA2025': {
+        'source_quantity':'max_isometric_torque_passive_baseline_not_reported',
+        'runtime_mapping':'source_net_minus_model_passive_at_matched_test_pose',
+        'test_pose_mapping':'model_neutral_q0_qd0_proxy',
+        'passive_correction':'zero_in_current_model_at_test_pose',
+    },
+    'DELP1996_V3': {
+        'source_quantity':'max_isometric_torque_passive_baseline_not_reported',
+        'runtime_mapping':'source_net_minus_model_passive_at_matched_test_pose',
+        'test_pose_mapping':'model_neutral_q0_qd0_proxy',
+        'passive_correction':'zero_in_current_model_at_test_pose',
+    },
+    'PROXY': {
+        'source_quantity':'borrowed_direction_or_coordinate_proxy',
+        'runtime_mapping':'engineering_active_cap_not_mvc_accounting',
+        'test_pose_mapping':'unresolved',
+        'passive_correction':'not_applicable',
+    },
+    'ASSUMPTION': {
+        'source_quantity':'engineering_prior_or_structural_zero',
+        'runtime_mapping':'engineering_active_cap_not_mvc_accounting',
+        'test_pose_mapping':'not_applicable',
+        'passive_correction':'not_applicable',
+    },
+}
+
 
 def build():
     base=json.loads((ROOT.parent/'human_model_v2/profiles/healthy_adult_v2.json').read_text())
@@ -20,6 +81,7 @@ def build():
         'selection_order':['source MVC normalization','documented anthropometric approximation','explicit unresolved proxy'],
         'gait_data_role':'Independent demand validation, NEVER a multiplier used to define MVC',
         'automatic_cap_increase':False,
+        'mvc_accounting':'Active and passive are matched to the source quantity at the source test condition. Net MVC is not a global clamp on runtime total torque.',
     }
     profile['description']='Candidate on v2 kinematics: evidence-audited strength, explicit uncertainty, independently fixed PD. Not a certified population model.'
     profile['sources'].update({
@@ -109,10 +171,17 @@ def build():
         norm['pre_normalization_negative_positive_nm']=source_values
         if row['active_nm']!=source_values:
             row['note']+=' MVC size transfer: '+norm['method']+'; source values retained in joint_decisions.'
+        convention=copy.deepcopy(MEASUREMENT_CONVENTIONS.get(row['evidence']['active'],MEASUREMENT_CONVENTIONS['PROXY']))
+        convention['model_test_q_rad']=0.0 if convention['passive_correction']=='zero_in_current_model_at_test_pose' else None
+        convention['model_test_qd_rad_s']=0.0 if convention['passive_correction']=='zero_in_current_model_at_test_pose' else None
+        convention['model_passive_test_nm']=0.0 if convention['passive_correction']=='zero_in_current_model_at_test_pose' else None
+        convention['numeric_cap_change_nm']=0.0
+        convention['scope_note']='Zero correction means the current passive law is zero at the mapped isometric test pose; it does not mean passive torque is zero during gait or near ROM limits.'
         audit[name]={'negative_peak_metadata_nm':row['active_nm'][0],
                      'positive_peak_metadata_nm':row['active_nm'][1],
                      'status':state,'decision':reason,'evidence':copy.deepcopy(row['evidence']),
-                     'rom_deg':row['rom_deg'],'normalization':norm}
+                     'rom_deg':row['rom_deg'],'normalization':norm,
+                     'measurement_convention':convention}
     pd={}
     for name,row in base['joints'].items():
         cap=max(row['active_nm'])
