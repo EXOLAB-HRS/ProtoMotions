@@ -126,13 +126,23 @@ class SteeringControl(ControlComponent):
         )
 
     def reset(self, env_ids: Tensor):
-        """Reset steering task for given environments."""
+        """Reset steering task and velocity history for given environments."""
         if len(env_ids) == 0:
             return
 
+        # Only a real environment reset may seed the double buffer.  Doing it on
+        # an in-episode command change would make the measured root velocity
+        # exactly zero for that control step.
         root_pos = self.env.simulator.get_root_state().root_pos[env_ids]
         self._prev_root_pos[env_ids] = root_pos
         self._curr_root_pos[env_ids] = root_pos
+
+        self._resample_task(env_ids)
+
+    def _resample_task(self, env_ids: Tensor):
+        """Sample a new heading/speed command without touching velocity history."""
+        if len(env_ids) == 0:
+            return
 
         n = len(env_ids)
         device = self.env.device
@@ -219,7 +229,7 @@ class SteeringControl(ControlComponent):
         reset_task_mask = self.env.progress_buf >= self._heading_change_steps
         env_ids = reset_task_mask.nonzero(as_tuple=False).flatten()
         if len(env_ids) > 0:
-            self.reset(env_ids)
+            self._resample_task(env_ids)
 
     def check_resets_and_terminations(self) -> Tuple[Tensor, Tensor]:
         """No terminations from steering control."""
