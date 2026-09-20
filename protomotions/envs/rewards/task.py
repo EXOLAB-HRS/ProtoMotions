@@ -124,6 +124,24 @@ def compute_heading_velocity_rew(
     return reward
 
 
+def compute_neck_stability_rew(
+    dof_vel: Tensor,
+    dof_indices: list[int],
+    reference_abs_velocity_p95: list[float],
+) -> Tensor:
+    """Reward neck/head speeds that stay inside the expert-motion envelope.
+
+    The per-axis envelope is supplied by the experiment configuration. Speeds
+    inside it receive full credit; only normalized excess speed is penalized.
+    """
+    selected = torch.abs(dof_vel[:, dof_indices])
+    envelope = torch.as_tensor(
+        reference_abs_velocity_p95, device=dof_vel.device, dtype=dof_vel.dtype
+    )
+    normalized_excess = torch.relu(selected - envelope) / envelope
+    return torch.exp(-torch.mean(torch.square(normalized_excess), dim=-1))
+
+
 def compute_split_heading_velocity_rew(
     root_pos: Tensor,
     prev_root_pos: Tensor,
@@ -346,6 +364,7 @@ def compute_path_following_rew(
 
 __all__ = [
     "compute_heading_velocity_rew",
+    "compute_neck_stability_rew",
     "compute_split_heading_velocity_rew",
     "compute_split_heading_velocity_stop_rew",
     "compute_path_following_rew",
