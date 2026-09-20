@@ -116,6 +116,21 @@ def test_mvc_measurement_convention_and_matched_pose_net_torque():
         assert decisions[name]['measurement_convention']['runtime_mapping']=='active_cap_direct'
 
 
+def test_torso_muscle_allocation_preserves_aggregate_mvc():
+    """The reduced serial allocation must reproduce the calibrated whole-trunk MVC."""
+    profile=load_profile('human_model_v3')
+    expected={'x':(.93*63.31,.93*63.31),'y':(1.685*63.31,1.10*63.31),'z':(.675*63.31,.675*63.31)}
+    names=('Torso','Spine','Chest')
+    for axis,(negative,positive) in expected.items():
+        rows=[profile['joints'][f'{segment}_{axis}'] for segment in names]
+        # The generated audit is the source of per-joint normalization metadata.
+        decisions=json.loads((Path(__file__).parents[2]/'human_model_v3/profiles/joint_decisions.json').read_text())
+        weights=[decisions[f'{segment}_{axis}']['normalization']['serial_coordinate_weight'] for segment in names]
+        assert abs(sum(weights[i]*rows[i]['active_nm'][0] for i in range(3))-negative)<1e-6
+        assert abs(sum(weights[i]*rows[i]['active_nm'][1] for i in range(3))-positive)<1e-6
+        assert len({round(rows[i]['active_nm'][1],6) for i in range(3)})>1
+
+
 def test_gait_cycle_comparison_uses_net_torque_and_contact_onsets():
     import math
     from protomotions.robot_configs.human_model.common.strength_audit import gait_cycle_moments

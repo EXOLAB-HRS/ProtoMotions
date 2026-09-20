@@ -598,36 +598,43 @@
     }
   },
   "Torso_x": {
-    "negative_peak_metadata_nm": 58.8783,
-    "positive_peak_metadata_nm": 58.8783,
-    "status": "measured_magnitude_coordinate_transfer",
-    "decision": "Use body-mass-normalized measured aggregate torque; avoid mixing digitized posture curves from a different study.",
+    "negative_peak_metadata_nm": 64.23676913727822,
+    "positive_peak_metadata_nm": 64.21513361920097,
+    "status": "measured_aggregate_muscle_informed_serial_allocation_candidate",
+    "decision": "Preserve measured aggregate MVC while using muscle-derived lower/middle/upper relative capacity instead of copying the whole-trunk value to every joint.",
     "evidence": {
       "rom": "ASSUMPTION",
       "active": "PAN2025_V3",
       "stiffness": "UNMEASURED",
-      "damping": "UNMEASURED"
+      "damping": "UNMEASURED",
+      "distribution": "MYOSUITE_TORSO_DISTRIBUTION"
     },
     "rom_deg": [
       -11.666666666666666,
       11.666666666666666
     ],
     "normalization": {
-      "method": "source_nm_per_kg",
+      "method": "source_nm_per_kg_with_muscle_informed_serial_allocation",
       "scale_negative_positive": [
         1.0,
         1.0
       ],
       "source_mass_kg": null,
       "source_height_m": null,
-      "uncertainty": "Pan2025 normalized medians; serial-segment transfer still a proxy",
+      "uncertainty": "MyoSuite neutral muscle geometry supplies relative allocation; shared-muscle activation and posture dependence remain unresolved",
+      "source_aggregate_negative_positive_nm": [
+        58.8783,
+        58.8783
+      ],
       "source_negative_positive_nm_per_kg": [
         0.93,
         0.93
       ],
+      "serial_coordinate_weight": 0.633467417538214,
+      "allocation_model": "MyoSuite myotorso neutral active moments, commit 93b0ca8f4ec90c9899ee7f05fee561e9911da91b",
       "pre_normalization_negative_positive_nm": [
-        58.8783,
-        58.8783
+        64.23676913727822,
+        64.21513361920097
       ]
     },
     "measurement_convention": {
@@ -643,36 +650,43 @@
     }
   },
   "Torso_y": {
-    "negative_peak_metadata_nm": 106.67735,
-    "positive_peak_metadata_nm": 69.641,
-    "status": "measured_magnitude_coordinate_transfer",
-    "decision": "Use body-mass-normalized measured aggregate torque; avoid mixing digitized posture curves from a different study.",
+    "negative_peak_metadata_nm": 108.37707695443173,
+    "positive_peak_metadata_nm": 75.97606899159447,
+    "status": "measured_aggregate_muscle_informed_serial_allocation_candidate",
+    "decision": "Preserve measured aggregate MVC while using muscle-derived lower/middle/upper relative capacity instead of copying the whole-trunk value to every joint.",
     "evidence": {
       "rom": "ASSUMPTION",
       "active": "PAN2025_V3",
       "stiffness": "UNMEASURED",
-      "damping": "UNMEASURED"
+      "damping": "UNMEASURED",
+      "distribution": "MYOSUITE_TORSO_DISTRIBUTION"
     },
     "rom_deg": [
       -8.333333333333334,
       20.0
     ],
     "normalization": {
-      "method": "source_nm_per_kg",
+      "method": "source_nm_per_kg_with_muscle_informed_serial_allocation",
       "scale_negative_positive": [
         1.0,
         1.0
       ],
       "source_mass_kg": null,
       "source_height_m": null,
-      "uncertainty": "Pan2025 normalized medians; serial-segment transfer still a proxy",
+      "uncertainty": "MyoSuite neutral muscle geometry supplies relative allocation; shared-muscle activation and posture dependence remain unresolved",
+      "source_aggregate_negative_positive_nm": [
+        106.67735,
+        69.641
+      ],
       "source_negative_positive_nm_per_kg": [
         1.685,
         1.1
       ],
+      "serial_coordinate_weight": 0.632,
+      "allocation_model": "MyoSuite myotorso neutral active moments, commit 93b0ca8f4ec90c9899ee7f05fee561e9911da91b",
       "pre_normalization_negative_positive_nm": [
-        106.67735,
-        69.641
+        108.37707695443173,
+        75.97606899159447
       ]
     },
     "measurement_convention": {
@@ -688,36 +702,43 @@
     }
   },
   "Torso_z": {
-    "negative_peak_metadata_nm": 42.73425,
-    "positive_peak_metadata_nm": 42.73425,
-    "status": "measured_magnitude_coordinate_transfer",
-    "decision": "Use body-mass-normalized measured aggregate torque; avoid mixing digitized posture curves from a different study.",
+    "negative_peak_metadata_nm": 42.868929283075474,
+    "positive_peak_metadata_nm": 42.84224822374433,
+    "status": "measured_aggregate_muscle_informed_serial_allocation_candidate",
+    "decision": "Preserve measured aggregate MVC while using muscle-derived lower/middle/upper relative capacity instead of copying the whole-trunk value to every joint.",
     "evidence": {
       "rom": "ASSUMPTION",
       "active": "PAN2025_V3",
       "stiffness": "UNMEASURED",
-      "damping": "UNMEASURED"
+      "damping": "UNMEASURED",
+      "distribution": "MYOSUITE_TORSO_DISTRIBUTION"
     },
     "rom_deg": [
       -15.0,
       15.0
     ],
     "normalization": {
-      "method": "source_nm_per_kg",
+      "method": "source_nm_per_kg_with_muscle_informed_serial_allocation",
       "scale_negative_positive": [
         1.0,
         1.0
       ],
       "source_mass_kg": null,
       "source_height_m": null,
-      "uncertainty": "Pan2025 normalized medians; serial-segment transfer still a proxy",
+      "uncertainty": "MyoSuite neutral muscle geometry supplies relative allocation; shared-muscle activation and posture dependence remain unresolved",
+      "source_aggregate_negative_positive_nm": [
+        42.73425,
+        42.73425
+      ],
       "source_negative_positive_nm_per_kg": [
         0.675,
         0.675
       ],
+      "serial_coordinate_weight": 0.9138927049209201,
+      "allocation_model": "MyoSuite myotorso neutral active moments, commit 93b0ca8f4ec90c9899ee7f05fee561e9911da91b",
       "pre_normalization_negative_positive_nm": [
-        42.73425,
-        42.73425
+        42.868929283075474,
+        42.84224822374433
       ]
     },
     "measurement_convention": {
@@ -733,36 +754,43 @@
     }
   },
   "Spine_x": {
-    "negative_peak_metadata_nm": 58.8783,
-    "positive_peak_metadata_nm": 58.8783,
-    "status": "measured_magnitude_coordinate_transfer",
-    "decision": "Use body-mass-normalized measured aggregate torque; avoid mixing digitized posture curves from a different study.",
+    "negative_peak_metadata_nm": 49.33664435121199,
+    "positive_peak_metadata_nm": 49.40046315810913,
+    "status": "measured_aggregate_muscle_informed_serial_allocation_candidate",
+    "decision": "Preserve measured aggregate MVC while using muscle-derived lower/middle/upper relative capacity instead of copying the whole-trunk value to every joint.",
     "evidence": {
       "rom": "ASSUMPTION",
       "active": "PAN2025_V3",
       "stiffness": "UNMEASURED",
-      "damping": "UNMEASURED"
+      "damping": "UNMEASURED",
+      "distribution": "MYOSUITE_TORSO_DISTRIBUTION"
     },
     "rom_deg": [
       -11.666666666666666,
       11.666666666666666
     ],
     "normalization": {
-      "method": "source_nm_per_kg",
+      "method": "source_nm_per_kg_with_muscle_informed_serial_allocation",
       "scale_negative_positive": [
         1.0,
         1.0
       ],
       "source_mass_kg": null,
       "source_height_m": null,
-      "uncertainty": "Pan2025 normalized medians; serial-segment transfer still a proxy",
+      "uncertainty": "MyoSuite neutral muscle geometry supplies relative allocation; shared-muscle activation and posture dependence remain unresolved",
+      "source_aggregate_negative_positive_nm": [
+        58.8783,
+        58.8783
+      ],
       "source_negative_positive_nm_per_kg": [
         0.93,
         0.93
       ],
+      "serial_coordinate_weight": 0.26570126039152586,
+      "allocation_model": "MyoSuite myotorso neutral active moments, commit 93b0ca8f4ec90c9899ee7f05fee561e9911da91b",
       "pre_normalization_negative_positive_nm": [
-        58.8783,
-        58.8783
+        49.33664435121199,
+        49.40046315810913
       ]
     },
     "measurement_convention": {
@@ -778,36 +806,43 @@
     }
   },
   "Spine_y": {
-    "negative_peak_metadata_nm": 106.67735,
-    "positive_peak_metadata_nm": 69.641,
-    "status": "measured_magnitude_coordinate_transfer",
-    "decision": "Use body-mass-normalized measured aggregate torque; avoid mixing digitized posture curves from a different study.",
+    "negative_peak_metadata_nm": 99.04302222892878,
+    "positive_peak_metadata_nm": 67.52364861379654,
+    "status": "measured_aggregate_muscle_informed_serial_allocation_candidate",
+    "decision": "Preserve measured aggregate MVC while using muscle-derived lower/middle/upper relative capacity instead of copying the whole-trunk value to every joint.",
     "evidence": {
       "rom": "ASSUMPTION",
       "active": "PAN2025_V3",
       "stiffness": "UNMEASURED",
-      "damping": "UNMEASURED"
+      "damping": "UNMEASURED",
+      "distribution": "MYOSUITE_TORSO_DISTRIBUTION"
     },
     "rom_deg": [
       -8.333333333333334,
       20.0
     ],
     "normalization": {
-      "method": "source_nm_per_kg",
+      "method": "source_nm_per_kg_with_muscle_informed_serial_allocation",
       "scale_negative_positive": [
         1.0,
         1.0
       ],
       "source_mass_kg": null,
       "source_height_m": null,
-      "uncertainty": "Pan2025 normalized medians; serial-segment transfer still a proxy",
+      "uncertainty": "MyoSuite neutral muscle geometry supplies relative allocation; shared-muscle activation and posture dependence remain unresolved",
+      "source_aggregate_negative_positive_nm": [
+        106.67735,
+        69.641
+      ],
       "source_negative_positive_nm_per_kg": [
         1.685,
         1.1
       ],
+      "serial_coordinate_weight": 0.232,
+      "allocation_model": "MyoSuite myotorso neutral active moments, commit 93b0ca8f4ec90c9899ee7f05fee561e9911da91b",
       "pre_normalization_negative_positive_nm": [
-        106.67735,
-        69.641
+        99.04302222892878,
+        67.52364861379654
       ]
     },
     "measurement_convention": {
@@ -823,36 +858,43 @@
     }
   },
   "Spine_z": {
-    "negative_peak_metadata_nm": 42.73425,
-    "positive_peak_metadata_nm": 42.73425,
-    "status": "measured_magnitude_coordinate_transfer",
-    "decision": "Use body-mass-normalized measured aggregate torque; avoid mixing digitized posture curves from a different study.",
+    "negative_peak_metadata_nm": 41.624407887863114,
+    "positive_peak_metadata_nm": 41.870179462063234,
+    "status": "measured_aggregate_muscle_informed_serial_allocation_candidate",
+    "decision": "Preserve measured aggregate MVC while using muscle-derived lower/middle/upper relative capacity instead of copying the whole-trunk value to every joint.",
     "evidence": {
       "rom": "ASSUMPTION",
       "active": "PAN2025_V3",
       "stiffness": "UNMEASURED",
-      "damping": "UNMEASURED"
+      "damping": "UNMEASURED",
+      "distribution": "MYOSUITE_TORSO_DISTRIBUTION"
     },
     "rom_deg": [
       -15.0,
       15.0
     ],
     "normalization": {
-      "method": "source_nm_per_kg",
+      "method": "source_nm_per_kg_with_muscle_informed_serial_allocation",
       "scale_negative_positive": [
         1.0,
         1.0
       ],
       "source_mass_kg": null,
       "source_height_m": null,
-      "uncertainty": "Pan2025 normalized medians; serial-segment transfer still a proxy",
+      "uncertainty": "MyoSuite neutral muscle geometry supplies relative allocation; shared-muscle activation and posture dependence remain unresolved",
+      "source_aggregate_negative_positive_nm": [
+        42.73425,
+        42.73425
+      ],
       "source_negative_positive_nm_per_kg": [
         0.675,
         0.675
       ],
+      "serial_coordinate_weight": 0.06066610306808976,
+      "allocation_model": "MyoSuite myotorso neutral active moments, commit 93b0ca8f4ec90c9899ee7f05fee561e9911da91b",
       "pre_normalization_negative_positive_nm": [
-        42.73425,
-        42.73425
+        41.624407887863114,
+        41.870179462063234
       ]
     },
     "measurement_convention": {
@@ -868,36 +910,43 @@
     }
   },
   "Chest_x": {
-    "negative_peak_metadata_nm": 58.8783,
-    "positive_peak_metadata_nm": 58.8783,
-    "status": "measured_magnitude_coordinate_transfer",
-    "decision": "Use body-mass-normalized measured aggregate torque; avoid mixing digitized posture curves from a different study.",
+    "negative_peak_metadata_nm": 50.357280374310065,
+    "positive_peak_metadata_nm": 50.3250350203962,
+    "status": "measured_aggregate_muscle_informed_serial_allocation_candidate",
+    "decision": "Preserve measured aggregate MVC while using muscle-derived lower/middle/upper relative capacity instead of copying the whole-trunk value to every joint.",
     "evidence": {
       "rom": "ASSUMPTION",
       "active": "PAN2025_V3",
       "stiffness": "UNMEASURED",
-      "damping": "UNMEASURED"
+      "damping": "UNMEASURED",
+      "distribution": "MYOSUITE_TORSO_DISTRIBUTION"
     },
     "rom_deg": [
       -11.666666666666666,
       11.666666666666666
     ],
     "normalization": {
-      "method": "source_nm_per_kg",
+      "method": "source_nm_per_kg_with_muscle_informed_serial_allocation",
       "scale_negative_positive": [
         1.0,
         1.0
       ],
       "source_mass_kg": null,
       "source_height_m": null,
-      "uncertainty": "Pan2025 normalized medians; serial-segment transfer still a proxy",
+      "uncertainty": "MyoSuite neutral muscle geometry supplies relative allocation; shared-muscle activation and posture dependence remain unresolved",
+      "source_aggregate_negative_positive_nm": [
+        58.8783,
+        58.8783
+      ],
       "source_negative_positive_nm_per_kg": [
         0.93,
         0.93
       ],
+      "serial_coordinate_weight": 0.10083132207026012,
+      "allocation_model": "MyoSuite myotorso neutral active moments, commit 93b0ca8f4ec90c9899ee7f05fee561e9911da91b",
       "pre_normalization_negative_positive_nm": [
-        58.8783,
-        58.8783
+        50.357280374310065,
+        50.3250350203962
       ]
     },
     "measurement_convention": {
@@ -913,36 +962,43 @@
     }
   },
   "Chest_y": {
-    "negative_peak_metadata_nm": 106.67735,
-    "positive_peak_metadata_nm": 69.641,
-    "status": "measured_magnitude_coordinate_transfer",
-    "decision": "Use body-mass-normalized measured aggregate torque; avoid mixing digitized posture curves from a different study.",
+    "negative_peak_metadata_nm": 111.80188388005651,
+    "positive_peak_metadata_nm": 43.813514109643414,
+    "status": "measured_aggregate_muscle_informed_serial_allocation_candidate",
+    "decision": "Preserve measured aggregate MVC while using muscle-derived lower/middle/upper relative capacity instead of copying the whole-trunk value to every joint.",
     "evidence": {
       "rom": "ASSUMPTION",
       "active": "PAN2025_V3",
       "stiffness": "UNMEASURED",
-      "damping": "UNMEASURED"
+      "damping": "UNMEASURED",
+      "distribution": "MYOSUITE_TORSO_DISTRIBUTION"
     },
     "rom_deg": [
       -8.333333333333334,
       20.0
     ],
     "normalization": {
-      "method": "source_nm_per_kg",
+      "method": "source_nm_per_kg_with_muscle_informed_serial_allocation",
       "scale_negative_positive": [
         1.0,
         1.0
       ],
       "source_mass_kg": null,
       "source_height_m": null,
-      "uncertainty": "Pan2025 normalized medians; serial-segment transfer still a proxy",
+      "uncertainty": "MyoSuite neutral muscle geometry supplies relative allocation; shared-muscle activation and posture dependence remain unresolved",
+      "source_aggregate_negative_positive_nm": [
+        106.67735,
+        69.641
+      ],
       "source_negative_positive_nm_per_kg": [
         1.685,
         1.1
       ],
+      "serial_coordinate_weight": 0.136,
+      "allocation_model": "MyoSuite myotorso neutral active moments, commit 93b0ca8f4ec90c9899ee7f05fee561e9911da91b",
       "pre_normalization_negative_positive_nm": [
-        106.67735,
-        69.641
+        111.80188388005651,
+        43.813514109643414
       ]
     },
     "measurement_convention": {
@@ -958,36 +1014,43 @@
     }
   },
   "Chest_z": {
-    "negative_peak_metadata_nm": 42.73425,
-    "positive_peak_metadata_nm": 42.73425,
-    "status": "measured_magnitude_coordinate_transfer",
-    "decision": "Use body-mass-normalized measured aggregate torque; avoid mixing digitized posture curves from a different study.",
+    "negative_peak_metadata_nm": 40.54281894133084,
+    "positive_peak_metadata_nm": 40.91519228871841,
+    "status": "measured_aggregate_muscle_informed_serial_allocation_candidate",
+    "decision": "Preserve measured aggregate MVC while using muscle-derived lower/middle/upper relative capacity instead of copying the whole-trunk value to every joint.",
     "evidence": {
       "rom": "ASSUMPTION",
       "active": "PAN2025_V3",
       "stiffness": "UNMEASURED",
-      "damping": "UNMEASURED"
+      "damping": "UNMEASURED",
+      "distribution": "MYOSUITE_TORSO_DISTRIBUTION"
     },
     "rom_deg": [
       -15.0,
       15.0
     ],
     "normalization": {
-      "method": "source_nm_per_kg",
+      "method": "source_nm_per_kg_with_muscle_informed_serial_allocation",
       "scale_negative_positive": [
         1.0,
         1.0
       ],
       "source_mass_kg": null,
       "source_height_m": null,
-      "uncertainty": "Pan2025 normalized medians; serial-segment transfer still a proxy",
+      "uncertainty": "MyoSuite neutral muscle geometry supplies relative allocation; shared-muscle activation and posture dependence remain unresolved",
+      "source_aggregate_negative_positive_nm": [
+        42.73425,
+        42.73425
+      ],
       "source_negative_positive_nm_per_kg": [
         0.675,
         0.675
       ],
+      "serial_coordinate_weight": 0.025441192010990172,
+      "allocation_model": "MyoSuite myotorso neutral active moments, commit 93b0ca8f4ec90c9899ee7f05fee561e9911da91b",
       "pre_normalization_negative_positive_nm": [
-        42.73425,
-        42.73425
+        40.54281894133084,
+        40.91519228871841
       ]
     },
     "measurement_convention": {

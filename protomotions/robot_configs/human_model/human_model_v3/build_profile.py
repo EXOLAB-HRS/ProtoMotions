@@ -7,6 +7,31 @@ ROOT=Path(__file__).parent
 TARGET_MASS_KG=63.31
 TARGET_HEIGHT_M=1.754
 
+# Reduced three-joint allocation derived at neutral from MyoSuite myotorso
+# muscle moment arms and active forces.  The local capacities are grouped as
+# lower=(L5/S1,L4/L5), middle=(L3/L4,L2/L3), upper=(L1/L2), then direction-wise
+# scaled so the coupling-weighted three-joint moment reproduces Pan2025's
+# measured whole-trunk MVC for the target mass.  These are coordinate-actuator
+# caps; they do not claim to reproduce shared-muscle co-contraction.
+TORSO_MUSCLE_ALLOCATION={
+    'x': {
+        'weights':[0.633467417538214,0.26570126039152586,0.10083132207026012],
+        'negative_nm':[64.23676913727822,49.33664435121199,50.357280374310065],
+        'positive_nm':[64.21513361920097,49.40046315810913,50.3250350203962],
+    },
+    'y': {
+        'weights':[0.632,0.232,0.136],
+        'negative_nm':[108.37707695443173,99.04302222892878,111.80188388005651],
+        'positive_nm':[75.97606899159447,67.52364861379654,43.813514109643414],
+    },
+    'z': {
+        'weights':[0.9138927049209201,0.06066610306808976,0.025441192010990172],
+        'negative_nm':[42.868929283075474,41.624407887863114,40.54281894133084],
+        'positive_nm':[42.84224822374433,41.870179462063234,40.91519228871841],
+    },
+}
+TORSO_SEGMENT_INDEX={'Torso':0,'Spine':1,'Chest':2}
+
 # A reported "MVC" is not automatically an active-muscle torque.  Keep the
 # source measurement convention separate from the runtime active/passive split.
 # Net or unspecified isometric measurements are matched at their documented
@@ -85,7 +110,8 @@ def build():
     }
     profile['description']='Candidate on v2 kinematics: evidence-audited strength, explicit uncertainty, independently fixed PD. Not a certified population model.'
     profile['sources'].update({
-        'PAN2025_V3':{'url':'https://doi.org/10.1186/s40001-025-02742-w','location':'Results: weight-normalized isometric medians, sex-average multiplied by 63.31kg; bilateral direction averages','scope':'Seated aggregate trunk; serial thoracolumbar transfer remains an assumption'},
+        'PAN2025_V3':{'url':'https://doi.org/10.1186/s40001-025-02742-w','location':'Results: weight-normalized isometric medians, sex-average multiplied by 63.31kg; bilateral direction averages','scope':'Seated aggregate trunk MVC used only for absolute calibration'},
+        'MYOSUITE_TORSO_DISTRIBUTION':{'url':'https://github.com/MyoHub/myosuite','location':'myotorso neutral-pose active muscle moments; source commit 93b0ca8f4ec90c9899ee7f05fee561e9911da91b','scope':'Relative lower/middle/upper serial allocation; not an independent human MVC'},
         'VASAVADA2001_V3':{'url':'https://pubmed.ncbi.nlm.nih.gov/11568704/','location':'C7 male/female mean: extension52/21 flexion30/15 lateral36/16 axial15/6 Nm','scope':'Equal-sex average, identical serial moment proxy; no posture curve validated'},
         'DELP1996_V3':{'url':'https://pubmed.ncbi.nlm.nih.gov/8884484/','location':'Peak radial11.0, ulnar9.5 Nm; task-specific isometric sample','scope':'Clinical direction mapped explicitly'},
     })
@@ -95,11 +121,16 @@ def build():
         reason='Retain existing cited direction-specific measurement; no unvalidated OpenSim curve transfer.'
         if name.startswith(('Torso_','Spine_','Chest_')):
             axis=name[-1]
-            values={'x':[.93*63.31]*2,'y':[1.685*63.31,1.10*63.31],'z':[.675*63.31]*2}[axis]
+            segment=name.split('_')[0]
+            index=TORSO_SEGMENT_INDEX[segment]
+            allocation=TORSO_MUSCLE_ALLOCATION[axis]
+            values=[allocation['negative_nm'][index],allocation['positive_nm'][index]]
             row['active_nm']=values
-            row['note']='Pan2025 mass-normalized seated whole-trunk reference; same moment at serial joints, not a sum. Constant angle/speed envelope pending validation.'
+            row['note']='Pan2025 whole-trunk MVC calibrated; MyoSuite muscle-derived neutral serial allocation. Constant angle/speed envelope pending validation.'
             row['evidence']['active']='PAN2025_V3'
-            reason='Use body-mass-normalized measured aggregate torque; avoid mixing digitized posture curves from a different study.'
+            row['evidence']['distribution']='MYOSUITE_TORSO_DISTRIBUTION'
+            reason='Preserve measured aggregate MVC while using muscle-derived lower/middle/upper relative capacity instead of copying the whole-trunk value to every joint.'
+            state='measured_aggregate_muscle_informed_serial_allocation_candidate'
         elif name.startswith(('Neck_','Head_')):
             row['active_nm']={'x':[26.,26.],'y':[36.5,22.5],'z':[10.5,10.5]}[name[-1]]
             row['evidence']['active']='VASAVADA2001_V3'
@@ -139,8 +170,14 @@ def build():
                         scale_negative_positive=None,
                         uncertainty='Each cohort C1 is dimensionalized at target m*g*h BEFORE equal-sex averaging; metadata caps are not dynamic caps')
         elif name.startswith(('Torso_','Spine_','Chest_')):
-            norm.update(method='source_nm_per_kg',uncertainty='Pan2025 normalized medians; serial-segment transfer still a proxy')
-            norm['source_negative_positive_nm_per_kg']=[v/TARGET_MASS_KG for v in source_values]
+            axis=name[-1];segment=name.split('_')[0];index=TORSO_SEGMENT_INDEX[segment]
+            aggregate={'x':[.93*TARGET_MASS_KG]*2,'y':[1.685*TARGET_MASS_KG,1.10*TARGET_MASS_KG],'z':[.675*TARGET_MASS_KG]*2}[axis]
+            norm.update(method='source_nm_per_kg_with_muscle_informed_serial_allocation',
+                        uncertainty='MyoSuite neutral muscle geometry supplies relative allocation; shared-muscle activation and posture dependence remain unresolved')
+            norm['source_aggregate_negative_positive_nm']=aggregate
+            norm['source_negative_positive_nm_per_kg']=[v/TARGET_MASS_KG for v in aggregate]
+            norm['serial_coordinate_weight']=TORSO_MUSCLE_ALLOCATION[axis]['weights'][index]
+            norm['allocation_model']='MyoSuite myotorso neutral active moments, commit 93b0ca8f4ec90c9899ee7f05fee561e9911da91b'
         elif name.startswith(('Neck_','Head_')):
             male=TARGET_MASS_KG*TARGET_HEIGHT_M/(77.*1.77)
             female=TARGET_MASS_KG*TARGET_HEIGHT_M/(65.*1.64)

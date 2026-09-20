@@ -94,7 +94,12 @@
     "PAN2025_V3": {
       "url": "https://doi.org/10.1186/s40001-025-02742-w",
       "location": "Results: weight-normalized isometric medians, sex-average multiplied by 63.31kg; bilateral direction averages",
-      "scope": "Seated aggregate trunk; serial thoracolumbar transfer remains an assumption"
+      "scope": "Seated aggregate trunk MVC used only for absolute calibration"
+    },
+    "MYOSUITE_TORSO_DISTRIBUTION": {
+      "url": "https://github.com/MyoHub/myosuite",
+      "location": "myotorso neutral-pose active muscle moments; source commit 93b0ca8f4ec90c9899ee7f05fee561e9911da91b",
+      "scope": "Relative lower/middle/upper serial allocation; not an independent human MVC"
     },
     "VASAVADA2001_V3": {
       "url": "https://pubmed.ncbi.nlm.nih.gov/11568704/",
@@ -436,8 +441,8 @@
         11.666666666666666
       ],
       "active_nm": [
-        58.8783,
-        58.8783
+        64.23676913727822,
+        64.21513361920097
       ],
       "rest_deg": 0,
       "stiffness_nm_per_rad": [
@@ -449,9 +454,10 @@
         "rom": "ASSUMPTION",
         "active": "PAN2025_V3",
         "stiffness": "UNMEASURED",
-        "damping": "UNMEASURED"
+        "damping": "UNMEASURED",
+        "distribution": "MYOSUITE_TORSO_DISTRIBUTION"
       },
-      "note": "Pan2025 mass-normalized seated whole-trunk reference; same moment at serial joints, not a sum. Constant angle/speed envelope pending validation."
+      "note": "Pan2025 whole-trunk MVC calibrated; MyoSuite muscle-derived neutral serial allocation. Constant angle/speed envelope pending validation."
     },
     "Torso_y": {
       "rom_deg": [
@@ -459,8 +465,8 @@
         20.0
       ],
       "active_nm": [
-        106.67735,
-        69.641
+        108.37707695443173,
+        75.97606899159447
       ],
       "rest_deg": 0,
       "stiffness_nm_per_rad": [
@@ -472,9 +478,10 @@
         "rom": "ASSUMPTION",
         "active": "PAN2025_V3",
         "stiffness": "UNMEASURED",
-        "damping": "UNMEASURED"
+        "damping": "UNMEASURED",
+        "distribution": "MYOSUITE_TORSO_DISTRIBUTION"
       },
-      "note": "Pan2025 mass-normalized seated whole-trunk reference; same moment at serial joints, not a sum. Constant angle/speed envelope pending validation."
+      "note": "Pan2025 whole-trunk MVC calibrated; MyoSuite muscle-derived neutral serial allocation. Constant angle/speed envelope pending validation."
     },
     "Torso_z": {
       "rom_deg": [
@@ -482,8 +489,8 @@
         15.0
       ],
       "active_nm": [
-        42.73425,
-        42.73425
+        42.868929283075474,
+        42.84224822374433
       ],
       "rest_deg": 0,
       "stiffness_nm_per_rad": [
@@ -495,9 +502,10 @@
         "rom": "ASSUMPTION",
         "active": "PAN2025_V3",
         "stiffness": "UNMEASURED",
-        "damping": "UNMEASURED"
+        "damping": "UNMEASURED",
+        "distribution": "MYOSUITE_TORSO_DISTRIBUTION"
       },
-      "note": "Pan2025 mass-normalized seated whole-trunk reference; same moment at serial joints, not a sum. Constant angle/speed envelope pending validation."
+      "note": "Pan2025 whole-trunk MVC calibrated; MyoSuite muscle-derived neutral serial allocation. Constant angle/speed envelope pending validation."
     },
     "Spine_x": {
       "rom_deg": [
@@ -505,8 +513,8 @@
         11.666666666666666
       ],
       "active_nm": [
-        58.8783,
-        58.8783
+        49.33664435121199,
+        49.40046315810913
       ],
       "rest_deg": 0,
       "stiffness_nm_per_rad": [
@@ -518,9 +526,10 @@
         "rom": "ASSUMPTION",
         "active": "PAN2025_V3",
         "stiffness": "UNMEASURED",
-        "damping": "UNMEASURED"
+        "damping": "UNMEASURED",
+        "distribution": "MYOSUITE_TORSO_DISTRIBUTION"
       },
-      "note": "Pan2025 mass-normalized seated whole-trunk reference; same moment at serial joints, not a sum. Constant angle/speed envelope pending validation."
+      "note": "Pan2025 whole-trunk MVC calibrated; MyoSuite muscle-derived neutral serial allocation. Constant angle/speed envelope pending validation."
     },
     "Spine_y": {
       "rom_deg": [
@@ -528,8 +537,8 @@
         20.0
       ],
       "active_nm": [
-        106.67735,
-        69.641
+        99.04302222892878,
+        67.52364861379654
       ],
       "rest_deg": 0,
       "stiffness_nm_per_rad": [
@@ -541,9 +550,10 @@
         "rom": "ASSUMPTION",
         "active": "PAN2025_V3",
         "stiffness": "UNMEASURED",
-        "damping": "UNMEASURED"
+        "damping": "UNMEASURED",
+        "distribution": "MYOSUITE_TORSO_DISTRIBUTION"
       },
-      "note": "Pan2025 mass-normalized seated whole-trunk reference; same moment at serial joints, not a sum. Constant angle/speed envelope pending validation."
+      "note": "Pan2025 whole-trunk MVC calibrated; MyoSuite muscle-derived neutral serial allocation. Constant angle/speed envelope pending validation."
     },
     "Spine_z": {
       "rom_deg": [
@@ -551,8 +561,8 @@
         15.0
       ],
       "active_nm": [
-        42.73425,
-        42.73425
+        41.624407887863114,
+        41.870179462063234
       ],
       "rest_deg": 0,
       "stiffness_nm_per_rad": [
@@ -564,9 +574,10 @@
         "rom": "ASSUMPTION",
         "active": "PAN2025_V3",
         "stiffness": "UNMEASURED",
-        "damping": "UNMEASURED"
+        "damping": "UNMEASURED",
+        "distribution": "MYOSUITE_TORSO_DISTRIBUTION"
       },
-      "note": "Pan2025 mass-normalized seated whole-trunk reference; same moment at serial joints, not a sum. Constant angle/speed envelope pending validation."
+      "note": "Pan2025 whole-trunk MVC calibrated; MyoSuite muscle-derived neutral serial allocation. Constant angle/speed envelope pending validation."
     },
     "Chest_x": {
       "rom_deg": [
@@ -574,8 +585,8 @@
         11.666666666666666
       ],
       "active_nm": [
-        58.8783,
-        58.8783
+        50.357280374310065,
+        50.3250350203962
       ],
       "rest_deg": 0,
       "stiffness_nm_per_rad": [
@@ -587,9 +598,10 @@
         "rom": "ASSUMPTION",
         "active": "PAN2025_V3",
         "stiffness": "UNMEASURED",
-        "damping": "UNMEASURED"
+        "damping": "UNMEASURED",
+        "distribution": "MYOSUITE_TORSO_DISTRIBUTION"
       },
-      "note": "Pan2025 mass-normalized seated whole-trunk reference; same moment at serial joints, not a sum. Constant angle/speed envelope pending validation."
+      "note": "Pan2025 whole-trunk MVC calibrated; MyoSuite muscle-derived neutral serial allocation. Constant angle/speed envelope pending validation."
     },
     "Chest_y": {
       "rom_deg": [
@@ -597,8 +609,8 @@
         20.0
       ],
       "active_nm": [
-        106.67735,
-        69.641
+        111.80188388005651,
+        43.813514109643414
       ],
       "rest_deg": 0,
       "stiffness_nm_per_rad": [
@@ -610,9 +622,10 @@
         "rom": "ASSUMPTION",
         "active": "PAN2025_V3",
         "stiffness": "UNMEASURED",
-        "damping": "UNMEASURED"
+        "damping": "UNMEASURED",
+        "distribution": "MYOSUITE_TORSO_DISTRIBUTION"
       },
-      "note": "Pan2025 mass-normalized seated whole-trunk reference; same moment at serial joints, not a sum. Constant angle/speed envelope pending validation."
+      "note": "Pan2025 whole-trunk MVC calibrated; MyoSuite muscle-derived neutral serial allocation. Constant angle/speed envelope pending validation."
     },
     "Chest_z": {
       "rom_deg": [
@@ -620,8 +633,8 @@
         15.0
       ],
       "active_nm": [
-        42.73425,
-        42.73425
+        40.54281894133084,
+        40.91519228871841
       ],
       "rest_deg": 0,
       "stiffness_nm_per_rad": [
@@ -633,9 +646,10 @@
         "rom": "ASSUMPTION",
         "active": "PAN2025_V3",
         "stiffness": "UNMEASURED",
-        "damping": "UNMEASURED"
+        "damping": "UNMEASURED",
+        "distribution": "MYOSUITE_TORSO_DISTRIBUTION"
       },
-      "note": "Pan2025 mass-normalized seated whole-trunk reference; same moment at serial joints, not a sum. Constant angle/speed envelope pending validation."
+      "note": "Pan2025 whole-trunk MVC calibrated; MyoSuite muscle-derived neutral serial allocation. Constant angle/speed envelope pending validation."
     },
     "Neck_x": {
       "rom_deg": [
