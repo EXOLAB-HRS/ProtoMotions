@@ -1,0 +1,85 @@
+"""Candidate continuous-command control owned by b1-a7.
+
+Uses the existing steering context and observations, so a7 weights stay compatible.
+"""
+from dataclasses import dataclass
+import math
+import torch
+from protomotions.envs.control.steering_control import SteeringControl, SteeringControlConfig
+
+
+@dataclass
+class ContinuousSteeringConfig(SteeringControlConfig):
+    _target_: str = "protomotions.envs.control.continuous_steering.ContinuousSteering"
+    fixed_fraction: float = 0.3
+    turn_fraction: float = 0.2
+    acceleration_min: float = 0.2
+    acceleration_max: float = 0.8
+    yaw_rate: float = 0.35
+    turn_angle_max: float = math.pi / 4
+    # Only continuous groups sample stops; other targets use tar_speed_min/max.
+    stop_probability: float = 0.1
+
+
+class ContinuousSteering(SteeringControl):
+    def __init__(self, config, env):
+        super().__init__(config, env)
+        if not (0 <= config.fixed_fraction < 1 and 0 <= config.turn_fraction <= 1-config.fixed_fraction):
+            raise ValueError("Invalid fixed/turn group fractions")
+        if not (0 < config.acceleration_min <= config.acceleration_max and config.yaw_rate > 0):
+            raise ValueError("Command rate limits must be positive")
+        self._goal_speed = torch.ones_like(self._tar_speed)
+        self._goal_heading = torch.zeros_like(self._tar_dir_theta)
+        self._acceleration = torch.ones_like(self._tar_speed) * config.acceleration_min
+        self._mode = torch.zeros_like(self._heading_change_steps)
+
+    def reset(self, env_ids):
+        if len(env_ids) == 0:
+            return
+        root = self.env.simulator.get_root_state().root_pos[env_ids]
+        self._prev_root_pos[env_ids] = root
+        self._curr_root_pos[env_ids] = root
+        r = torch.rand(len(env_ids), device=env_ids.device)
+        self._mode[env_ids] = torch.where(r < self.config.fixed_fraction, 0,
+            torch.where(r >= 1-self.config.turn_fraction, 2, 1))
+        self._tar_speed[env_ids] = 1.
+        self._tar_dir_theta[env_ids] = 0.
+        self._tar_dir[env_ids] = torch.tensor([1., 0.], device=env_ids.device)
+        self._tar_face_dir[env_ids] = self._tar_dir[env_ids]
+        self._resample_task(env_ids)
+        fixed = env_ids[self._mode[env_ids] == 0]
+        self._tar_speed[fixed] = self._goal_speed[fixed]
+
+    def _resample_task(self, env_ids):
+        if len(env_ids) == 0:
+            return
+        c = self.config
+        n, device = len(env_ids), env_ids.device
+        speed = torch.rand(n, device=device) * (c.tar_speed_max-c.tar_speed_min) + c.tar_speed_min
+        speed = torch.where(torch.rand(n, device=device) < c.stop_probability, 0., speed)
+        fixed = self._mode[env_ids] == 0
+        # The fixed group retains its original command for the whole episode.
+        initial = self.env.progress_buf[env_ids] == 0
+        fixed_speed = torch.tensor([.8, 1., 1.2], device=device)[torch.randint(3, (n,), device=device)]
+        speed = torch.where(fixed, torch.where(initial, fixed_speed, self._goal_speed[env_ids]), speed)
+        heading = self._tar_dir_theta[env_ids] + (2*torch.rand(n, device=device)-1)*c.turn_angle_max
+        self._goal_heading[env_ids] = torch.where(self._mode[env_ids] == 2, heading, 0.)
+        self._goal_speed[env_ids] = speed
+        self._acceleration[env_ids] = c.acceleration_min + torch.rand(n, device=device)*(c.acceleration_max-c.acceleration_min)
+        self._heading_change_steps[env_ids] = self.env.progress_buf[env_ids] + torch.randint(
+            c.heading_change_steps_min, c.heading_change_steps_max, (n,), device=device)
+
+    def step(self):
+        # Preserve position history even on command changes.
+        self._prev_root_pos[:] = self._curr_root_pos
+        self._curr_root_pos[:] = self.env.simulator.get_root_state().root_pos
+        ids = (self.env.progress_buf >= self._heading_change_steps).nonzero(as_tuple=False).flatten()
+        self._resample_task(ids)
+        dv = self._acceleration * self.env.dt
+        self._tar_speed += (self._goal_speed-self._tar_speed).clamp(-dv, dv)
+        angle_error = (self._goal_heading-self._tar_dir_theta+math.pi) % (2*math.pi)-math.pi
+        max_turn = self.config.yaw_rate * self.env.dt
+        self._tar_dir_theta += angle_error.clamp(-max_turn, max_turn)
+        self._tar_dir[:, 0] = self._tar_dir_theta.cos()
+        self._tar_dir[:, 1] = self._tar_dir_theta.sin()
+        self._tar_face_dir[:] = self._tar_dir
