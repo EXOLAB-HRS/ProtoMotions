@@ -466,6 +466,14 @@ class AMP(PPO):
         return disc_critic_loss, log_dict
 
     def discriminator_step(self, batch_dict):
+        # The PPO minibatch can be smaller than the configured discriminator batch,
+        # in which case the slices below are shorter than that config value. The
+        # TensorDicts must follow the data, the way the batch TensorDict above
+        # already takes its size from the tensors it holds.
+        discriminator_batch_size = min(
+            self.config.amp_parameters.discriminator_batch_size,
+            batch_dict["action"].shape[0],
+        )
         agent_obs = {}
         for key in batch_dict.keys():
             if "agent_" in key:
@@ -490,7 +498,7 @@ class AMP(PPO):
             negative_expert_obs = self.produce_negative_expert_obs(batch_dict)
 
         expert_obs_td = TensorDict(
-            expert_obs, batch_size=self.config.amp_parameters.discriminator_batch_size
+            expert_obs, batch_size=discriminator_batch_size
         )
         expert_obs_td = self.discriminator(expert_obs_td)
         expert_logits = expert_obs_td[self.discriminator.config.out_keys[0]]
@@ -501,13 +509,13 @@ class AMP(PPO):
                 expert_norm_obs.append(expert_obs_td[key])
 
         agent_obs_td = TensorDict(
-            agent_obs, batch_size=self.config.amp_parameters.discriminator_batch_size
+            agent_obs, batch_size=discriminator_batch_size
         )
         agent_obs_td = self.discriminator(agent_obs_td)
         agent_logits = agent_obs_td[self.discriminator.config.out_keys[0]]
 
         replay_obs_td = TensorDict(
-            replay_obs, batch_size=self.config.amp_parameters.discriminator_batch_size
+            replay_obs, batch_size=discriminator_batch_size
         )
         replay_obs_td = self.discriminator(replay_obs_td)
         replay_logits = replay_obs_td[self.discriminator.config.out_keys[0]]
@@ -515,7 +523,7 @@ class AMP(PPO):
         if self.config.amp_parameters.conditional_discriminator:
             negative_expert_obs_td = TensorDict(
                 negative_expert_obs,
-                batch_size=self.config.amp_parameters.discriminator_batch_size,
+                batch_size=discriminator_batch_size,
             )
             negative_expert_obs_td = self.discriminator(negative_expert_obs_td)
             negative_expert_logits = negative_expert_obs_td[
