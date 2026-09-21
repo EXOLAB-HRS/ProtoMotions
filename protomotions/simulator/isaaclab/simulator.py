@@ -21,7 +21,17 @@ import isaaclab.sim as sim_utils
 
 log = logging.getLogger(__name__)
 from isaaclab.scene import InteractiveScene
-from isaaclab.sim import SimulationContext, PhysxCfg
+from isaaclab.sim import SimulationContext
+
+try:  # Isaac Lab 2.x keeps PhysX in the core package and SimulationCfg.physx
+    from isaaclab.sim import PhysxCfg
+
+    _PHYSICS_FIELD = "physx"
+except ImportError:  # Isaac Lab 3.0 moved PhysX out to isaaclab_physx and
+    # generalised the field to `physics`, PhysX being one backend among several.
+    from isaaclab_physx.physics import PhysxCfg
+
+    _PHYSICS_FIELD = "physics"
 from isaaclab.markers import VisualizationMarkers as IsaacLabVisualizationMarkers
 from isaaclab.markers import VisualizationMarkersCfg as IsaacLabVisualizationMarkersCfg
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
@@ -97,20 +107,21 @@ class IsaacLabSimulator(Simulator):
         # Store custom key handlers
         self._custom_key_handlers = custom_key_handlers or {}
 
+        physx_cfg = PhysxCfg(
+            solver_type=self.config.sim.physx.solver_type,
+            max_position_iteration_count=self.config.sim.physx.num_position_iterations,
+            max_velocity_iteration_count=self.config.sim.physx.num_velocity_iterations,
+            bounce_threshold_velocity=self.config.sim.physx.bounce_threshold_velocity,
+            gpu_max_rigid_contact_count=self.config.sim.physx.gpu_max_rigid_contact_count,
+            gpu_found_lost_pairs_capacity=self.config.sim.physx.gpu_found_lost_pairs_capacity,
+            gpu_found_lost_aggregate_pairs_capacity=self.config.sim.physx.gpu_found_lost_aggregate_pairs_capacity,
+            gpu_max_rigid_patch_count=self.config.sim.physx.gpu_max_rigid_patch_count,
+        )
         sim_cfg = sim_utils.SimulationCfg(
             device=str(device),
             dt=1.0 / self.config.sim.fps,
             render_interval=self.config.sim.decimation,
-            physx=PhysxCfg(
-                solver_type=self.config.sim.physx.solver_type,
-                max_position_iteration_count=self.config.sim.physx.num_position_iterations,
-                max_velocity_iteration_count=self.config.sim.physx.num_velocity_iterations,
-                bounce_threshold_velocity=self.config.sim.physx.bounce_threshold_velocity,
-                gpu_max_rigid_contact_count=self.config.sim.physx.gpu_max_rigid_contact_count,
-                gpu_found_lost_pairs_capacity=self.config.sim.physx.gpu_found_lost_pairs_capacity,
-                gpu_found_lost_aggregate_pairs_capacity=self.config.sim.physx.gpu_found_lost_aggregate_pairs_capacity,
-                gpu_max_rigid_patch_count=self.config.sim.physx.gpu_max_rigid_patch_count,
-            ),
+            **{_PHYSICS_FIELD: physx_cfg},
         )
         self._simulation_app = simulation_app
         self._sim = SimulationContext(sim_cfg)
