@@ -18,6 +18,11 @@ configure_robot_and_simulator = _base.configure_robot_and_simulator
 apply_inference_overrides = _base.apply_inference_overrides
 
 
+def discriminator_batch_size(ppo_batch_size):
+    """Keep AMP batches valid when local smoke/VRAM overrides shrink PPO."""
+    return min(4096, ppo_batch_size)
+
+
 def agent_config(robot_cfg, env_cfg, args):
     cfg = _base.agent_config(robot_cfg, env_cfg, args)
     cfg.task_reward_w = 0.6
@@ -26,6 +31,9 @@ def agent_config(robot_cfg, env_cfg, args):
     cfg.model.actor_optimizer.lr = 2e-5
     cfg.model.critic_optimizer.lr = 1e-4
     cfg.model.disc_critic_optimizer.lr = 1e-4
+    cfg.amp_parameters.discriminator_batch_size = discriminator_batch_size(
+        args.batch_size
+    )
     cfg.save_epoch_checkpoint_every = max(1, round(5_000_000 / (args.num_envs * 32)))
     return cfg
 
