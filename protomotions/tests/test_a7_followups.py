@@ -3,7 +3,8 @@ import math
 from types import SimpleNamespace
 import torch
 from protomotions.envs.rewards.locomotion_quality import (
-    head_upright, head_angular_stability, target_second_difference,
+    head_upright, head_angular_stability, reference_bounded_head_motion,
+    target_second_difference,
 )
 from protomotions.envs.control.continuous_steering import ContinuousSteering, ContinuousSteeringConfig
 
@@ -30,6 +31,26 @@ def test_target_reward_preserves_constant_rate_and_penalizes_reversal():
     assert r[0] == 1 and r[1] < .01
 
 
+def test_reference_bounded_head_motion_penalizes_only_envelope_excess():
+    identity = torch.tensor([0., 0., 0., 1.])
+    tilted = torch.tensor([math.sin(math.pi / 8), 0., 0., math.cos(math.pi / 8)])
+    rotations = torch.stack((
+        torch.stack((identity, identity)),
+        torch.stack((identity, tilted)),
+    ))
+    angular_velocity = torch.tensor([
+        [[0., 0., 2.], [0., 0., 2.]],
+        [[0., 0., 0.], [3., 0., 0.]],
+    ])
+    reward = reference_bounded_head_motion(
+        rotations, angular_velocity, head_index=1, chest_index=0,
+        tilt_limit_rad=math.radians(15.7145),
+        relative_speed_limit_rad_s=math.radians(77.2072),
+    )
+    assert reward[0] == 1
+    assert reward[1] < 0.1
+
+
 def test_continuous_commands_bound_rates_keep_velocity_and_mix_modes():
     torch.manual_seed(2944)
     root = torch.zeros(600,3)
@@ -49,3 +70,23 @@ def test_continuous_commands_bound_rates_keep_velocity_and_mix_modes():
         torch.testing.assert_close(c._tar_speed[fixed],fixed_speed)
         torch.testing.assert_close(c._tar_face_dir,c._tar_dir)
         assert ((c._tar_speed >= 0) & (c._tar_speed <= 1.5)).all()
+
+
+def test_stage_d_continuous_commands_cover_full_heading_and_independent_facing():
+    torch.manual_seed(2947)
+    root = torch.zeros(1000, 3)
+    env = SimpleNamespace(num_envs=1000, device='cpu', dt=1/30,
+        progress_buf=torch.zeros(1000, dtype=torch.long),
+        simulator=SimpleNamespace(get_root_state=lambda: SimpleNamespace(root_pos=root)))
+    config = ContinuousSteeringConfig(
+        fixed_fraction=0.2, turn_fraction=0.6,
+        full_heading_for_turn=True, independent_facing_fraction=1.0,
+        heading_change_steps_min=4, heading_change_steps_max=5,
+    )
+    control = ContinuousSteering(config, env)
+    control.reset(torch.arange(1000))
+    turning = control._mode == 2
+    assert turning.sum() > 500
+    assert (control._goal_heading[turning].abs() > math.pi / 2).any()
+    facing_alignment = (control._tar_face_dir[turning] * control._tar_dir[turning]).sum(-1)
+    assert (facing_alignment < 0.5).any()

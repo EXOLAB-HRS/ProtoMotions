@@ -18,6 +18,32 @@ def head_angular_stability(body_ang_vel: Tensor, body_index: int,
     return torch.exp(-body_ang_vel[:, body_index, :2].square().sum(-1) / speed_scale**2)
 
 
+def reference_bounded_head_motion(
+    body_rot: Tensor,
+    body_ang_vel: Tensor,
+    head_index: int,
+    chest_index: int,
+    tilt_limit_rad: float,
+    relative_speed_limit_rad_s: float,
+) -> Tensor:
+    """Reward head motion inside a measured reference envelope.
+
+    Shared world rotation of the head and chest cancels in the relative angular
+    velocity term.  Values inside both limits receive full credit; only excess
+    is penalized.  Limits are experiment data, not anatomical constants.
+    """
+    q = body_rot[:, head_index]
+    q = q / q.norm(dim=-1, keepdim=True).clamp_min(1e-8)
+    up_z = (1 - 2 * (q[:, 0].square() + q[:, 1].square())).clamp(-1, 1)
+    tilt = torch.acos(up_z)
+    relative_speed = (
+        body_ang_vel[:, head_index] - body_ang_vel[:, chest_index]
+    ).norm(dim=-1)
+    tilt_excess = torch.relu(tilt / tilt_limit_rad - 1)
+    speed_excess = torch.relu(relative_speed / relative_speed_limit_rad_s - 1)
+    return torch.exp(-(tilt_excess.square() + speed_excess.square()))
+
+
 def target_second_difference(current: Tensor, history: Tensor,
                              scale: float = 0.05) -> Tensor:
     """Bounded PD-target second-difference reward, radians per 30-Hz step².

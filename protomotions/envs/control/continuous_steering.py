@@ -17,6 +17,8 @@ class ContinuousSteeringConfig(SteeringControlConfig):
     acceleration_max: float = 0.8
     yaw_rate: float = 0.35
     turn_angle_max: float = math.pi / 4
+    full_heading_for_turn: bool = False
+    independent_facing_fraction: float = 0.0
     # Only continuous groups sample stops; other targets use tar_speed_min/max.
     stop_probability: float = 0.1
 
@@ -28,10 +30,13 @@ class ContinuousSteering(SteeringControl):
             raise ValueError("Invalid fixed/turn group fractions")
         if not (0 < config.acceleration_min <= config.acceleration_max and config.yaw_rate > 0):
             raise ValueError("Command rate limits must be positive")
+        if not 0 <= config.independent_facing_fraction <= 1:
+            raise ValueError("independent_facing_fraction must be in [0, 1]")
         self._goal_speed = torch.ones_like(self._tar_speed)
         self._goal_heading = torch.zeros_like(self._tar_dir_theta)
         self._acceleration = torch.ones_like(self._tar_speed) * config.acceleration_min
         self._mode = torch.zeros_like(self._heading_change_steps)
+        self._independent_facing = torch.zeros_like(self._heading_change_steps, dtype=torch.bool)
 
     def reset(self, env_ids):
         if len(env_ids) == 0:
@@ -62,12 +67,24 @@ class ContinuousSteering(SteeringControl):
         initial = self.env.progress_buf[env_ids] == 0
         fixed_speed = torch.tensor([.8, 1., 1.2], device=device)[torch.randint(3, (n,), device=device)]
         speed = torch.where(fixed, torch.where(initial, fixed_speed, self._goal_speed[env_ids]), speed)
-        heading = self._tar_dir_theta[env_ids] + (2*torch.rand(n, device=device)-1)*c.turn_angle_max
+        if c.full_heading_for_turn:
+            heading = (2 * torch.rand(n, device=device) - 1) * math.pi
+        else:
+            heading = self._tar_dir_theta[env_ids] + (2*torch.rand(n, device=device)-1)*c.turn_angle_max
         self._goal_heading[env_ids] = torch.where(self._mode[env_ids] == 2, heading, 0.)
         self._goal_speed[env_ids] = speed
         self._acceleration[env_ids] = c.acceleration_min + torch.rand(n, device=device)*(c.acceleration_max-c.acceleration_min)
         self._heading_change_steps[env_ids] = self.env.progress_buf[env_ids] + torch.randint(
             c.heading_change_steps_min, c.heading_change_steps_max, (n,), device=device)
+        independent = (self._mode[env_ids] == 2) & (
+            torch.rand(n, device=device) < c.independent_facing_fraction
+        )
+        self._independent_facing[env_ids] = independent
+        face_angle = (2 * torch.rand(n, device=device) - 1) * math.pi
+        facing = torch.stack((face_angle.cos(), face_angle.sin()), dim=-1)
+        self._tar_face_dir[env_ids] = torch.where(
+            independent[:, None], facing, self._tar_dir[env_ids]
+        )
 
     def step(self):
         # Preserve position history even on command changes.
@@ -82,4 +99,5 @@ class ContinuousSteering(SteeringControl):
         self._tar_dir_theta += angle_error.clamp(-max_turn, max_turn)
         self._tar_dir[:, 0] = self._tar_dir_theta.cos()
         self._tar_dir[:, 1] = self._tar_dir_theta.sin()
-        self._tar_face_dir[:] = self._tar_dir
+        coupled = ~self._independent_facing
+        self._tar_face_dir[coupled] = self._tar_dir[coupled]
