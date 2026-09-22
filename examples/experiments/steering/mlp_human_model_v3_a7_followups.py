@@ -59,6 +59,10 @@ def make_env_config(robot_cfg, args, experiment):
             dynamic_vars={"current": EnvContext.current_processed_action,
                           "history": EnvContext.historical.processed_actions},
             static_params={"weight": .03, "scale": .05, "zero_during_grace_period": True})
+    elif experiment == "a7":
+        # The a7 condition itself: Stage A commands and rewards unchanged. Candidates
+        # that vary only an agent-side setting use this so the env stays the control.
+        pass
     elif experiment == "b1-a7":
         cfg.control_components["steering"] = ContinuousSteeringConfig(
             tar_speed_min=.5, tar_speed_max=1.5,
