@@ -54,3 +54,39 @@ def target_second_difference(current: Tensor, history: Tensor,
     """
     delta2 = current - 2 * history[:, 0] + history[:, 1]
     return torch.exp(-delta2.square().mean(-1) / scale**2)
+
+
+def head_roll_stability(
+    body_rot: Tensor,
+    body_ang_vel: Tensor,
+    head_index: int,
+    root_index: int,
+    roll_scale_rad: float,
+    roll_rate_scale_rad_s: float,
+) -> Tensor:
+    """Penalize head roll angle and roll rate, read in the root heading frame.
+
+    Owner: b2-a7-headroll / a7-headroll. On a7 the head's excess over the
+    reference is lateral: roll rate ~3x and a speed-dependent standing tilt
+    (+4.5 deg at 0.8 m/s, -10.2 deg at 1.2 m/s), while pitch matches the
+    reference.  Terms that also weigh pitch, or that give full credit inside a
+    p95 envelope, leave most of that motion unpenalized, so this reads only the
+    roll axis and pulls continuously toward zero.
+
+    The heading frame comes from the root's forward axis projected on the
+    ground, so steering yaw is not penalized.  xyzw quaternions.
+    """
+    qr = body_rot[:, root_index]
+    qr = qr / qr.norm(dim=-1, keepdim=True).clamp_min(1e-8)
+    x, y, z, w = qr.unbind(-1)
+    fwd = torch.stack((1 - 2 * (y * y + z * z), 2 * (x * y + w * z)), dim=-1)
+    fwd = fwd / fwd.norm(dim=-1, keepdim=True).clamp_min(1e-8)
+    left = torch.stack((-fwd[:, 1], fwd[:, 0]), dim=-1)
+
+    qh = body_rot[:, head_index]
+    qh = qh / qh.norm(dim=-1, keepdim=True).clamp_min(1e-8)
+    x, y, z, w = qh.unbind(-1)
+    up = torch.stack((2 * (x * z + w * y), 2 * (y * z - w * x), 1 - 2 * (x * x + y * y)), dim=-1)
+    roll = torch.atan2((up[:, :2] * left).sum(-1), up[:, 2])
+    roll_rate = (body_ang_vel[:, head_index, :2] * fwd).sum(-1)
+    return torch.exp(-((roll / roll_scale_rad).square() + (roll_rate / roll_rate_scale_rad_s).square()))

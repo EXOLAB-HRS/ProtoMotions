@@ -1,10 +1,11 @@
 """Shared candidate configuration for a9, a10, b1-a7; no new model version."""
 import importlib.util
+import math
 from pathlib import Path
 from protomotions.envs.context_views import EnvContext
 from protomotions.envs.mdp_component import MdpComponent
 from protomotions.envs.rewards.locomotion_quality import (
-    head_upright, head_angular_stability, target_second_difference,
+    head_upright, head_angular_stability, target_second_difference, head_roll_stability,
 )
 from protomotions.envs.control.continuous_steering import ContinuousSteeringConfig
 
@@ -70,4 +71,42 @@ def make_env_config(robot_cfg, args, experiment):
             random_heading_probability=0., enable_rand_facing=False)
     else:
         raise ValueError(experiment)
+    return cfg
+
+
+# ---------------------------------------------------------------------------
+# Method 1 (A -> B -> C -> D fine-tune), owner jinsu. Evidence:
+# output/260924/e01_head_posture_diagnosis/.
+HEAD_ROLL_WEIGHT = .15              # same task share as a12's head term
+HEAD_ROLL_SCALE_DEG = 8.03          # reference max of per-clip mean head roll
+HEAD_ROLL_RATE_SCALE_DEG_S = 41.5   # 2 x reference max per-clip roll rate (20.76);
+                                    # a7 sits at 36-40, so the kernel keeps a
+                                    # gradient there instead of saturating at 0
+
+# a13 stage b: A replay 30%, 0.7-1.4 m/s rate-limited speed changes, no stop or turn.
+STAGE_B_STEERING = dict(
+    fixed_fraction=.30, turn_fraction=0., stop_probability=0.,
+    tar_speed_min=.7, tar_speed_max=1.4, acceleration_min=.4, acceleration_max=.8,
+    full_heading_for_turn=False, independent_facing_fraction=0.,
+    heading_change_steps_min=90, heading_change_steps_max=181,
+    random_heading_probability=0., enable_rand_facing=False,
+)
+
+
+def add_head_roll(cfg, robot_cfg):
+    names = robot_cfg.kinematic_info.body_names
+    cfg.reward_components["heading_rew"].static_params["weight"] = 1 - HEAD_ROLL_WEIGHT
+    cfg.reward_components["head_roll_stability"] = MdpComponent(
+        compute_func=head_roll_stability,
+        dynamic_vars={"body_rot": EnvContext.current.rigid_body_rot,
+                      "body_ang_vel": EnvContext.current.rigid_body_ang_vel},
+        static_params={"head_index": names.index("Head"), "root_index": names.index("Pelvis"),
+                       "roll_scale_rad": math.radians(HEAD_ROLL_SCALE_DEG),
+                       "roll_rate_scale_rad_s": math.radians(HEAD_ROLL_RATE_SCALE_DEG_S),
+                       "weight": HEAD_ROLL_WEIGHT})
+    return cfg
+
+
+def set_stage_b_steering(cfg):
+    cfg.control_components["steering"] = ContinuousSteeringConfig(**STAGE_B_STEERING)
     return cfg
