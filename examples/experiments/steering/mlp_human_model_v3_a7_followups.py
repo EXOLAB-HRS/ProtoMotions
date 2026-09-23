@@ -110,3 +110,16 @@ def add_head_roll(cfg, robot_cfg):
 def set_stage_b_steering(cfg):
     cfg.control_components["steering"] = ContinuousSteeringConfig(**STAGE_B_STEERING)
     return cfg
+
+
+# The a7 heading kernel is exp(-2 * err^2): a 0.15 m/s speed error, the Stage A
+# limit, costs 3% of the heading reward, less than a quarter of what the head
+# roll term takes for a7's 1.2 m/s tilt. Every candidate that added a second
+# objective to it lost speed calibration (b1-a7, b2-a7, b2-a7-headroll). V11 and
+# a11-a13 use 8, where the same error costs 16.5%.
+SHARP_VEL_ERR_SCALE = 8.
+
+
+def sharpen_speed_tracking(cfg):
+    cfg.reward_components["heading_rew"].static_params["vel_err_scale"] = SHARP_VEL_ERR_SCALE
+    return cfg
