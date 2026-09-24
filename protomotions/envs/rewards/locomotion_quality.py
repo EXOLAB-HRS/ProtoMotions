@@ -90,3 +90,22 @@ def head_roll_stability(
     roll = torch.atan2((up[:, :2] * left).sum(-1), up[:, 2])
     roll_rate = (body_ang_vel[:, head_index, :2] * fwd).sum(-1)
     return torch.exp(-((roll / roll_scale_rad).square() + (roll_rate / roll_rate_scale_rad_s).square()))
+
+
+def pelvis_yaw_stability(root_rot: Tensor, tar_face_dir: Tensor, yaw_scale_rad: float) -> Tensor:
+    """Penalize pelvis yaw away from the commanded facing direction.
+
+    Owner: method 1 Stage B (b2 ... -pyaw).  Every a7-lineage policy fails the
+    Stage B 1.4 m/s hold on pelvis yaw (8.4 deg mean |error| against the 7.6 deg
+    reference maximum), almost all of it stride-to-stride sway rather than a
+    heading offset.  The heading reward's facing term is clamp(cos(error)),
+    which charges 0.3% of the heading reward for that sway, so nothing opposes
+    it.  xyzw quaternions; the yaw is read from the root forward axis projected
+    on the ground, the same angle the gate scores.
+    """
+    q = root_rot / root_rot.norm(dim=-1, keepdim=True).clamp_min(1e-8)
+    x, y, z, w = q.unbind(-1)
+    fwd_x, fwd_y = 1 - 2 * (y * y + z * z), 2 * (x * y + w * z)
+    err = torch.atan2(fwd_y * tar_face_dir[:, 0] - fwd_x * tar_face_dir[:, 1],
+                      fwd_x * tar_face_dir[:, 0] + fwd_y * tar_face_dir[:, 1])
+    return torch.exp(-(err / yaw_scale_rad).square())

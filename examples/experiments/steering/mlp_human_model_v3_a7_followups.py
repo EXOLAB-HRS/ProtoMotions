@@ -6,6 +6,7 @@ from protomotions.envs.context_views import EnvContext
 from protomotions.envs.mdp_component import MdpComponent
 from protomotions.envs.rewards.locomotion_quality import (
     head_upright, head_angular_stability, target_second_difference, head_roll_stability,
+    pelvis_yaw_stability,
 )
 from protomotions.envs.control.continuous_steering import ContinuousSteeringConfig
 
@@ -133,4 +134,29 @@ FAST_ACCELERATION = dict(acceleration_min=.8, acceleration_max=1.6)
 
 def set_stage_b_fast_acceleration(cfg):
     cfg.control_components["steering"] = ContinuousSteeringConfig(**{**STAGE_B_STEERING, **FAST_ACCELERATION})
+    return cfg
+
+
+# Stage B fails every candidate on 1.4 m/s pelvis yaw (8.4 deg, almost all stride
+# sway) against the 7.6 deg reference maximum, which the facing term barely sees.
+# Scale = that maximum, as the head roll scale is the reference roll maximum.
+PELVIS_YAW_WEIGHT = .10
+PELVIS_YAW_SCALE_DEG = 7.6
+STEEP_ACCELERATION = dict(acceleration_min=1.6, acceleration_max=3.2)
+
+
+def add_pelvis_yaw(cfg):
+    heading = cfg.reward_components["heading_rew"].static_params
+    heading["weight"] = heading["weight"] - PELVIS_YAW_WEIGHT
+    cfg.reward_components["pelvis_yaw_stability"] = MdpComponent(
+        compute_func=pelvis_yaw_stability,
+        dynamic_vars={"root_rot": EnvContext.current.root_rot,
+                      "tar_face_dir": EnvContext.steering.tar_face_dir},
+        static_params={"yaw_scale_rad": math.radians(PELVIS_YAW_SCALE_DEG),
+                       "weight": PELVIS_YAW_WEIGHT})
+    return cfg
+
+
+def set_stage_b_steep_acceleration(cfg):
+    cfg.control_components["steering"] = ContinuousSteeringConfig(**{**STAGE_B_STEERING, **STEEP_ACCELERATION})
     return cfg
