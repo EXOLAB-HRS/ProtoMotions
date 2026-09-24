@@ -23,13 +23,23 @@ def test_collision_asset_preserves_plant_and_restores_only_neighbors():
     assert info['excluded'] == legacy['excluded'] | legacy['adjacent']
 
 
-def test_v31_reuses_v3_controller_and_forces(monkeypatch):
+def assert_only_neck_head_damping_doubled(a, b):
+    from copy import deepcopy
+    normalized = deepcopy(b.control)
+    for name, info in normalized.control_info.items():
+        if name.startswith(('Neck_', 'Head_')):
+            assert info.damping == 2 * a.control.control_info[name].damping
+            info.damping /= 2
+    assert a.control == normalized
+
+
+def test_v31_reuses_v3_forces_with_approved_damping(monkeypatch):
     monkeypatch.delenv('PROTOMOTIONS_HUMAN_MODEL', raising=False)
     from protomotions.robot_configs.factory import robot_config
     a, b = robot_config('human_model_v3'), robot_config('human_model_v3.1')
     assert a.human_model_profile == b.human_model_profile == 'human_model_v3'
     assert a.human_model_parameters == b.human_model_parameters
-    assert a.control == b.control
+    assert_only_neck_head_damping_doubled(a, b)
     assert a.kinematic_info.dof_names == b.kinematic_info.dof_names
     assert b.asset.self_collisions
     assert b.human_model_collision_profile == 'human_model_v3.1'
@@ -49,7 +59,7 @@ def test_backend_selects_revision_without_changing_forces(monkeypatch):
     b, bm = prepare_simulator(robot_config('human_model_v3.1'), sim, 'cpu')
     assert (Path(b.asset.asset_root)/b.asset.usd_asset_file_name).resolve() == get_model('human_model_v3.1').asset_path('usd').resolve()
     assert (Path(a.asset.asset_root)/a.asset.usd_asset_file_name).resolve() == get_model('human_model_v3').asset_path('usd').resolve()
-    assert a.control == b.control
+    assert_only_neck_head_damping_doubled(a, b)
     for field in ('lower', 'upper', 'backend_limit', 'negative', 'positive'):
         assert torch.equal(getattr(am, field), getattr(bm, field))
 
@@ -67,3 +77,15 @@ def test_broad_exclusion_is_rejected(tmp_path):
     s.GetRootLayer().Save()
     with pytest.raises(ValueError, match='over-broad'):
         validate_collision_asset(get_model('human_model_v3').asset_path('usd'), path)
+
+
+def test_a11_configuration_preserves_v31_kd2_without_compounding(monkeypatch):
+    from types import SimpleNamespace
+    from protomotions.robot_configs.factory import robot_config
+    from examples.experiments.steering.mlp_human_model_v3_a11_proto1 import configure_robot_and_simulator
+    monkeypatch.delenv('PROTOMOTIONS_HUMAN_MODEL', raising=False)
+    a, b = robot_config('human_model_v3'), robot_config('human_model_v3.1')
+    sim = SimpleNamespace(sim=SimpleNamespace())
+    for _ in range(2):
+        configure_robot_and_simulator(b, sim, SimpleNamespace())
+        assert_only_neck_head_damping_doubled(a, b)

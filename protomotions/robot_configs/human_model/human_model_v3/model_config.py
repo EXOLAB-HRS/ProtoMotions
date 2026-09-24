@@ -41,7 +41,11 @@ def _configure_gains(robot):
     robot.control.control_type=ControlType.PROPORTIONAL
     for name, gains in settings['pd_gains'].items():
         robot.control.control_info[name].stiffness=gains['kp']
-        robot.control.control_info[name].damping=gains['kd']
+        # Reset from canonical values: repeated experiment configuration must
+        # not multiply the selected revision's damping a second time.
+        multiplier = (2.0 if getattr(robot, 'human_model_collision_profile', None) == 'human_model_v3.1'
+                      and name.startswith(('Neck_', 'Head_')) else 1.0)
+        robot.control.control_info[name].damping=gains['kd'] * multiplier
 
 
 def configure_pd(robot, simulator):
