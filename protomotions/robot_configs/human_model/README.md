@@ -7,11 +7,13 @@
 ### human_model_v3.1 사용 안내 — 2026-09-24
 
 **신규 self-collision ON 학습은 v3.1을 명시적으로 선택한다.** 사용자 승인 공유판이며 성능 상태는
-`candidate`(단일조건 screening 완료)다. 기존 모델·checkpoint는 보존하고 목 PD·보상은 바꾸지 않았다.
+`candidate`(단일조건 screening 완료)다. 기존 모델·checkpoint는 보존한다.
+2026-09-24 후속 사용자 승인으로 **신규 v3.1 기본 Neck/Head Kd를 v3의2배**로 선택했다. 보상은 변경하지 않았다.
 
 - 모델: `human_model_v3_1/model_config.py`, 자산: `human_model_v3_1/assets/human_model_v3_1.usda`.
 - factory 선택: `human_model_v3.1` 또는 `human_model_v3_1`. force profile은 의도적으로 `human_model_v3`다.
-- 59좌표·근력·질량·관성·PD·형상은 v3 그대로. v4로 변환한 v3용 모션과 a11 가중치를 재사용한다.
+- 59좌표·근력·질량·관성·Kp·형상은 v3 그대로. Neck/Head Kd만2배이며 나머지 PD는 동일하다.
+  v4로 변환한 v3용 모션과 a11 가중치를 재사용한다.
 - IsaacLab 전용. USD만 복사하지 말고 전체 저장소를 받는다. override USD는 v2 자산을 상대 경로로
   참조하며 v3 profile·공통 연결 코드도 필요하다. 아래 v2 teacher 연결 전 설명은 당시 기록이다.
 
@@ -29,6 +31,21 @@ frame 자체가 충돌한 것이 아니라, 실제 신체 collider들이 더 이
 `physics:filteredPairs` 또는 `collision.inspect_stage`로 확인한다.
 
 #### 학습 실행 방법
+
+현재 기본 Kd(N m s/rad)는 Neck/Head 각각 x=2.6666666667, y=4, z=1.3333333333이다.
+factory와 a11의 configure_pd 재호출 모두 이 값을 유지하며 중복2배를 하지 않는다.
+실험에서 별도로 Kd 배율을 적용하는 a17 같은 설정은 추가 배율이 붙을 수 있으므로 a11 예시를 사용한다.
+**기존 checkpoint inference/resume의 저장된 PD는 자동 변경하지 않는다.** 이전 checkpoint를
+평가할 때는 충돌 override에 더해 아래6개를 명시해야 새 기본과 같은 조건이다:
+
+```text
+robot.control.control_info.Neck_x.damping=2.666666666666667
+robot.control.control_info.Neck_y.damping=4.0
+robot.control.control_info.Neck_z.damping=1.3333333333333335
+robot.control.control_info.Head_x.damping=2.666666666666667
+robot.control.control_info.Head_y.damping=4.0
+robot.control.control_info.Head_z.damping=1.3333333333333335
+```
 
 human-controller checkout에서 `git submodule update --init --recursive`로 고정된 ProtoMotions를 받는다.
 IsaacLab Python 환경에서 아래 명령을 실행한다. 모션은 Git에 없으므로 공유된
@@ -56,6 +73,11 @@ v3→v3.1 변경에 쓰지 않는다. checkpoint의 action/observation 구조는
 factory 기본도 ON이나 다른 실험 설정의 덮어쓰기를 막기 위해 위 override로 명시한다.
 
 #### 검증 범위
+
+Kd2 기본 선택 근거: 동일a11/v3.1/seed2947/1m/s/20초, Neck+Head Kd1/1.5/2배 비교에서
+모두 종료0,5–20초 머리 각속도101.32/83.18/73.21deg/s, 목·머리 토크 포화0%.
+fine-tune 없이2배에서27.7% 감소. 다중방향·속도 안정성의 최종 인증은 아니다.
+아래 충돌 비교는 **Kd1 당시 이력**으로 새 기본 Kd2 결과와 구분한다.
 
 관련8개 단위/회귀 통과. 동일a11·초기상태·seed2947·1m/s·10초에서 기존ON은2.30초 실패,
 OFF/보완ON은 종료0. 5–10초 머리 각속도는OFF101.38, 보완ON100.64deg/s로 거의 불변이다.

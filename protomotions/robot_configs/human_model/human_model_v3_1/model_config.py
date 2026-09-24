@@ -1,4 +1,4 @@
-"""Collision-only v3 revision; single-condition screening passed, candidate."""
+"""v3 collision revision with user-approved Neck/Head Kd2 default (2026-09-24)."""
 
 MODEL = {
     "model_id": "human_model_v3.1", "resource_directory": "human_model_v3_1",
@@ -15,4 +15,6 @@ def robot_config():
     robot = v3_config()
     robot.human_model_collision_profile = MODEL["model_id"]
     robot.asset.self_collisions = True
+    from ..human_model_v3.model_config import _configure_gains
+    _configure_gains(robot)
     return robot
