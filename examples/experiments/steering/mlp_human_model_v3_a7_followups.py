@@ -123,3 +123,14 @@ SHARP_VEL_ERR_SCALE = 8.
 def sharpen_speed_tracking(cfg):
     cfg.reward_components["heading_rew"].static_params["vel_err_scale"] = SHARP_VEL_ERR_SCALE
     return cfg
+
+
+# Stage B settle fails mostly on deceleration: 1.4 -> 1.0 m/s takes 3-6.5 s against
+# the 1.18 s the reference's slowest speed change allows, while 1.0 -> 1.4 is 1.1-2 s.
+# Train on command ramps twice as steep as the gate's 0.4/0.8 m/s^2.
+FAST_ACCELERATION = dict(acceleration_min=.8, acceleration_max=1.6)
+
+
+def set_stage_b_fast_acceleration(cfg):
+    cfg.control_components["steering"] = ContinuousSteeringConfig(**{**STAGE_B_STEERING, **FAST_ACCELERATION})
+    return cfg
