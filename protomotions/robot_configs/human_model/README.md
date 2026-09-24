@@ -4,10 +4,75 @@
 
 ## 버전 선택과 소유 경로
 
+### human_model_v3.1 사용 안내 — 2026-09-24
+
+**신규 self-collision ON 학습은 v3.1을 명시적으로 선택한다.** 사용자 승인 공유판이며 성능 상태는
+`candidate`(단일조건 screening 완료)다. 기존 모델·checkpoint는 보존하고 목 PD·보상은 바꾸지 않았다.
+
+- 모델: `human_model_v3_1/model_config.py`, 자산: `human_model_v3_1/assets/human_model_v3_1.usda`.
+- factory 선택: `human_model_v3.1` 또는 `human_model_v3_1`. force profile은 의도적으로 `human_model_v3`다.
+- 59좌표·근력·질량·관성·PD·형상은 v3 그대로. v4로 변환한 v3용 모션과 a11 가중치를 재사용한다.
+- IsaacLab 전용. USD만 복사하지 말고 전체 저장소를 받는다. override USD는 v2 자산을 상대 경로로
+  참조하며 v3 profile·공통 연결 코드도 필요하다. 아래 v2 teacher 연결 전 설명은 당시 기록이다.
+
+#### 중간 링크와 충돌 보완
+
+3축 관절은 `부모 → 회전축1 → frame → 회전축2 → frame → 회전축3 → 신체분절`로 구성한다.
+`_joint_frame_*`는 작은 capsule이 아니라 **충돌/시각 형상이 없는 수치 rigid body**다.
+한 관절의 frame들은 같은 관절 위치에 놓이며 frame 사이 변위는0이다. 각 질량1e-6kg,
+대각 관성1e-9kg·m², 총34개다. 발목/거골하 분리용 Talus는 별도 분절로 이 frame과 구분한다.
+frame 자체가 충돌한 것이 아니라, 실제 신체 collider들이 더 이상 직접 parent-child가 아니어서
+자동 충돌 제외가 끊긴 것이 문제다. 물리 이웃19쌍 제외를 복구했고 기존 제외도 보존했다.
+유효 제외33쌍은 원래 SMPL의 명시적 제외+직접 이웃 제외와 일치한다.
+좌우 ankle/toe끼리, Hand–Chest 충돌은 유지한다. 단, 원래 SMPL의 반대쪽 Knee–Ankle/Toe
+제외 등도 유지하므로 **모든 비이웃 충돌이 켜진 것은 아니다**. 정확한 목록은 override USD의
+`physics:filteredPairs` 또는 `collision.inspect_stage`로 확인한다.
+
+#### 학습 실행 방법
+
+human-controller checkout에서 `git submodule update --init --recursive`로 고정된 ProtoMotions를 받는다.
+IsaacLab Python 환경에서 아래 명령을 실행한다. 모션은 Git에 없으므로 공유된
+**v4→human_model_v3용59좌표 pack**을 별도로 준비한다. 대문자 경로/이름은 실제 서버 경로와
+새 실험 이름으로 교체한다. 환경수·batch는 서버 자원에 맞춘다.
+
+```bash
+cd ProtoMotions
+python protomotions/train_agent.py \
+  --robot-name human_model_v3.1 --simulator isaaclab \
+  --experiment-path examples/experiments/steering/mlp_human_model_v3_a11_proto1.py \
+  --experiment-name NEW_V31_RUN \
+  --motion-file /ABS/PATH/TO/V4_HUMAN_MODEL_V3_MOTIONS.pt \
+  --num-envs 512 --batch-size 8192 --seed 2947 \
+  --training-max-steps 100000000 \
+  --overrides robot.asset.self_collisions=True robot.human_model_collision_profile=human_model_v3.1
+```
+
+이는 a11 recipe에 plant만 v3.1로 선택한 실행 예시이지 새 학습 완료 기록이 아니다.
+warm start는 새 experiment-name으로 `--checkpoint /ABS/PATH/last.ckpt`를 추가한다.
+기존 experiment-name의 resume은 저장 config를 그대로 사용하고 CLI override를 적용하지 않으므로
+v3→v3.1 변경에 쓰지 않는다. checkpoint의 action/observation 구조는 recipe와 같아야 한다.
+시작 로그의 USD가 `human_model_v3_1/assets/human_model_v3_1.usda`인지, resolved config의
+`asset.self_collisions=True`, `human_model_collision_profile=human_model_v3.1`인지 확인한다.
+factory 기본도 ON이나 다른 실험 설정의 덮어쓰기를 막기 위해 위 override로 명시한다.
+
+#### 검증 범위
+
+관련8개 단위/회귀 통과. 동일a11·초기상태·seed2947·1m/s·10초에서 기존ON은2.30초 실패,
+OFF/보완ON은 종료0. 5–10초 머리 각속도는OFF101.38, 보완ON100.64deg/s로 거의 불변이다.
+런타임 collider24개, 제외33쌍, 누락 물리이웃0쌍. 장기/다중방향 안정성·reference 머리 gate·
+접촉점 slip은 미검증이다. 기존 정책 다중조건 평가 후 fine-tune을 우선 검토한다.
+ProtoMotions 루트에서 pxr가 import 가능한 IsaacLab 환경으로 검사한다:
+
+```bash
+python -m pytest protomotions/robot_configs/human_model/tests/common/test_collision_revision.py protomotions/robot_configs/human_model/tests/common/test_registry.py -q
+```
+
 | 경로 | 역할·상태 |
 |---|---|
 | `common/` | 공통 계산·연결·metric·검증/보정 도구. v1/v2 force 계산과 IsaacLab 연결. v1 opt-in strength/activation/fatigue 후보를 v2에서 자동 실행하지 않음 |
-| `human_model_v1/` | 현재 모델. `model_config.py`, `joint_map.json`, `profiles/`, `assets/`, SHA/provenance `manifest.json` |
+| `human_model_v1/` | 이전 모델·재현 기준. `model_config.py`, `joint_map.json`, `profiles/`, `assets/`, SHA/provenance `manifest.json` |
+| `human_model_v3/` | 기존 근력·PD 기준 및 checkpoint 재현 보존 |
+| `human_model_v3_1/` | 신규 self-collision ON용 충돌 보완; candidate, 위 사용 안내 참조 |
 | `human_model_v2/` | 59좌표 plant: MyoLeg 기반 하지 고정 축, ankle/subtalar 분리. 인체자료 보정 수동 profile 채택; 독립 생체 인증 아님 |
 | `registry.py` | `human_model_v1`와 기존 `healthy_adult_v1` 이름 연결, v2 자산·profile 선택 |
 | `tests/common/`, `tests/human_model_v1/`, `tests/human_model_v2/` | 공통 지표/호환성, v1 물리·연결, v2 좌표·자산/ROM·에너지·질량 보존 검사 |

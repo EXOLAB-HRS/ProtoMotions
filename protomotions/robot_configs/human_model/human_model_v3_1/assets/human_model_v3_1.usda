@@ -1,0 +1,183 @@
+#usda 1.0
+(
+    defaultPrim = "smpl_humanoid"
+    subLayers = [
+        @../../human_model_v2/assets/human_model_v2.usda@
+    ]
+    upAxis = "Z"
+)
+
+over "smpl_humanoid"
+{
+    over "bodies"
+    {
+        over "Chest" (
+            prepend apiSchemas = ["PhysicsFilteredPairsAPI"]
+        )
+        {
+            rel physics:filteredPairs = [
+                </smpl_humanoid/bodies/Head>,
+                </smpl_humanoid/bodies/L_Shoulder>,
+                </smpl_humanoid/bodies/L_Thorax>,
+                </smpl_humanoid/bodies/Neck>,
+                </smpl_humanoid/bodies/R_Shoulder>,
+                </smpl_humanoid/bodies/R_Thorax>,
+                </smpl_humanoid/bodies/Spine>,
+                </smpl_humanoid/bodies/Torso>,
+            ]
+        }
+
+        over "Head" (
+            prepend apiSchemas = ["PhysicsFilteredPairsAPI"]
+        )
+        {
+            rel physics:filteredPairs = [
+                </smpl_humanoid/bodies/Chest>,
+                </smpl_humanoid/bodies/Neck>,
+            ]
+        }
+
+        over "L_Ankle" (
+            prepend apiSchemas = ["PhysicsFilteredPairsAPI"]
+        )
+        {
+            rel physics:filteredPairs = [
+                </smpl_humanoid/bodies/L_Knee>,
+                </smpl_humanoid/bodies/L_Toe>,
+                </smpl_humanoid/bodies/R_Knee>,
+            ]
+        }
+
+        over "L_Elbow" (
+            prepend apiSchemas = ["PhysicsFilteredPairsAPI"]
+        )
+        {
+            rel physics:filteredPairs = [
+                </smpl_humanoid/bodies/L_Shoulder>,
+                </smpl_humanoid/bodies/L_Wrist>,
+            ]
+        }
+
+        over "L_Hand" (
+            prepend apiSchemas = ["PhysicsFilteredPairsAPI"]
+        )
+        {
+            rel physics:filteredPairs = </smpl_humanoid/bodies/L_Wrist>
+        }
+
+        over "L_Hip" (
+            prepend apiSchemas = ["PhysicsFilteredPairsAPI"]
+        )
+        {
+            rel physics:filteredPairs = [
+                </smpl_humanoid/bodies/L_Knee>,
+                </smpl_humanoid/bodies/Pelvis>,
+            ]
+        }
+
+        over "L_Knee" (
+            prepend apiSchemas = ["PhysicsFilteredPairsAPI"]
+        )
+        {
+            rel physics:filteredPairs = [
+                </smpl_humanoid/bodies/L_Toe>,
+                </smpl_humanoid/bodies/R_Ankle>,
+                </smpl_humanoid/bodies/R_Toe>,
+            ]
+        }
+
+        over "L_Shoulder" (
+            prepend apiSchemas = ["PhysicsFilteredPairsAPI"]
+        )
+        {
+            rel physics:filteredPairs = [
+                </smpl_humanoid/bodies/Chest>,
+                </smpl_humanoid/bodies/L_Thorax>,
+            ]
+        }
+
+        over "L_Toe" (
+            prepend apiSchemas = ["PhysicsFilteredPairsAPI"]
+        )
+        {
+            rel physics:filteredPairs = [
+                </smpl_humanoid/bodies/L_Knee>,
+                </smpl_humanoid/bodies/R_Knee>,
+            ]
+        }
+
+        over "Pelvis" (
+            prepend apiSchemas = ["PhysicsFilteredPairsAPI"]
+        )
+        {
+            rel physics:filteredPairs = [
+                </smpl_humanoid/bodies/R_Hip>,
+                </smpl_humanoid/bodies/Torso>,
+            ]
+        }
+
+        over "R_Ankle" (
+            prepend apiSchemas = ["PhysicsFilteredPairsAPI"]
+        )
+        {
+            rel physics:filteredPairs = [
+                </smpl_humanoid/bodies/L_Knee>,
+                </smpl_humanoid/bodies/R_Knee>,
+                </smpl_humanoid/bodies/R_Toe>,
+            ]
+        }
+
+        over "R_Elbow" (
+            prepend apiSchemas = ["PhysicsFilteredPairsAPI"]
+        )
+        {
+            rel physics:filteredPairs = [
+                </smpl_humanoid/bodies/R_Shoulder>,
+                </smpl_humanoid/bodies/R_Wrist>,
+            ]
+        }
+
+        over "R_Hand" (
+            prepend apiSchemas = ["PhysicsFilteredPairsAPI"]
+        )
+        {
+            rel physics:filteredPairs = </smpl_humanoid/bodies/R_Wrist>
+        }
+
+        over "R_Hip" (
+            prepend apiSchemas = ["PhysicsFilteredPairsAPI"]
+        )
+        {
+            rel physics:filteredPairs = </smpl_humanoid/bodies/R_Knee>
+        }
+
+        over "R_Knee" (
+            prepend apiSchemas = ["PhysicsFilteredPairsAPI"]
+        )
+        {
+            rel physics:filteredPairs = [
+                </smpl_humanoid/bodies/L_Ankle>,
+                </smpl_humanoid/bodies/L_Toe>,
+                </smpl_humanoid/bodies/R_Toe>,
+            ]
+        }
+
+        over "R_Shoulder" (
+            prepend apiSchemas = ["PhysicsFilteredPairsAPI"]
+        )
+        {
+            rel physics:filteredPairs = [
+                </smpl_humanoid/bodies/Chest>,
+                </smpl_humanoid/bodies/R_Thorax>,
+            ]
+        }
+
+        over "Spine" (
+            prepend apiSchemas = ["PhysicsFilteredPairsAPI"]
+        )
+        {
+            rel physics:filteredPairs = </smpl_humanoid/bodies/Torso>
+        }
+    }
+}
+

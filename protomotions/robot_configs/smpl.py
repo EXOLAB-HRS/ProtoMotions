@@ -38,6 +38,8 @@ class SmplRobotConfig(RobotConfig):
     human_model_profile: str = "healthy_adult_v1"
     human_model_usd_joint_mode: str = "serial"
     human_model_joint_frame_mass: float = 1e-6
+    # Versioned collision-only revision; forces/PD still use human_model_profile.
+    human_model_collision_profile: str | None = None
     human_model_parameters: Dict = field(default_factory=dict)
 
     def __post_init__(self):
