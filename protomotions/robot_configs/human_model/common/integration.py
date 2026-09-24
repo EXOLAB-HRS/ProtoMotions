@@ -131,6 +131,14 @@ def prepare_simulator(robot_config, simulator_config, device):
             usd=derive_serial_usda(usd,frame_mass=getattr(robot_config,'human_model_joint_frame_mass',1e-6))
         elif joint_mode not in ('d6','anatomical'):
             raise ValueError(f'Unsupported human model USD joint mode: {joint_mode}')
+        collision_profile = getattr(robot_config, 'human_model_collision_profile', None)
+        if collision_profile is not None:
+            if collision_profile != 'human_model_v3.1' or name != 'human_model_v3' or joint_mode != 'anatomical':
+                raise ValueError('human_model_v3.1 collision revision requires the anatomical v3 plant')
+            from ..human_model_v3_1.collision import validate_collision_asset
+            corrected = get_model(collision_profile).asset_path('usd')
+            validate_collision_asset(usd, corrected)
+            usd = corrected
         asset.asset_root = str(usd.parent)
         asset.usd_asset_file_name = usd.name
         backend._human_model_asset_sha256=hashlib.sha256(usd.read_bytes()).hexdigest()
