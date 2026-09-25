@@ -412,6 +412,7 @@ class SteeringContext:
     tar_speed: Tensor = FieldPath()
     tar_face_dir: Tensor = FieldPath()
     prev_root_pos: Tensor = FieldPath()
+    speed_transition: Tensor = FieldPath()
 
     def __init__(
         self,
@@ -420,6 +421,7 @@ class SteeringContext:
         tar_speed: Tensor,
         tar_face_dir: Tensor,
         prev_root_pos: Tensor,
+        speed_transition: Optional[Tensor] = None,
     ):
         """Initialize SteeringContext.
 
@@ -429,12 +431,15 @@ class SteeringContext:
             tar_speed: Target movement speed [num_envs].
             tar_face_dir: Target facing direction in world frame [num_envs, 2] (xy only).
             prev_root_pos: Previous root position for velocity computation [num_envs, 3].
+            speed_transition: True while the speed command ramps and for a short hold
+                after it [num_envs]; only ContinuousSteering provides it.
         """
         self.tar_dir = tar_dir
         self.tar_dir_theta = tar_dir_theta
         self.tar_speed = tar_speed
         self.tar_face_dir = tar_face_dir
         self.prev_root_pos = prev_root_pos
+        self.speed_transition = speed_transition
 
 
 class PathContext:

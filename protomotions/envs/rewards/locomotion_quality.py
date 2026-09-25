@@ -109,3 +109,15 @@ def pelvis_yaw_stability(root_rot: Tensor, tar_face_dir: Tensor, yaw_scale_rad: 
     err = torch.atan2(fwd_y * tar_face_dir[:, 0] - fwd_x * tar_face_dir[:, 1],
                       fwd_x * tar_face_dir[:, 0] + fwd_y * tar_face_dir[:, 1])
     return torch.exp(-(err / yaw_scale_rad).square())
+
+
+def speed_transition_tracking(root_pos, prev_root_pos, tar_dir, tar_speed, speed_transition, dt, vel_err_scale):
+    """Speed tracking scored only while the speed command changes and just after.
+
+    Outside a transition the reward is 1, so the term adds no gradient and no bias
+    there; inside it is exp(-vel_err_scale * err^2) with err the commanded speed
+    minus the root speed along the commanded direction, as in the heading reward.
+    """
+    speed = ((root_pos - prev_root_pos)[..., :2] / dt * tar_dir).sum(-1)
+    tracked = torch.exp(-vel_err_scale * (tar_speed - speed).square())
+    return torch.where(speed_transition, tracked, torch.ones_like(tracked))

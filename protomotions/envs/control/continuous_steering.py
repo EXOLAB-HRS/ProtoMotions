@@ -21,6 +21,9 @@ class ContinuousSteeringConfig(SteeringControlConfig):
     independent_facing_fraction: float = 0.0
     # Only continuous groups sample stops; other targets use tar_speed_min/max.
     stop_probability: float = 0.1
+    # Seconds after a speed ramp ends that still count as a speed transition
+    # (EnvContext.steering.speed_transition). Read only by transition rewards.
+    transition_hold_seconds: float = 1.0
 
 
 class ContinuousSteering(SteeringControl):
@@ -37,6 +40,8 @@ class ContinuousSteering(SteeringControl):
         self._acceleration = torch.ones_like(self._tar_speed) * config.acceleration_min
         self._mode = torch.zeros_like(self._heading_change_steps)
         self._independent_facing = torch.zeros_like(self._heading_change_steps, dtype=torch.bool)
+        self._transition_steps_left = torch.zeros_like(self._heading_change_steps)
+        self._speed_transition = torch.zeros_like(self._tar_speed, dtype=torch.bool)
 
     def reset(self, env_ids):
         if len(env_ids) == 0:
@@ -51,6 +56,8 @@ class ContinuousSteering(SteeringControl):
         self._tar_dir_theta[env_ids] = 0.
         self._tar_dir[env_ids] = torch.tensor([1., 0.], device=env_ids.device)
         self._tar_face_dir[env_ids] = self._tar_dir[env_ids]
+        self._transition_steps_left[env_ids] = 0
+        self._speed_transition[env_ids] = False
         self._resample_task(env_ids)
         fixed = env_ids[self._mode[env_ids] == 0]
         self._tar_speed[fixed] = self._goal_speed[fixed]
@@ -93,7 +100,12 @@ class ContinuousSteering(SteeringControl):
         ids = (self.env.progress_buf >= self._heading_change_steps).nonzero(as_tuple=False).flatten()
         self._resample_task(ids)
         dv = self._acceleration * self.env.dt
+        ramping = (self._goal_speed-self._tar_speed).abs() > 1e-6
         self._tar_speed += (self._goal_speed-self._tar_speed).clamp(-dv, dv)
+        hold = round(self.config.transition_hold_seconds / self.env.dt)
+        self._speed_transition[:] = ramping | (self._transition_steps_left > 0)
+        self._transition_steps_left[:] = torch.where(
+            ramping, hold, (self._transition_steps_left-1).clamp(min=0))
         angle_error = (self._goal_heading-self._tar_dir_theta+math.pi) % (2*math.pi)-math.pi
         max_turn = self.config.yaw_rate * self.env.dt
         self._tar_dir_theta += angle_error.clamp(-max_turn, max_turn)
@@ -101,3 +113,7 @@ class ContinuousSteering(SteeringControl):
         self._tar_dir[:, 1] = self._tar_dir_theta.sin()
         coupled = ~self._independent_facing
         self._tar_face_dir[coupled] = self._tar_dir[coupled]
+
+    def populate_context(self, ctx):
+        super().populate_context(ctx)
+        ctx.steering.speed_transition = self._speed_transition

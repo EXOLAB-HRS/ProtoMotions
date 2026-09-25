@@ -6,7 +6,7 @@ from protomotions.envs.context_views import EnvContext
 from protomotions.envs.mdp_component import MdpComponent
 from protomotions.envs.rewards.locomotion_quality import (
     head_upright, head_angular_stability, target_second_difference, head_roll_stability,
-    pelvis_yaw_stability,
+    pelvis_yaw_stability, speed_transition_tracking,
 )
 from protomotions.envs.control.continuous_steering import ContinuousSteeringConfig
 
@@ -159,4 +159,30 @@ def add_pelvis_yaw(cfg):
 
 def set_stage_b_steep_acceleration(cfg):
     cfg.control_components["steering"] = ContinuousSteeringConfig(**{**STAGE_B_STEERING, **STEEP_ACCELERATION})
+    return cfg
+
+
+# e11/e13/e14 fail Stage B only on settle. Measured with the reference's own rule
+# (monotonic run of the 1 s trend), the policy changes body speed at 0.10-0.23 m/s^2,
+# slower than every reference speed change (min 0.303, p10 0.339); response latency
+# alone does not explain it (output/260924/e14.../deliverables/settle_decomposition.json).
+# Speed changes are a few seconds out of every 3-6 s command, so the heading kernel
+# averages the lag away. This term scores speed only during a ramp and 1 s after it.
+# Scale 20: an error at the 0.10 m/s settle band keeps 82%, a 0.2 m/s lag 45%.
+TRANSITION_WEIGHT = .15
+TRANSITION_VEL_ERR_SCALE = 20.
+
+
+def add_speed_transition(cfg):
+    heading = cfg.reward_components["heading_rew"].static_params
+    heading["weight"] = heading["weight"] - TRANSITION_WEIGHT
+    cfg.reward_components["speed_transition_tracking"] = MdpComponent(
+        compute_func=speed_transition_tracking,
+        dynamic_vars={"root_pos": EnvContext.current.root_pos,
+                      "prev_root_pos": EnvContext.steering.prev_root_pos,
+                      "tar_dir": EnvContext.steering.tar_dir,
+                      "tar_speed": EnvContext.steering.tar_speed,
+                      "speed_transition": EnvContext.steering.speed_transition,
+                      "dt": EnvContext.dt},
+        static_params={"vel_err_scale": TRANSITION_VEL_ERR_SCALE, "weight": TRANSITION_WEIGHT})
     return cfg
