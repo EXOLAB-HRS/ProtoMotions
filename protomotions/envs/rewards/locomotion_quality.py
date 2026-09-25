@@ -121,3 +121,20 @@ def speed_transition_tracking(root_pos, prev_root_pos, tar_dir, tar_speed, speed
     speed = ((root_pos - prev_root_pos)[..., :2] / dt * tar_dir).sum(-1)
     tracked = torch.exp(-vel_err_scale * (tar_speed - speed).square())
     return torch.where(speed_transition, tracked, torch.ones_like(tracked))
+
+
+def head_yaw_stability(body_ang_vel: Tensor, head_index: int, chest_index: int,
+                       yaw_rate_scale_rad_s: float) -> Tensor:
+    """Penalize neck-driven head yaw rate: head minus chest world yaw rate.
+
+    Owner: f2 stage of the first steering teacher (p2f2, p1f2). reference_bounded_head_motion leaves
+    head yaw sway unpenalized: shared head/chest turning cancels, and its
+    77 deg/s p95 envelope gives full credit to most stride-to-stride sway.
+    Measured on the v4 train pack (clip-mean, 10% edges dropped),
+    |w_head,z - w_chest,z| has median 22.5 deg/s and max 42.9 deg/s, while P2
+    reached 46.5 deg/s. Steering turns rotate chest and head together and are
+    not charged; head-pelvis yaw is left alone because humans counter-rotate
+    the head against the pelvis (reference median 41 deg/s).
+    """
+    rate = body_ang_vel[:, head_index, 2] - body_ang_vel[:, chest_index, 2]
+    return torch.exp(-(rate / yaw_rate_scale_rad_s).square())
