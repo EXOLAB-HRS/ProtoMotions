@@ -61,6 +61,7 @@ def compute_heading_velocity_rew(
     tar_face_dir: Tensor,
     dt: float,
     vel_err_scale: float = 0.25,
+    allow_standing: bool = False,
 ) -> Tensor:
     """Reward for moving in target direction at target speed while facing that direction.
 
@@ -106,8 +107,12 @@ def compute_heading_velocity_rew(
         -vel_err_scale * (tar_vel_err * tar_vel_err + tangent_err_w * tangent_vel_err)
     )
 
-    # Zero reward for moving backwards
+    # Zero reward for moving backwards. With allow_standing, a zero speed command is
+    # exempt: standing still sways around 0 m/s, and zeroing every backward sway
+    # would halve the reward for obeying a stop.
     speed_mask = tar_dir_speed <= 0
+    if allow_standing:
+        speed_mask = speed_mask & (tar_speed > 0)
     dir_reward[speed_mask] = 0
 
     # Facing reward: robot should face the target facing direction

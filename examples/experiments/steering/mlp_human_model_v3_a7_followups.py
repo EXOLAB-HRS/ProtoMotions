@@ -200,3 +200,32 @@ def set_transition_until_settled(cfg):
     cfg.control_components["steering"] = dataclasses.replace(
         cfg.control_components["steering"], transition_settle_band=SETTLE_BAND)
     return cfg
+
+
+# ---------------------------------------------------------------------------
+# Method 1 Stage C (share/stage_goals.md sections 8 and 11): Stage B commands plus
+# stops, restarts and turns. Reference: stops decelerate at 0.23-0.60 m/s^2; walking
+# turns hold 0.47-1.66 rad/s (median 0.93) without slowing. yaw_rate 1.0 is near that
+# median; turn_angle_max 90 deg matches the C3 gate turn. A stopped group stands for
+# the 3-6 s until the next resample, then restarts.
+STAGE_C_STEERING = dict(turn_fraction=.30, stop_probability=.20, yaw_rate=1.0,
+                        turn_angle_max=math.pi / 2)
+REFERENCE_ACCELERATION = dict(acceleration_min=.4, acceleration_max=.8)
+
+
+def set_stage_c(cfg, acceleration=STEEP_ACCELERATION):
+    """Stage C steering on top of whatever reward recipe cfg carries, and let the
+    heading reward pay for standing still on a zero speed command."""
+    cfg.control_components["steering"] = ContinuousSteeringConfig(
+        **{**STAGE_B_STEERING, **acceleration, **STAGE_C_STEERING, "transition_settle_band": SETTLE_BAND})
+    cfg.reward_components["heading_rew"].static_params["allow_standing"] = True
+    return cfg
+
+
+def stage_c_recipe(robot_cfg, args, acceleration):
+    """e04 (260925) reward recipe: head roll, pelvis yaw, settle-latched transition term (w 0.30)."""
+    cfg = add_head_roll(make_env_config(robot_cfg, args, "a7"), robot_cfg)
+    cfg = add_speed_transition(add_pelvis_yaw(sharpen_speed_tracking(cfg)))
+    cfg.reward_components["speed_transition_tracking"].static_params["weight"] = .30
+    cfg.reward_components["heading_rew"].static_params["weight"] -= .30 - TRANSITION_WEIGHT
+    return set_stage_c(cfg, acceleration)
