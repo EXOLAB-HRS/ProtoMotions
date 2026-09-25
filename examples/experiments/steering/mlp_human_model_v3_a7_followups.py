@@ -229,3 +229,17 @@ def stage_c_recipe(robot_cfg, args, acceleration):
     cfg.reward_components["speed_transition_tracking"].static_params["weight"] = .30
     cfg.reward_components["heading_rew"].static_params["weight"] -= .30 - TRANSITION_WEIGHT
     return set_stage_c(cfg, acceleration)
+
+
+# Stage C round 2 (260926 e03/e04 -> e05/e06). Round 1 trained stops and turns on the
+# new Stage C AMP pack and both candidates got worse at stopping (standing command:
+# 0.80 / 0.49 m/s vs the parent's 0.42) and compressed Stage B speeds toward 1.0 m/s.
+# The parent already passes the 1.0 rad/s C3 turn, so round 2 drops turns and trains
+# stops only, and splits the AMP pack: a7's forward pack vs the Stage C pack.
+STOPS_ONLY = dict(turn_fraction=0.)
+
+
+def stage_c_stops_recipe(robot_cfg, args):
+    cfg = stage_c_recipe(robot_cfg, args, REFERENCE_ACCELERATION)
+    cfg.control_components["steering"] = dataclasses.replace(cfg.control_components["steering"], **STOPS_ONLY)
+    return cfg
