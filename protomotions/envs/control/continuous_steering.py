@@ -24,6 +24,9 @@ class ContinuousSteeringConfig(SteeringControlConfig):
     # Seconds after a speed ramp ends that still count as a speed transition
     # (EnvContext.steering.speed_transition). Read only by transition rewards.
     transition_hold_seconds: float = 1.0
+    # > 0: after the hold, the transition also lasts until the trailing 1 s mean of
+    # the speed along tar_dir is within this band of tar_speed. 0 keeps time only.
+    transition_settle_band: float = 0.0
 
 
 class ContinuousSteering(SteeringControl):
@@ -42,6 +45,10 @@ class ContinuousSteering(SteeringControl):
         self._independent_facing = torch.zeros_like(self._heading_change_steps, dtype=torch.bool)
         self._transition_steps_left = torch.zeros_like(self._heading_change_steps)
         self._speed_transition = torch.zeros_like(self._tar_speed, dtype=torch.bool)
+        self._settling = torch.zeros_like(self._speed_transition)
+        window = max(1, round(1.0 / env.dt))
+        self._speed_history = torch.ones(len(self._tar_speed), window, device=self._tar_speed.device)
+        self._history_index = 0
 
     def reset(self, env_ids):
         if len(env_ids) == 0:
@@ -58,9 +65,11 @@ class ContinuousSteering(SteeringControl):
         self._tar_face_dir[env_ids] = self._tar_dir[env_ids]
         self._transition_steps_left[env_ids] = 0
         self._speed_transition[env_ids] = False
+        self._settling[env_ids] = False
         self._resample_task(env_ids)
         fixed = env_ids[self._mode[env_ids] == 0]
         self._tar_speed[fixed] = self._goal_speed[fixed]
+        self._speed_history[env_ids] = self._tar_speed[env_ids, None]
 
     def _resample_task(self, env_ids):
         if len(env_ids) == 0:
@@ -103,9 +112,18 @@ class ContinuousSteering(SteeringControl):
         ramping = (self._goal_speed-self._tar_speed).abs() > 1e-6
         self._tar_speed += (self._goal_speed-self._tar_speed).clamp(-dv, dv)
         hold = round(self.config.transition_hold_seconds / self.env.dt)
-        self._speed_transition[:] = ramping | (self._transition_steps_left > 0)
+        holding = self._transition_steps_left > 0
+        self._speed_transition[:] = ramping | holding
         self._transition_steps_left[:] = torch.where(
             ramping, hold, (self._transition_steps_left-1).clamp(min=0))
+        if self.config.transition_settle_band > 0:
+            speed = ((self._curr_root_pos-self._prev_root_pos)[:, :2] / self.env.dt * self._tar_dir).sum(-1)
+            fresh = self.env.progress_buf <= 1   # prev_root_pos was just reset: no speed yet
+            self._speed_history[:, self._history_index] = torch.where(fresh, self._tar_speed, speed)
+            self._history_index = (self._history_index + 1) % self._speed_history.shape[1]
+            unsettled = (self._speed_history.mean(1) - self._tar_speed).abs() > self.config.transition_settle_band
+            self._settling[:] = ramping | holding | (self._settling & unsettled)
+            self._speed_transition |= self._settling
         angle_error = (self._goal_heading-self._tar_dir_theta+math.pi) % (2*math.pi)-math.pi
         max_turn = self.config.yaw_rate * self.env.dt
         self._tar_dir_theta += angle_error.clamp(-max_turn, max_turn)

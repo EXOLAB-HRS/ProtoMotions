@@ -1,4 +1,5 @@
 """Shared candidate configuration for a9, a10, b1-a7; no new model version."""
+import dataclasses
 import importlib.util
 import math
 from pathlib import Path
@@ -185,4 +186,17 @@ def add_speed_transition(cfg):
                       "speed_transition": EnvContext.steering.speed_transition,
                       "dt": EnvContext.dt},
         static_params={"vel_err_scale": TRANSITION_VEL_ERR_SCALE, "weight": TRANSITION_WEIGHT})
+    return cfg
+
+
+# 260925 e01/e02: the time-limited window trimmed acceleration settle but not
+# deceleration. Deceleration covers 0.28-0.36 of the 0.4 m/s change quickly, then
+# creeps; that tail falls after the 1.1-1.5 s window. Keep the term on until the
+# trailing 1 s speed mean is inside the gate's 0.10 m/s settle band.
+SETTLE_BAND = .10
+
+
+def set_transition_until_settled(cfg):
+    cfg.control_components["steering"] = dataclasses.replace(
+        cfg.control_components["steering"], transition_settle_band=SETTLE_BAND)
     return cfg
