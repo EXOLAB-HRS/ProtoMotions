@@ -200,3 +200,57 @@ def set_transition_until_settled(cfg):
     cfg.control_components["steering"] = dataclasses.replace(
         cfg.control_components["steering"], transition_settle_band=SETTLE_BAND)
     return cfg
+
+
+# ---------------------------------------------------------------------------
+# Method 1 Stage C (share/stage_goals.md sections 8 and 11): Stage B commands plus
+# stops, restarts and turns. Reference: stops decelerate at 0.23-0.60 m/s^2; walking
+# turns hold 0.47-1.66 rad/s (median 0.93) without slowing. yaw_rate 1.0 is near that
+# median; turn_angle_max 90 deg matches the C3 gate turn. A stopped group stands for
+# the 3-6 s until the next resample, then restarts.
+STAGE_C_STEERING = dict(turn_fraction=.30, stop_probability=.20, yaw_rate=1.0,
+                        turn_angle_max=math.pi / 2)
+REFERENCE_ACCELERATION = dict(acceleration_min=.4, acceleration_max=.8)
+
+
+def set_stage_c(cfg, acceleration=STEEP_ACCELERATION):
+    """Stage C steering on top of whatever reward recipe cfg carries, and let the
+    heading reward pay for standing still on a zero speed command."""
+    cfg.control_components["steering"] = ContinuousSteeringConfig(
+        **{**STAGE_B_STEERING, **acceleration, **STAGE_C_STEERING, "transition_settle_band": SETTLE_BAND})
+    cfg.reward_components["heading_rew"].static_params["allow_standing"] = True
+    return cfg
+
+
+def stage_c_recipe(robot_cfg, args, acceleration):
+    """e04 (260925) reward recipe: head roll, pelvis yaw, settle-latched transition term (w 0.30)."""
+    cfg = add_head_roll(make_env_config(robot_cfg, args, "a7"), robot_cfg)
+    cfg = add_speed_transition(add_pelvis_yaw(sharpen_speed_tracking(cfg)))
+    cfg.reward_components["speed_transition_tracking"].static_params["weight"] = .30
+    cfg.reward_components["heading_rew"].static_params["weight"] -= .30 - TRANSITION_WEIGHT
+    return set_stage_c(cfg, acceleration)
+
+
+# Stage C round 2 (260926 e03/e04 -> e05/e06). Round 1 trained stops and turns on the
+# new Stage C AMP pack and both candidates got worse at stopping (standing command:
+# 0.80 / 0.49 m/s vs the parent's 0.42) and compressed Stage B speeds toward 1.0 m/s.
+# The parent already passes the 1.0 rad/s C3 turn, so round 2 drops turns and trains
+# stops only, and splits the AMP pack: a7's forward pack vs the Stage C pack.
+STOPS_ONLY = dict(turn_fraction=0.)
+
+
+def stage_c_stops_recipe(robot_cfg, args):
+    cfg = stage_c_recipe(robot_cfg, args, REFERENCE_ACCELERATION)
+    cfg.control_components["steering"] = dataclasses.replace(cfg.control_components["steering"], **STOPS_ONLY)
+    return cfg
+
+
+# Stage C round 3 (260926 e07 -> e09/e10). With the tar_speed normalizer re-anchored,
+# e07 learned to stop (37/40) but trained speeds were 0 or 0.7-1.4, so the gap below
+# 0.7 collapsed: a 0.4 m/s hold walks at 0.17 m/s and slow (0.4 m/s^2) restarts fall
+# while crossing 0-0.7. Round 3 widens only the lower end of the moving range.
+def stage_c_stops_slow_recipe(robot_cfg, args, tar_speed_min):
+    cfg = stage_c_stops_recipe(robot_cfg, args)
+    cfg.control_components["steering"] = dataclasses.replace(
+        cfg.control_components["steering"], tar_speed_min=tar_speed_min)
+    return cfg

@@ -42,6 +42,8 @@ Provides reward functions for specific tasks:
 - Path following rewards
 """
 
+from typing import Optional
+
 import torch
 from torch import Tensor
 
@@ -61,6 +63,7 @@ def compute_heading_velocity_rew(
     tar_face_dir: Tensor,
     dt: float,
     vel_err_scale: float = 0.25,
+    allow_standing: bool = False,
 ) -> Tensor:
     """Reward for moving in target direction at target speed while facing that direction.
 
@@ -106,8 +109,12 @@ def compute_heading_velocity_rew(
         -vel_err_scale * (tar_vel_err * tar_vel_err + tangent_err_w * tangent_vel_err)
     )
 
-    # Zero reward for moving backwards
+    # Zero reward for moving backwards. With allow_standing, a zero speed command is
+    # exempt: standing still sways around 0 m/s, and zeroing every backward sway
+    # would halve the reward for obeying a stop.
     speed_mask = tar_dir_speed <= 0
+    if allow_standing:
+        speed_mask = speed_mask & (tar_speed > 0)
     dir_reward[speed_mask] = 0
 
     # Facing reward: robot should face the target facing direction
@@ -223,6 +230,7 @@ def compute_split_heading_velocity_stop_rew(
     upright_reward_w: float = 0.0,
     upright_height_min: float = 0.5,
     upright_height_margin: float = 0.4,
+    stop_speed_err_scale: Optional[float] = None,
 ) -> Tensor:
     """Split steering reward that also scores zero-speed (stop) commands.
 
@@ -249,6 +257,12 @@ def compute_split_heading_velocity_stop_rew(
 
     speed_reward = torch.exp(-speed_err_scale * speed_error_sq)
     direction_reward = torch.exp(-tangent_err_scale * direction_error)
+    if stop_speed_err_scale is not None:
+        # A stop command scores planar speed with its own scale: at the moving-command
+        # scales a 0.13 m/s drift still earns ~0.87 of the channel (p2f3, 2026-09-26).
+        stop_reward = torch.exp(-stop_speed_err_scale * planar_speed_sq)
+        speed_reward = torch.where(stopped, stop_reward, speed_reward)
+        direction_reward = torch.where(stopped, stop_reward, direction_reward)
 
     forward_gate = torch.where(stopped, torch.ones_like(projected_speed), (projected_speed > 0).float())
     speed_reward = speed_reward * forward_gate

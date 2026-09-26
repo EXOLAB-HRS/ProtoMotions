@@ -138,3 +138,25 @@ def head_yaw_stability(body_ang_vel: Tensor, head_index: int, chest_index: int,
     """
     rate = body_ang_vel[:, head_index, 2] - body_ang_vel[:, chest_index, 2]
     return torch.exp(-(rate / yaw_rate_scale_rad_s).square())
+
+
+def knee_gait_shape(dof_pos: Tensor, rigid_body_vel: Tensor, knee_dof_ids: Tensor,
+                    ankle_body_ids: Tensor, stance_knee_max_rad: float, stance_scale_rad: float,
+                    swing_knee_min_rad: float, swing_scale_rad: float) -> Tensor:
+    """Pull stance-knee extension and swing-knee flexion toward the human reference.
+
+    Owner: p2f3a (first steering teacher, naturalness). P2F1 walks with a bent,
+    short-stepping knee: stance knee median 8.0 vs 5.1 deg and swing median 35.8
+    vs 43.2 deg against the v4 train pack (forward clips 0.8-1.25 m/s). Stance and
+    swing are read per leg from the ankle's horizontal speed (stance below 0.2-0.3
+    m/s, swing above 1.2-1.5 m/s, soft masks), the split used to measure the
+    reference. Only bending past the stance bound, or flexing less than the swing
+    bound, is charged.
+    """
+    q = dof_pos[:, knee_dof_ids]
+    speed = rigid_body_vel[:, ankle_body_ids, :2].norm(dim=-1)
+    stance = ((0.3 - speed) / 0.1).clamp(0, 1)
+    swing = ((speed - 1.2) / 0.3).clamp(0, 1)
+    bent = torch.relu(q - stance_knee_max_rad) / stance_scale_rad
+    straight = torch.relu(swing_knee_min_rad - q) / swing_scale_rad
+    return torch.exp(-(stance * bent.square() + swing * straight.square()).sum(-1))
