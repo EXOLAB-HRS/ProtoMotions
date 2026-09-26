@@ -227,9 +227,127 @@ class HumanJointModel:
                 self._pose_strength_rows.append((joint, conditioning, weights, direction, angles, torques))
                 (self.positive if direction else self.negative)[joint] = torques.max()
                 self.backend_limit[joint] = torch.maximum(self.backend_limit[joint], torques.max())
+        self._packed_strength = None
+
+    def _pack_strength_rows(self):
+        """Stack the per-row strength tables once so strength_caps runs as a few batched ops.
+
+        Same formulas and coefficients as strength_caps_reference; rows keep their
+        write order (curve rows, then pose rows; a later row for the same joint and
+        direction wins) and every row's extrapolation flag is still OR-ed in.
+        """
+        def last_writer(keys):
+            seen, keep = set(), [False] * len(keys)
+            for n in range(len(keys) - 1, -1, -1):
+                if keys[n] not in seen:
+                    seen.add(keys[n]); keep[n] = True
+            return keep
+        device, dtype = self.negative.device, self.negative.dtype
+        pack = {}
+        if self._strength_rows:
+            rows = self._strength_rows
+            f = lambda values: torch.tensor(values, device=device, dtype=dtype)
+            direction = [int(r["sign"] > 0) for _, r, _ in rows]
+            pack["curve"] = dict(
+                index=torch.tensor([i for i, _, _ in rows], device=device),
+                direction=torch.tensor(direction, device=device, dtype=torch.bool),
+                clinical=f([r["clinical_angle_sign"] for _, r, _ in rows]),
+                sign=f([r["sign"] for _, r, _ in rows]),
+                lo=f([r["angle_domain_rad"][0] for _, r, _ in rows]),
+                hi=f([r["angle_domain_rad"][1] for _, r, _ in rows]),
+                vmin=f([-r["eccentric_limit_rad_s"] for _, r, _ in rows]),
+                vmax=f([r["concentric_limit_rad_s"] for _, r, _ in rows]),
+                coefficients=torch.stack([c for _, _, c in rows]).to(device=device, dtype=dtype),
+                scale=torch.stack([self.active_strength_scale[i, d] for (i, _, _), d in zip(rows, direction)]),
+                keep=torch.tensor(last_writer([(i, d) for (i, _, _), d in zip(rows, direction)]), device=device))
+        if self._pose_strength_rows:
+            rows = self._pose_strength_rows
+            width = max(len(r[1]) for r in rows)
+            length = max(len(r[4]) for r in rows)
+            index = torch.zeros(len(rows), width, dtype=torch.long, device=device)
+            weights = torch.zeros(len(rows), width, device=device, dtype=dtype)
+            angles = torch.full((len(rows), length), float("inf"), device=device, dtype=dtype)
+            torques = torch.zeros(len(rows), length, device=device, dtype=dtype)
+            count = torch.tensor([len(r[4]) for r in rows], device=device)
+            for n, (_, conditioning, w, _, a, t) in enumerate(rows):
+                index[n, :len(conditioning)] = torch.tensor(conditioning, device=device)
+                weights[n, :len(conditioning)] = w
+                angles[n, :len(a)] = a
+                torques[n, :len(t)] = t
+                torques[n, len(t):] = t[-1]
+            pack["pose"] = dict(
+                joint=torch.tensor([r[0] for r in rows], device=device),
+                direction=torch.tensor([bool(r[3]) for r in rows], device=device),
+                index=index, weights=weights, angles=angles, torques=torques, count=count,
+                first=angles[:, 0].clone(), last=angles.gather(1, (count - 1)[:, None])[:, 0],
+                keep=torch.tensor(last_writer([(r[0], r[3]) for r in rows]), device=device))
+        self._packed_strength = pack
+        return pack
+
+    @staticmethod
+    def _write_rows(negative, positive, outside, joint, direction, keep, value, flag, directional_domain):
+        """Last-writer assignment of row values; OR of every row's flag."""
+        for caps, selected in ((positive, direction & keep), (negative, ~direction & keep)):
+            if bool(selected.any()):
+                caps[..., joint[selected]] = value[..., selected]
+        if directional_domain:
+            flat = outside.view(*outside.shape[:-2], -1)
+            counts = torch.zeros_like(flat, dtype=value.dtype)
+            counts.index_add_(-1, joint * 2 + direction.long(), flag.to(value.dtype))
+            flat |= counts > 0
+        else:
+            counts = torch.zeros_like(outside, dtype=value.dtype)
+            counts.index_add_(-1, joint, flag.to(value.dtype))
+            outside |= counts > 0
 
     def strength_caps(self, q, qd, *, directional_domain=False):
         """Caps and extrapolation flags for enabled candidates; stateless.
+
+        Batched over joints (one op per stage instead of a Python loop over rows).
+        Equal to strength_caps_reference; see tests/test_human_model_strength_caps_vectorized.py.
+        """
+        pack = self._packed_strength if self._packed_strength is not None else self._pack_strength_rows()
+        negative = self.negative.expand_as(q).clone()
+        positive = self.positive.expand_as(q).clone()
+        outside = (torch.zeros((*q.shape, 2), device=q.device, dtype=torch.bool)
+                   if directional_domain else torch.zeros_like(q, dtype=torch.bool))
+        if "curve" in pack:
+            p = pack["curve"]
+            angle = q[..., p["index"]] * p["clinical"]
+            velocity = qd[..., p["index"]] * p["sign"]  # positive mechanical work = concentric
+            flag = (angle < p["lo"]) | (angle > p["hi"]) | (velocity < p["vmin"]) | (velocity > p["vmax"])
+            angle = torch.maximum(torch.minimum(angle, p["hi"]), p["lo"]).unsqueeze(-1)
+            velocity = torch.maximum(torch.minimum(velocity, p["vmax"]), p["vmin"]).unsqueeze(-1)
+            c = p["coefficients"]
+            speed = velocity.abs()
+            numerator = 2*c[..., 3]*c[..., 4] + speed*(c[..., 4] - 3*c[..., 3])
+            denominator = 2*c[..., 3]*c[..., 4] + speed*(2*c[..., 4] - 4*c[..., 3])
+            magnitude = c[..., 0] * torch.cos(c[..., 1]*(angle - c[..., 2])).clamp_min(0)
+            magnitude *= (numerator / denominator).clamp_min(0)
+            magnitude *= 1 + c[..., 5] * (-velocity).clamp_min(0)
+            value = (magnitude * self.strength_cohort_weights).sum(-1) * p["scale"]
+            self._write_rows(negative, positive, outside, p["index"], p["direction"], p["keep"],
+                             value, flag, directional_domain)
+        if "pose" in pack:
+            p = pack["pose"]
+            value = (q[..., p["index"]] * p["weights"]).sum(-1)
+            flag = (value < p["first"]) | (value > p["last"])
+            clamped = torch.maximum(torch.minimum(value, p["last"]), p["first"])
+            rows = clamped.shape[-1]
+            flat = clamped.reshape(-1, rows).T.contiguous()
+            upper = torch.searchsorted(p["angles"], flat, right=True)
+            upper = torch.minimum(upper, (p["count"] - 1)[:, None]).clamp_min(1)
+            lower = upper - 1
+            angle0, angle1 = p["angles"].gather(1, lower), p["angles"].gather(1, upper)
+            torque0, torque1 = p["torques"].gather(1, lower), p["torques"].gather(1, upper)
+            magnitude = torque0 + (torque1 - torque0) * (flat - angle0) / (angle1 - angle0)
+            magnitude = magnitude.T.reshape(clamped.shape)
+            self._write_rows(negative, positive, outside, p["joint"], p["direction"], p["keep"],
+                             magnitude, flag, directional_domain)
+        return self._strength_coupling(q, qd, negative, positive, outside, directional_domain)
+
+    def strength_caps_reference(self, q, qd, *, directional_domain=False):
+        """Original per-row loop; kept as the equivalence reference for strength_caps.
 
         Optional flags have shape [..., DOF, 2] in negative/positive torque
         order. Default flags retain the conservative OR across directions.
@@ -276,6 +394,9 @@ class HumanJointModel:
                 outside[..., i, direction] |= flag
             else:
                 outside[..., i] |= flag
+        return self._strength_coupling(q, qd, negative, positive, outside, directional_domain)
+
+    def _strength_coupling(self, q, qd, negative, positive, outside, directional_domain):
         if 'strength_coupling' in self.features:
             coupling=self.candidate_parameters['strength_coupling']
             lo,hi=coupling['knee_domain_rad']

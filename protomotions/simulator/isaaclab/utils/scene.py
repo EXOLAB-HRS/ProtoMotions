@@ -31,6 +31,36 @@ from protomotions.simulator.base_simulator.config import ProjectileConfig
 from protomotions.robot_configs.base import ControlType
 
 
+def grouped_human_actuator(robot_config):
+    """All human-model joints as one IdealPD group (zero gains, per-joint limits).
+
+    The explicit human model computes its own torques and only needs PhysX-side
+    clipping. One actuator per joint made Isaac Lab loop over 59 groups every
+    physics substep (about half of the step time at 480 Hz); one group runs the
+    same per-joint math once. Isaac Lab fills joints missing from a per-joint dict
+    with 0, not the USD default, so a parameter is grouped only when it is set for
+    every joint or for none; otherwise return None and keep per-joint groups.
+    """
+    import re
+    items = list(robot_config.control.control_info.items())
+    values = {
+        "armature": [c.armature for _, c in items],
+        "effort_limit_sim": [c.effort_limit for _, c in items],
+        # IdealPD must not clip passive torque to an active-only ceiling.
+        "effort_limit": [c.effort_limit for _, c in items],
+        "velocity_limit_sim": [c.velocity_limit for _, c in items],
+        "friction": [c.friction for _, c in items],
+    }
+    kwargs = {"stiffness": 0.0, "damping": 0.0}
+    for key, column in values.items():
+        present = [v is not None for v in column]
+        if all(present):
+            kwargs[key] = {re.escape(name): float(v) for (name, _), v in zip(items, column)}
+        elif any(present):
+            return None
+    return IdealPDActuatorCfg(joint_names_expr=[re.escape(name) for name, _ in items], **kwargs)
+
+
 @configclass
 class TrimeshTerrainImporterCfg(TerrainImporterCfg):
     class_type: type = TrimeshTerrainImporter
@@ -145,7 +175,10 @@ class SceneCfg(InteractiveSceneCfg):
             if robot_config.control.control_type == ControlType.BUILT_IN_PD and not explicit_human
             else IdealPDActuatorCfg
         )
-        for dof_name, control_info in robot_config.control.control_info.items():
+        human_group = grouped_human_actuator(robot_config) if explicit_human else None
+        if human_group is not None:
+            actuators["human_model"] = human_group
+        for dof_name, control_info in ({} if human_group is not None else robot_config.control.control_info).items():
             stiffness = control_info.stiffness
             damping = control_info.damping
             if robot_config.control.control_type != ControlType.BUILT_IN_PD or explicit_human:
