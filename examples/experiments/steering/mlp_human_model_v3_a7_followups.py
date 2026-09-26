@@ -243,3 +243,14 @@ def stage_c_stops_recipe(robot_cfg, args):
     cfg = stage_c_recipe(robot_cfg, args, REFERENCE_ACCELERATION)
     cfg.control_components["steering"] = dataclasses.replace(cfg.control_components["steering"], **STOPS_ONLY)
     return cfg
+
+
+# Stage C round 3 (260926 e07 -> e09/e10). With the tar_speed normalizer re-anchored,
+# e07 learned to stop (37/40) but trained speeds were 0 or 0.7-1.4, so the gap below
+# 0.7 collapsed: a 0.4 m/s hold walks at 0.17 m/s and slow (0.4 m/s^2) restarts fall
+# while crossing 0-0.7. Round 3 widens only the lower end of the moving range.
+def stage_c_stops_slow_recipe(robot_cfg, args, tar_speed_min):
+    cfg = stage_c_stops_recipe(robot_cfg, args)
+    cfg.control_components["steering"] = dataclasses.replace(
+        cfg.control_components["steering"], tar_speed_min=tar_speed_min)
+    return cfg
