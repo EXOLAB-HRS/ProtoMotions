@@ -254,3 +254,14 @@ def stage_c_stops_slow_recipe(robot_cfg, args, tar_speed_min):
     cfg.control_components["steering"] = dataclasses.replace(
         cfg.control_components["steering"], tar_speed_min=tar_speed_min)
     return cfg
+
+
+# Stage C round 4 (260926 e10 -> e12/e13). e09/e10 fixed slow speeds and stops but
+# fast walking sways sideways (1.2 m/s Stage A lateral MAE 0.101 > 0.10; 1.0<->1.4
+# holds lateral MAD 0.15 vs e07's 0.09). The heading reward weights perpendicular
+# velocity by only 0.1 inside its exponent, so raise that weight.
+def stage_c_stops_slow_lateral_recipe(robot_cfg, args, tangent_err_w):
+    cfg = stage_c_stops_slow_recipe(robot_cfg, args, .2)
+    cfg.reward_components["heading_rew"].static_params["tangent_err_w"] = tangent_err_w
+    return cfg
+
