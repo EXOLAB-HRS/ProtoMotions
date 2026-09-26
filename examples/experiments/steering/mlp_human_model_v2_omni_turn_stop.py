@@ -167,6 +167,9 @@ def env_config(robot_cfg, args):
             "direction_reward_w": 0.35,
             "facing_reward_w": 0.30,
             "upright_reward_w": UPRIGHT_REWARD_W,
+            # None keeps one speed scale for stop commands; a launcher override sets
+            # a stop-specific scale (p2f3). Present so overrides can reach it.
+            "stop_speed_err_scale": None,
         },
     )
 
