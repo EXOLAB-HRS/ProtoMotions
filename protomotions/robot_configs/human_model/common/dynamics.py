@@ -586,6 +586,79 @@ class HumanJointModel:
         passive = elastic + damping
         return active + passive, active, passive, elastic, damping, negative, positive, outside
 
+    def _graph_eligible(self, simulator, mode):
+        """CUDA-graph fast path: Isaac Lab, CUDA, stateless model, PD command, no trace callback."""
+        from protomotions.robot_configs.base import ControlType
+        import os
+        robot = getattr(simulator, "_robot", None)
+        return (os.environ.get("PROTOMOTIONS_HUMAN_MODEL_CUDA_GRAPH", "1") != "0"
+                and not self.features and self.negative.is_cuda
+                and mode in (ControlType.BUILT_IN_PD, ControlType.PROPORTIONAL)
+                and robot is not None and hasattr(robot, "data")
+                and getattr(simulator, "human_model_trace_callback", None) is None)
+
+    def _graph_body(self):
+        """One physics substep of the stateless human model on static buffers (captured once)."""
+        g = self._graph_io
+        q = g["q_sim"][:, g["to_common"]]
+        qd = g["qd_sim"][:, g["to_common"]]
+        requested = g["p_gains"] * (g["command"] - q)
+        requested -= g["d_gains"] * qd
+        total, active, passive, elastic, damping, negative, positive, outside = self._torque_components(
+            requested, q, qd, dt=g["dt"])
+        return dict(requested=requested, total=total, active=active, passive=passive, elastic=elastic,
+                    damping=damping, negative=negative, positive=positive, outside=outside,
+                    torque_sim=total[..., g["to_sim"]],
+                    finite=torch.isfinite(g["q_sim"]).all() & torch.isfinite(g["qd_sim"]).all())
+
+    def _apply_graphed(self, simulator, command):
+        """Replay the captured substep; identical kernels and inputs to the eager path.
+
+        Re-captures when the gain tensors or batch shape change. A non-finite state
+        falls back to the eager path, which raises the usual per-field error.
+        """
+        data = simulator._robot.data
+        conv = simulator.data_conversion
+        key = (simulator._common_p_gains.data_ptr(), simulator._common_d_gains.data_ptr(),
+               tuple(data.joint_pos.shape), float(simulator.config.sim.fps))
+        if getattr(self, "_graph_key", None) != key:
+            self._graph_io = dict(
+                q_sim=data.joint_pos.clone(), qd_sim=data.joint_vel.clone(), command=command.clone(),
+                p_gains=simulator._common_p_gains, d_gains=simulator._common_d_gains,
+                to_common=conv.dof_convert_to_common, to_sim=conv.dof_convert_to_sim,
+                dt=1.0 / simulator.config.sim.fps)
+            if self._packed_strength is None:
+                self._pack_strength_rows()
+            stream = torch.cuda.Stream()
+            stream.wait_stream(torch.cuda.current_stream())
+            with torch.cuda.stream(stream):
+                for _ in range(3):
+                    self._graph_body()
+            torch.cuda.current_stream().wait_stream(stream)
+            self._graph = torch.cuda.CUDAGraph()
+            with torch.cuda.graph(self._graph):
+                self._graph_out = self._graph_body()
+            self._graph_key = key
+        g = self._graph_io
+        g["q_sim"].copy_(data.joint_pos)
+        g["qd_sim"].copy_(data.joint_vel)
+        g["command"].copy_(command)
+        self._graph.replay()
+        out = self._graph_out
+        if not bool(out["finite"]):
+            return False
+        # Static buffers: valid for the current substep, overwritten by the next one.
+        simulator.human_requested_torques = out["requested"]
+        simulator.human_active_torques = out["active"]
+        simulator.human_passive_torques = out["passive"]
+        simulator.human_elastic_torques = out["elastic"]
+        simulator.human_damping_torques = out["damping"]
+        simulator.human_applied_torques = out["total"]
+        simulator.human_negative_caps, simulator.human_positive_caps = out["negative"], out["positive"]
+        simulator.human_strength_outside_domain = out["outside"]
+        simulator._apply_simulator_torques(out["torque_sim"])
+        return True
+
     def apply(self, simulator):
         from protomotions.robot_configs.base import ControlType
 
@@ -595,10 +668,12 @@ class HumanJointModel:
             command = command.clone()
             noise = randomization["action_noise"]
             command[..., noise["dof_indices"]] += noise["action_noise"]
+        mode = simulator.robot_config.control.control_type
+        if self._graph_eligible(simulator, mode) and self._apply_graphed(simulator, command):
+            return
         state = simulator._get_simulator_dof_state().convert_to_common(simulator.data_conversion)
         # robot_config retains the checkpoint's action semantics. Only backend
         # drives switch to torque so active and passive can be added separately.
-        mode = simulator.robot_config.control.control_type
         if mode in (ControlType.BUILT_IN_PD, ControlType.PROPORTIONAL):
             requested = simulator._common_p_gains * (command - state.dof_pos)
             requested -= simulator._common_d_gains * state.dof_vel
