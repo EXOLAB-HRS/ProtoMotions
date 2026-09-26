@@ -281,19 +281,31 @@ class HumanJointModel:
                 index=index, weights=weights, angles=angles, torques=torques, count=count,
                 first=angles[:, 0].clone(), last=angles.gather(1, (count - 1)[:, None])[:, 0],
                 keep=torch.tensor(last_writer([(r[0], r[3]) for r in rows]), device=device))
+        for group in pack.values():
+            joint = group["index"] if "joint" not in group else group["joint"]
+            keep, direction = group["keep"].tolist(), group["direction"].tolist()
+            for name, positive_side in (("positive", True), ("negative", False)):
+                rows = [n for n, (k, d) in enumerate(zip(keep, direction)) if k and d == positive_side]
+                group[f"{name}_rows"] = torch.tensor(rows, dtype=torch.long, device=device)
+                group[f"{name}_joints"] = joint[group[f"{name}_rows"]]
+            group["flag_slot"] = (joint * 2 + group["direction"].long())
         self._packed_strength = pack
         return pack
 
     @staticmethod
-    def _write_rows(negative, positive, outside, joint, direction, keep, value, flag, directional_domain):
-        """Last-writer assignment of row values; OR of every row's flag."""
-        for caps, selected in ((positive, direction & keep), (negative, ~direction & keep)):
-            if bool(selected.any()):
-                caps[..., joint[selected]] = value[..., selected]
+    def _write_rows(negative, positive, outside, group, joint, value, flag, directional_domain):
+        """Last-writer assignment of row values; OR of every row's flag.
+
+        Target rows and joints are integer indices fixed at pack time, so no
+        boolean-mask indexing or host synchronization happens per substep.
+        """
+        for caps, name in ((positive, "positive"), (negative, "negative")):
+            if group[f"{name}_rows"].numel():
+                caps[..., group[f"{name}_joints"]] = value[..., group[f"{name}_rows"]]
         if directional_domain:
             flat = outside.view(*outside.shape[:-2], -1)
             counts = torch.zeros_like(flat, dtype=value.dtype)
-            counts.index_add_(-1, joint * 2 + direction.long(), flag.to(value.dtype))
+            counts.index_add_(-1, group["flag_slot"], flag.to(value.dtype))
             flat |= counts > 0
         else:
             counts = torch.zeros_like(outside, dtype=value.dtype)
@@ -326,8 +338,7 @@ class HumanJointModel:
             magnitude *= (numerator / denominator).clamp_min(0)
             magnitude *= 1 + c[..., 5] * (-velocity).clamp_min(0)
             value = (magnitude * self.strength_cohort_weights).sum(-1) * p["scale"]
-            self._write_rows(negative, positive, outside, p["index"], p["direction"], p["keep"],
-                             value, flag, directional_domain)
+            self._write_rows(negative, positive, outside, p, p["index"], value, flag, directional_domain)
         if "pose" in pack:
             p = pack["pose"]
             value = (q[..., p["index"]] * p["weights"]).sum(-1)
@@ -342,8 +353,7 @@ class HumanJointModel:
             torque0, torque1 = p["torques"].gather(1, lower), p["torques"].gather(1, upper)
             magnitude = torque0 + (torque1 - torque0) * (flat - angle0) / (angle1 - angle0)
             magnitude = magnitude.T.reshape(clamped.shape)
-            self._write_rows(negative, positive, outside, p["joint"], p["direction"], p["keep"],
-                             magnitude, flag, directional_domain)
+            self._write_rows(negative, positive, outside, p, p["joint"], magnitude, flag, directional_domain)
         return self._strength_coupling(q, qd, negative, positive, outside, directional_domain)
 
     def strength_caps_reference(self, q, qd, *, directional_domain=False):
