@@ -40,6 +40,26 @@ def test_overspeed_tail_keeps_gradient_at_large_error():
     assert near[0] < 0.95
 
 
+def test_underspeed_tail_keeps_restart_gradient_without_changing_braking():
+    current = torch.tensor([[.2, 0., 0.], [1.4, 0., 0.], [.2, 0., 0.]])
+    previous = torch.zeros_like(current)
+    direction = torch.tensor([[1., 0.]]).expand(3, 2)
+    target = torch.ones(3)
+    transition = torch.tensor([True, True, False])
+    base = speed_transition_tracking(current, previous, direction, target, transition, 1., 20., 40.)
+    tailed = speed_transition_tracking(current, previous, direction, target, transition, 1.,
+                                       20., 40., 8., .5, 4., .5)
+    assert tailed[0] > base[0] + .02
+    assert tailed[1] > base[1] + .1
+    assert tailed[2] == base[2] == 1.
+    current = torch.tensor([[.2, 0., 0.]], requires_grad=True)
+    reward = speed_transition_tracking(current, torch.zeros_like(current), direction[:1],
+                                       target[:1], transition[:1], 1., 20., 40.,
+                                       8., .5, 4., .5)
+    reward.sum().backward()
+    assert current.grad[0, 0] > .01
+
+
 def test_head_reward_rejects_static_tilt_but_allows_yaw():
     q = torch.tensor([[[0.,0.,0.,1.]], [[0.,0.,1.,0.]],
                       [[math.sin(math.pi/36),0.,0.,math.cos(math.pi/36)]], [[1.,0.,0.,0.]]])

@@ -340,6 +340,17 @@ def stage_c_pair_curriculum_recipe(robot_cfg, args):
     return cfg
 
 
+def stage_c_transition_tails_recipe(robot_cfg, args):
+    """Keep speed-error gradients during high-speed braking and restart from rest."""
+    cfg = stage_c_targeted_preview_recipe(robot_cfg, args)
+    term = cfg.reward_components["speed_transition_tracking"].static_params
+    term["overspeed_tail_scale"] = 8.0
+    term["overspeed_tail_weight"] = 0.5
+    term["underspeed_tail_scale"] = 4.0
+    term["underspeed_tail_weight"] = 0.5
+    return cfg
+
+
 def stage_c_slow_turn_recipe(robot_cfg, args):
     """A-C candidate: include slow coupled turns while replaying straight and stop commands."""
     cfg = stage_c_stops_slow_lateral_recipe(robot_cfg, args, 1.0)
