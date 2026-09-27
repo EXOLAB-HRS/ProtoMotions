@@ -35,6 +35,8 @@ class ContinuousSteeringConfig(SteeringControlConfig):
     # > 0: after the hold, the transition also lasts until the trailing 1 s mean of
     # the speed along tar_dir is within this band of tar_speed. 0 keeps time only.
     transition_settle_band: float = 0.0
+    # Optional command lookahead exposed only to observations by a recipe.
+    preview_seconds: float = 0.0
 
 
 class ContinuousSteering(SteeringControl):
@@ -44,6 +46,8 @@ class ContinuousSteering(SteeringControl):
             raise ValueError("Invalid fixed/turn group fractions")
         if not (0 < config.acceleration_min <= config.acceleration_max and config.yaw_rate > 0):
             raise ValueError("Command rate limits must be positive")
+        if not math.isfinite(config.preview_seconds) or config.preview_seconds < 0:
+            raise ValueError("preview_seconds must be finite and nonnegative")
         if not 0 <= config.speed_anchor_probability <= 1:
             raise ValueError("speed_anchor_probability must be in [0, 1]")
         if config.speed_anchor_probability > 0 and (
@@ -207,3 +211,19 @@ class ContinuousSteering(SteeringControl):
     def populate_context(self, ctx):
         super().populate_context(ctx)
         ctx.steering.speed_transition = self._speed_transition
+        horizon = self.config.preview_seconds
+        if horizon == 0:
+            ctx.steering.tar_speed_preview = self._tar_speed
+            ctx.steering.tar_dir_preview = self._tar_dir
+            ctx.steering.tar_face_dir_preview = self._tar_face_dir
+            return
+        max_delta = self._acceleration * horizon
+        ctx.steering.tar_speed_preview = self._tar_speed + (
+            self._goal_speed - self._tar_speed).clamp(-max_delta, max_delta)
+        error = (self._goal_heading - self._tar_dir_theta + math.pi) % (2 * math.pi) - math.pi
+        theta = self._tar_dir_theta + error.clamp(-self.config.yaw_rate * horizon,
+                                                 self.config.yaw_rate * horizon)
+        direction = torch.stack((theta.cos(), theta.sin()), dim=-1)
+        ctx.steering.tar_dir_preview = direction
+        ctx.steering.tar_face_dir_preview = torch.where(
+            self._independent_facing[:, None], self._tar_face_dir, direction)

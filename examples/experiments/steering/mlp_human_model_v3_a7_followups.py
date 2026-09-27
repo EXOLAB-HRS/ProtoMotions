@@ -302,6 +302,19 @@ def stage_c_endpoint_curriculum_recipe(robot_cfg, args):
     return cfg
 
 
+def stage_c_command_preview_recipe(robot_cfg, args):
+    """Show the next 0.5 s of the bounded command ramp to the actor only."""
+    cfg = stage_c_endpoint_curriculum_recipe(robot_cfg, args)
+    cfg.control_components["steering"] = dataclasses.replace(
+        cfg.control_components["steering"], preview_seconds=0.5,
+        turn_fraction=0.1, yaw_rate=0.5)
+    obs = cfg.observation_components["steering"].dynamic_vars
+    obs["tar_speed"] = EnvContext.steering.tar_speed_preview
+    obs["tar_dir"] = EnvContext.steering.tar_dir_preview
+    obs["tar_face_dir"] = EnvContext.steering.tar_face_dir_preview
+    return cfg
+
+
 def stage_c_slow_turn_recipe(robot_cfg, args):
     """A-C candidate: include slow coupled turns while replaying straight and stop commands."""
     cfg = stage_c_stops_slow_lateral_recipe(robot_cfg, args, 1.0)

@@ -151,6 +151,38 @@ def test_acceleration_anchor_sampling_keeps_continuous_coverage():
     assert ((rates[~anchored] >= .4) & (rates[~anchored] <= .8)).all()
 
 
+def test_command_preview_is_bounded_and_keeps_current_reward_target():
+    env = SimpleNamespace(num_envs=2, device='cpu', dt=1/30)
+    c = ContinuousSteering(ContinuousSteeringConfig(
+        preview_seconds=.5, acceleration_min=.4, acceleration_max=.8,
+        yaw_rate=.5), env)
+    c._tar_speed[:] = torch.tensor([1.0, 1.0])
+    c._goal_speed[:] = torch.tensor([0.0, 1.4])
+    c._acceleration[:] = torch.tensor([.4, .8])
+    c._goal_heading[:] = torch.tensor([math.pi / 2, 0.0])
+    c._tar_dir_theta[:] = 0
+    ctx = SimpleNamespace(steering=None)
+    c.populate_context(ctx)
+    torch.testing.assert_close(ctx.steering.tar_speed, torch.ones(2))
+    torch.testing.assert_close(ctx.steering.tar_speed_preview, torch.tensor([.8, 1.4]))
+    torch.testing.assert_close(ctx.steering.tar_dir_preview[0],
+                               torch.tensor([math.cos(.25), math.sin(.25)]))
+    torch.testing.assert_close(ctx.steering.tar_dir, torch.tensor([[1., 0.], [1., 0.]]))
+    torch.testing.assert_close(ctx.steering.tar_face_dir_preview,
+                               ctx.steering.tar_dir_preview)
+    c.config.preview_seconds = 0
+    c.populate_context(ctx)
+    assert ctx.steering.tar_speed_preview is ctx.steering.tar_speed
+    assert ctx.steering.tar_dir_preview is ctx.steering.tar_dir
+
+
+def test_command_preview_rejects_invalid_horizon():
+    env = SimpleNamespace(num_envs=1, device='cpu', dt=1/30)
+    for horizon in (-.1, float('nan'), float('inf')):
+        with pytest.raises(ValueError, match='preview_seconds'):
+            ContinuousSteering(ContinuousSteeringConfig(preview_seconds=horizon), env)
+
+
 @pytest.mark.parametrize('options', [
     dict(acceleration_anchor_probability=1., acceleration_anchor_targets=None),
     dict(acceleration_anchor_probability=1., acceleration_anchor_targets=(1.0,)),
