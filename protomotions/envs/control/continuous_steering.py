@@ -37,6 +37,9 @@ class ContinuousSteeringConfig(SteeringControlConfig):
     transition_settle_band: float = 0.0
     # Optional command lookahead exposed only to observations by a recipe.
     preview_seconds: float = 0.0
+    # If set, accelerating speed commands use this horizon; deceleration and
+    # coupled turns keep preview_seconds.
+    acceleration_preview_seconds: float | None = None
 
 
 class ContinuousSteering(SteeringControl):
@@ -48,6 +51,11 @@ class ContinuousSteering(SteeringControl):
             raise ValueError("Command rate limits must be positive")
         if not math.isfinite(config.preview_seconds) or config.preview_seconds < 0:
             raise ValueError("preview_seconds must be finite and nonnegative")
+        if config.acceleration_preview_seconds is not None and (
+            not math.isfinite(config.acceleration_preview_seconds)
+            or config.acceleration_preview_seconds < 0
+        ):
+            raise ValueError("acceleration_preview_seconds must be finite and nonnegative")
         if not 0 <= config.speed_anchor_probability <= 1:
             raise ValueError("speed_anchor_probability must be in [0, 1]")
         if config.speed_anchor_probability > 0 and (
@@ -217,7 +225,12 @@ class ContinuousSteering(SteeringControl):
             ctx.steering.tar_dir_preview = self._tar_dir
             ctx.steering.tar_face_dir_preview = self._tar_face_dir
             return
-        max_delta = self._acceleration * horizon
+        speed_horizon = torch.full_like(self._tar_speed, horizon)
+        if self.config.acceleration_preview_seconds is not None:
+            speed_horizon = torch.where(
+                self._goal_speed > self._tar_speed,
+                self.config.acceleration_preview_seconds, speed_horizon)
+        max_delta = self._acceleration * speed_horizon
         ctx.steering.tar_speed_preview = self._tar_speed + (
             self._goal_speed - self._tar_speed).clamp(-max_delta, max_delta)
         error = (self._goal_heading - self._tar_dir_theta + math.pi) % (2 * math.pi) - math.pi

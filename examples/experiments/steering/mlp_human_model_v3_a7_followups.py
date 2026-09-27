@@ -315,6 +315,14 @@ def stage_c_command_preview_recipe(robot_cfg, args, horizon=0.5):
     return cfg
 
 
+def stage_c_split_preview_recipe(robot_cfg, args):
+    """Use long preview for braking/turning and shorter preview for acceleration."""
+    cfg = stage_c_command_preview_recipe(robot_cfg, args, horizon=1.0)
+    cfg.control_components["steering"] = dataclasses.replace(
+        cfg.control_components["steering"], acceleration_preview_seconds=0.5)
+    return cfg
+
+
 def stage_c_slow_turn_recipe(robot_cfg, args):
     """A-C candidate: include slow coupled turns while replaying straight and stop commands."""
     cfg = stage_c_stops_slow_lateral_recipe(robot_cfg, args, 1.0)

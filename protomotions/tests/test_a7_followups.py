@@ -183,6 +183,24 @@ def test_command_preview_rejects_invalid_horizon():
             ContinuousSteering(ContinuousSteeringConfig(preview_seconds=horizon), env)
 
 
+def test_command_preview_uses_shorter_horizon_only_for_acceleration():
+    env = SimpleNamespace(num_envs=2, device='cpu', dt=1/30)
+    c = ContinuousSteering(ContinuousSteeringConfig(
+        preview_seconds=1.0, acceleration_preview_seconds=.5,
+        acceleration_min=.4, acceleration_max=.8, yaw_rate=.5), env)
+    c._tar_speed[:] = 1.0
+    c._goal_speed[:] = torch.tensor([0.0, 2.0])
+    c._acceleration[:] = torch.tensor([.4, .8])
+    c._goal_heading[:] = math.pi / 2
+    ctx = SimpleNamespace(steering=None)
+    c.populate_context(ctx)
+    torch.testing.assert_close(ctx.steering.tar_speed_preview, torch.tensor([.6, 1.4]))
+    torch.testing.assert_close(ctx.steering.tar_dir_preview[0],
+                               torch.tensor([math.cos(.5), math.sin(.5)]))
+    with pytest.raises(ValueError, match='acceleration_preview_seconds'):
+        ContinuousSteering(ContinuousSteeringConfig(acceleration_preview_seconds=-.5), env)
+
+
 @pytest.mark.parametrize('options', [
     dict(acceleration_anchor_probability=1., acceleration_anchor_targets=None),
     dict(acceleration_anchor_probability=1., acceleration_anchor_targets=(1.0,)),
