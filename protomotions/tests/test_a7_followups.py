@@ -102,3 +102,52 @@ def test_stage_d_continuous_commands_cover_full_heading_and_independent_facing(f
     control.step()
     coupled = ~control._independent_facing
     torch.testing.assert_close(control._tar_face_dir[coupled], control._tar_dir[coupled])
+
+
+def test_relative_facing_bounds_rates_resampling_and_partial_reset():
+    torch.manual_seed(2944)
+    root = torch.zeros(1000, 3)
+    env = SimpleNamespace(num_envs=1000, device='cpu', dt=1/30,
+        progress_buf=torch.zeros(1000, dtype=torch.long),
+        simulator=SimpleNamespace(get_root_state=lambda: SimpleNamespace(root_pos=root)))
+    cfg = ContinuousSteeringConfig(fixed_fraction=.3, turn_fraction=.3,
+        yaw_rate=1., turn_angle_max=math.pi/4, independent_facing_fraction=1.,
+        facing_offset_max=math.pi/12, facing_yaw_rate=.5,
+        heading_change_steps_min=90, heading_change_steps_max=181)
+    c = ContinuousSteering(cfg, env)
+    c.reset(torch.arange(1000))
+    wrap = lambda x: (x+math.pi) % (2*math.pi)-math.pi
+    assert abs((c._mode == 2).float().mean().item()-.3) < .05
+    for _ in range(600):
+        old_face = torch.atan2(c._tar_face_dir[:, 1], c._tar_face_dir[:, 0])
+        old_travel = c._tar_dir_theta.clone()
+        env.progress_buf += 1
+        c.step()
+        face = torch.atan2(c._tar_face_dir[:, 1], c._tar_face_dir[:, 0])
+        assert wrap(face-old_face).abs().max() <= .5/30+2e-6
+        assert wrap(c._tar_dir_theta-old_travel).abs().max() <= 1/30+2e-6
+        assert wrap(face-c._tar_dir_theta).abs().max() <= math.pi/12+2e-6
+    before = c._tar_face_dir[10:].clone()
+    env.progress_buf[:10] = 0
+    c.reset(torch.arange(10))
+    torch.testing.assert_close(c._tar_face_dir[10:], before)
+    torch.testing.assert_close(c._tar_face_dir[:10], torch.tensor([1., 0.]).expand(10, 2))
+    # Cross +pi toward -pi along the short arc, reaching the requested offset.
+    c._tar_dir_theta[:] = math.radians(179)
+    c._tar_face_dir[:] = torch.tensor([math.cos(math.radians(179)), math.sin(math.radians(179))])
+    c._goal_heading[:] = math.radians(-179)
+    c._goal_facing[:] = math.radians(-169)
+    c._heading_change_steps[:] = 100000
+    for _ in range(60):
+        c.step()
+    face = torch.atan2(c._tar_face_dir[:, 1], c._tar_face_dir[:, 0])
+    torch.testing.assert_close(wrap(face-math.radians(-169)), torch.zeros(1000), atol=2e-6, rtol=0)
+    torch.testing.assert_close(c._tar_dir_theta, torch.full((1000,), math.radians(181)), atol=2e-6, rtol=0)
+
+
+@pytest.mark.parametrize('options', [dict(facing_yaw_rate=0), dict(facing_yaw_rate=float('nan')),
+    dict(facing_offset_max=math.pi), dict(full_heading_for_turn=True)])
+def test_relative_facing_rejects_invalid_config(options):
+    env = SimpleNamespace(num_envs=1, device='cpu', dt=1/30)
+    with pytest.raises(ValueError):
+        ContinuousSteering(ContinuousSteeringConfig(**{'facing_offset_max': math.pi/12, **options}), env)

@@ -19,6 +19,10 @@ class ContinuousSteeringConfig(SteeringControlConfig):
     turn_angle_max: float = math.pi / 4
     full_heading_for_turn: bool = False
     independent_facing_fraction: float = 0.0
+    # Opt-in Stage D candidate: bounded relative facing with synchronized ramps.
+    # None preserves the original absolute, instantaneous facing behavior.
+    facing_offset_max: float | None = None
+    facing_yaw_rate: float = 0.5
     # Only continuous groups sample stops; other targets use tar_speed_min/max.
     stop_probability: float = 0.1
     # Seconds after a speed ramp ends that still count as a speed transition
@@ -38,6 +42,13 @@ class ContinuousSteering(SteeringControl):
             raise ValueError("Command rate limits must be positive")
         if not 0 <= config.independent_facing_fraction <= 1:
             raise ValueError("independent_facing_fraction must be in [0, 1]")
+        if config.facing_offset_max is not None:
+            if not (0 <= config.facing_offset_max < math.pi / 2
+                    and math.isfinite(config.facing_yaw_rate) and config.facing_yaw_rate > 0
+                    and 0 <= config.turn_angle_max < math.pi / 2
+                    and not config.full_heading_for_turn):
+                raise ValueError("Relative facing requires finite positive rate and local turn/offset bounds < pi/2")
+        self._goal_facing = torch.zeros_like(self._tar_dir_theta)
         self._goal_speed = torch.ones_like(self._tar_speed)
         self._goal_heading = torch.zeros_like(self._tar_dir_theta)
         self._acceleration = torch.ones_like(self._tar_speed) * config.acceleration_min
@@ -97,6 +108,12 @@ class ContinuousSteering(SteeringControl):
         )
         self._independent_facing[env_ids] = independent
         face_angle = (2 * torch.rand(n, device=device) - 1) * math.pi
+        if c.facing_offset_max is not None:
+            offset = face_angle / math.pi * c.facing_offset_max
+            self._goal_facing[env_ids] = self._goal_heading[env_ids] + torch.where(
+                independent, offset, torch.zeros_like(offset))
+            # Resampling changes goals only, never the emitted facing command.
+            return
         facing = torch.stack((face_angle.cos(), face_angle.sin()), dim=-1)
         self._tar_face_dir[env_ids] = torch.where(
             independent[:, None], facing, self._tar_dir[env_ids]
@@ -126,11 +143,27 @@ class ContinuousSteering(SteeringControl):
             self._speed_transition |= self._settling
         angle_error = (self._goal_heading-self._tar_dir_theta+math.pi) % (2*math.pi)-math.pi
         max_turn = self.config.yaw_rate * self.env.dt
-        self._tar_dir_theta += angle_error.clamp(-max_turn, max_turn)
+        if self.config.facing_offset_max is not None:
+            face_angle = torch.atan2(self._tar_face_dir[:, 1], self._tar_face_dir[:, 0])
+            # Use the same angular branch as travel. A common interpolation
+            # fraction preserves the relative-angle bound even while turning.
+            current_offset = (face_angle-self._tar_dir_theta+math.pi) % (2*math.pi)-math.pi
+            goal_offset = self._goal_facing-self._goal_heading
+            face_error = angle_error + goal_offset - current_offset
+            fraction = torch.minimum(
+                (max_turn / angle_error.abs().clamp_min(1e-8)).clamp(max=1),
+                (self.config.facing_yaw_rate*self.env.dt / face_error.abs().clamp_min(1e-8)).clamp(max=1))
+            self._tar_dir_theta += fraction * angle_error
+            face_angle += fraction * face_error
+            self._tar_face_dir[:, 0] = face_angle.cos()
+            self._tar_face_dir[:, 1] = face_angle.sin()
+        else:
+            self._tar_dir_theta += angle_error.clamp(-max_turn, max_turn)
         self._tar_dir[:, 0] = self._tar_dir_theta.cos()
         self._tar_dir[:, 1] = self._tar_dir_theta.sin()
         coupled = ~self._independent_facing
-        self._tar_face_dir[coupled] = self._tar_dir[coupled]
+        if self.config.facing_offset_max is None:
+            self._tar_face_dir[coupled] = self._tar_dir[coupled]
 
     def populate_context(self, ctx):
         super().populate_context(ctx)

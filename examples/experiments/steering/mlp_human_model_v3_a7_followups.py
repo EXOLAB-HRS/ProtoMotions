@@ -275,3 +275,14 @@ def stage_d_recipe(robot_cfg, args, independent_facing_fraction):
         cfg.control_components["steering"], fixed_fraction=.20, turn_fraction=.60,
         full_heading_for_turn=True, independent_facing_fraction=independent_facing_fraction)
     return cfg
+
+
+def stage_d_relative_facing_recipe(robot_cfg, args):
+    """Candidate owned by d-a7-facing15: small facing offsets; untrained."""
+    cfg = stage_c_stops_slow_lateral_recipe(robot_cfg, args, 1.0)
+    cfg.control_components["steering"] = dataclasses.replace(
+        cfg.control_components["steering"], fixed_fraction=.30, turn_fraction=.30,
+        full_heading_for_turn=False, turn_angle_max=math.radians(45),
+        independent_facing_fraction=1.0, facing_offset_max=math.radians(15),
+        facing_yaw_rate=.5)
+    return cfg
