@@ -40,6 +40,8 @@ class ContinuousSteeringConfig(SteeringControlConfig):
     # If set, accelerating speed commands use this horizon; deceleration and
     # coupled turns keep preview_seconds.
     acceleration_preview_seconds: float | None = None
+    # Keep long braking preview for a full stop while shortening walking-speed deceleration.
+    nonstop_deceleration_preview_seconds: float | None = None
 
 
 class ContinuousSteering(SteeringControl):
@@ -56,6 +58,11 @@ class ContinuousSteering(SteeringControl):
             or config.acceleration_preview_seconds < 0
         ):
             raise ValueError("acceleration_preview_seconds must be finite and nonnegative")
+        if config.nonstop_deceleration_preview_seconds is not None and (
+            not math.isfinite(config.nonstop_deceleration_preview_seconds)
+            or config.nonstop_deceleration_preview_seconds < 0
+        ):
+            raise ValueError("nonstop_deceleration_preview_seconds must be finite and nonnegative")
         if not 0 <= config.speed_anchor_probability <= 1:
             raise ValueError("speed_anchor_probability must be in [0, 1]")
         if config.speed_anchor_probability > 0 and (
@@ -230,6 +237,10 @@ class ContinuousSteering(SteeringControl):
             speed_horizon = torch.where(
                 self._goal_speed > self._tar_speed,
                 self.config.acceleration_preview_seconds, speed_horizon)
+        if self.config.nonstop_deceleration_preview_seconds is not None:
+            speed_horizon = torch.where(
+                (self._goal_speed > 0) & (self._goal_speed < self._tar_speed),
+                self.config.nonstop_deceleration_preview_seconds, speed_horizon)
         max_delta = self._acceleration * speed_horizon
         ctx.steering.tar_speed_preview = self._tar_speed + (
             self._goal_speed - self._tar_speed).clamp(-max_delta, max_delta)

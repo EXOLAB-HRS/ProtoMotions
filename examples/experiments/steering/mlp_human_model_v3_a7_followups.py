@@ -323,6 +323,14 @@ def stage_c_split_preview_recipe(robot_cfg, args):
     return cfg
 
 
+def stage_c_targeted_preview_recipe(robot_cfg, args):
+    """Keep early stop/turn notice; shorten notice for walking-speed braking."""
+    cfg = stage_c_split_preview_recipe(robot_cfg, args)
+    cfg.control_components["steering"] = dataclasses.replace(
+        cfg.control_components["steering"], nonstop_deceleration_preview_seconds=0.25)
+    return cfg
+
+
 def stage_c_slow_turn_recipe(robot_cfg, args):
     """A-C candidate: include slow coupled turns while replaying straight and stop commands."""
     cfg = stage_c_stops_slow_lateral_recipe(robot_cfg, args, 1.0)
