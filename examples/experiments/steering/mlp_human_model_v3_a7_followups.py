@@ -302,11 +302,11 @@ def stage_c_endpoint_curriculum_recipe(robot_cfg, args):
     return cfg
 
 
-def stage_c_command_preview_recipe(robot_cfg, args):
-    """Show the next 0.5 s of the bounded command ramp to the actor only."""
+def stage_c_command_preview_recipe(robot_cfg, args, horizon=0.5):
+    """Show a bounded future command to the actor only."""
     cfg = stage_c_endpoint_curriculum_recipe(robot_cfg, args)
     cfg.control_components["steering"] = dataclasses.replace(
-        cfg.control_components["steering"], preview_seconds=0.5,
+        cfg.control_components["steering"], preview_seconds=horizon,
         turn_fraction=0.1, yaw_rate=0.5)
     obs = cfg.observation_components["steering"].dynamic_vars
     obs["tar_speed"] = EnvContext.steering.tar_speed_preview
