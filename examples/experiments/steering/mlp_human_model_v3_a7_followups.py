@@ -291,6 +291,17 @@ def stage_c_speed_anchor_recipe(robot_cfg, args):
     return cfg
 
 
+def stage_c_endpoint_curriculum_recipe(robot_cfg, args):
+    """Repeat the tested speed and acceleration endpoints while retaining random commands."""
+    cfg = stage_c_overspeed_recipe(robot_cfg, args, 40.0)
+    cfg.control_components["steering"] = dataclasses.replace(
+        cfg.control_components["steering"],
+        speed_anchor_targets=(0.4, 1.0, 1.4), speed_anchor_probability=0.5,
+        acceleration_anchor_targets=(0.4, 0.8), acceleration_anchor_probability=0.7,
+        stop_probability=0.3)
+    return cfg
+
+
 def stage_c_slow_turn_recipe(robot_cfg, args):
     """A-C candidate: include slow coupled turns while replaying straight and stop commands."""
     cfg = stage_c_stops_slow_lateral_recipe(robot_cfg, args, 1.0)

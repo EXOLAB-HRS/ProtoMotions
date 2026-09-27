@@ -133,6 +133,35 @@ def test_speed_anchor_rejects_invalid_settings(options):
         ContinuousSteering(ContinuousSteeringConfig(**options), env)
 
 
+def test_acceleration_anchor_sampling_keeps_continuous_coverage():
+    torch.manual_seed(2944)
+    root = torch.zeros(2000, 3)
+    env = SimpleNamespace(num_envs=2000, device='cpu', dt=1/30,
+        progress_buf=torch.zeros(2000, dtype=torch.long),
+        simulator=SimpleNamespace(get_root_state=lambda: SimpleNamespace(root_pos=root)))
+    c = ContinuousSteering(ContinuousSteeringConfig(
+        tar_speed_min=.2, tar_speed_max=1.4, fixed_fraction=0., turn_fraction=0.,
+        acceleration_min=.4, acceleration_max=.8, stop_probability=0.,
+        acceleration_anchor_targets=(.4, .8), acceleration_anchor_probability=.7), env)
+    c.reset(torch.arange(2000))
+    rates = c._acceleration
+    anchored = torch.isin(rates, torch.tensor([.4, .8]))
+    assert .65 < anchored.float().mean() < .75
+    assert (rates == .4).sum() > 500 and (rates == .8).sum() > 500
+    assert ((rates[~anchored] >= .4) & (rates[~anchored] <= .8)).all()
+
+
+@pytest.mark.parametrize('options', [
+    dict(acceleration_anchor_probability=1., acceleration_anchor_targets=None),
+    dict(acceleration_anchor_probability=1., acceleration_anchor_targets=(1.0,)),
+    dict(acceleration_anchor_probability=-.1),
+])
+def test_acceleration_anchor_rejects_invalid_settings(options):
+    env = SimpleNamespace(num_envs=1, device='cpu', dt=1/30)
+    with pytest.raises(ValueError):
+        ContinuousSteering(ContinuousSteeringConfig(**options), env)
+
+
 def test_slow_turn_commands_replay_straight_and_stop_groups():
     torch.manual_seed(2944)
     root = torch.zeros(1000, 3)

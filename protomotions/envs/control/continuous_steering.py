@@ -17,6 +17,8 @@ class ContinuousSteeringConfig(SteeringControlConfig):
     acceleration_max: float = 0.8
     speed_anchor_targets: tuple[float, ...] | None = None
     speed_anchor_probability: float = 0.0
+    acceleration_anchor_targets: tuple[float, ...] | None = None
+    acceleration_anchor_probability: float = 0.0
     yaw_rate: float = 0.35
     turn_angle_max: float = math.pi / 4
     full_heading_for_turn: bool = False
@@ -51,6 +53,15 @@ class ContinuousSteering(SteeringControl):
             )
         ):
             raise ValueError("speed_anchor_targets must be finite speeds inside the command range")
+        if not 0 <= config.acceleration_anchor_probability <= 1:
+            raise ValueError("acceleration_anchor_probability must be in [0, 1]")
+        if config.acceleration_anchor_probability > 0 and (
+            not config.acceleration_anchor_targets or any(
+                not math.isfinite(rate) or not config.acceleration_min <= rate <= config.acceleration_max
+                for rate in config.acceleration_anchor_targets
+            )
+        ):
+            raise ValueError("acceleration_anchor_targets must be finite rates inside the command range")
         if not 0 <= config.independent_facing_fraction <= 1:
             raise ValueError("independent_facing_fraction must be in [0, 1]")
         if config.facing_offset_max is not None:
@@ -63,6 +74,10 @@ class ContinuousSteering(SteeringControl):
         self._speed_anchors = (
             torch.tensor(config.speed_anchor_targets, device=self._tar_speed.device)
             if config.speed_anchor_probability > 0 else None
+        )
+        self._acceleration_anchors = (
+            torch.tensor(config.acceleration_anchor_targets, device=self._tar_speed.device)
+            if config.acceleration_anchor_probability > 0 else None
         )
         self._goal_speed = torch.ones_like(self._tar_speed)
         self._goal_heading = torch.zeros_like(self._tar_dir_theta)
@@ -119,6 +134,12 @@ class ContinuousSteering(SteeringControl):
         self._goal_heading[env_ids] = torch.where(self._mode[env_ids] == 2, heading, 0.)
         self._goal_speed[env_ids] = speed
         self._acceleration[env_ids] = c.acceleration_min + torch.rand(n, device=device)*(c.acceleration_max-c.acceleration_min)
+        if self._acceleration_anchors is not None:
+            anchored = self._acceleration_anchors[
+                torch.randint(len(self._acceleration_anchors), (n,), device=device)]
+            self._acceleration[env_ids] = torch.where(
+                torch.rand(n, device=device) < c.acceleration_anchor_probability,
+                anchored, self._acceleration[env_ids])
         self._heading_change_steps[env_ids] = self.env.progress_buf[env_ids] + torch.randint(
             c.heading_change_steps_min, c.heading_change_steps_max, (n,), device=device)
         independent = (self._mode[env_ids] == 2) & (
