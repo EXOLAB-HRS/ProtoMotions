@@ -86,6 +86,36 @@ def test_continuous_commands_bound_rates_keep_velocity_and_mix_modes():
         assert ((c._tar_speed >= 0) & (c._tar_speed <= 1.5)).all()
 
 
+def test_speed_anchor_sampling_keeps_continuous_coverage():
+    torch.manual_seed(2944)
+    root = torch.zeros(2000, 3)
+    env = SimpleNamespace(num_envs=2000, device='cpu', dt=1/30,
+        progress_buf=torch.zeros(2000, dtype=torch.long),
+        simulator=SimpleNamespace(get_root_state=lambda: SimpleNamespace(root_pos=root)))
+    c = ContinuousSteering(ContinuousSteeringConfig(
+        tar_speed_min=.2, tar_speed_max=1.4, fixed_fraction=0., turn_fraction=0.,
+        stop_probability=0., speed_anchor_targets=(.4, 1., 1.4),
+        speed_anchor_probability=.7), env)
+    c.reset(torch.arange(2000))
+    targets = c._goal_speed
+    anchored = torch.isin(targets, torch.tensor([.4, 1., 1.4]))
+    assert .65 < anchored.float().mean() < .75
+    for value in (.4, 1., 1.4):
+        assert (targets == value).sum() > 400
+    assert ((targets[~anchored] >= .2) & (targets[~anchored] <= 1.4)).all()
+
+
+@pytest.mark.parametrize('options', [
+    dict(speed_anchor_probability=1., speed_anchor_targets=None),
+    dict(speed_anchor_probability=1., speed_anchor_targets=(2.1,)),
+    dict(speed_anchor_probability=-.1),
+])
+def test_speed_anchor_rejects_invalid_settings(options):
+    env = SimpleNamespace(num_envs=1, device='cpu', dt=1/30)
+    with pytest.raises(ValueError):
+        ContinuousSteering(ContinuousSteeringConfig(**options), env)
+
+
 @pytest.mark.parametrize('fraction', [.5, 1.0])
 def test_stage_d_continuous_commands_cover_full_heading_and_independent_facing(fraction):
     torch.manual_seed(2947)

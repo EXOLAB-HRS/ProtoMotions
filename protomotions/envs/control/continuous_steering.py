@@ -15,6 +15,8 @@ class ContinuousSteeringConfig(SteeringControlConfig):
     turn_fraction: float = 0.2
     acceleration_min: float = 0.2
     acceleration_max: float = 0.8
+    speed_anchor_targets: tuple[float, ...] | None = None
+    speed_anchor_probability: float = 0.0
     yaw_rate: float = 0.35
     turn_angle_max: float = math.pi / 4
     full_heading_for_turn: bool = False
@@ -40,6 +42,15 @@ class ContinuousSteering(SteeringControl):
             raise ValueError("Invalid fixed/turn group fractions")
         if not (0 < config.acceleration_min <= config.acceleration_max and config.yaw_rate > 0):
             raise ValueError("Command rate limits must be positive")
+        if not 0 <= config.speed_anchor_probability <= 1:
+            raise ValueError("speed_anchor_probability must be in [0, 1]")
+        if config.speed_anchor_probability > 0 and (
+            not config.speed_anchor_targets or any(
+                not math.isfinite(speed) or not config.tar_speed_min <= speed <= config.tar_speed_max
+                for speed in config.speed_anchor_targets
+            )
+        ):
+            raise ValueError("speed_anchor_targets must be finite speeds inside the command range")
         if not 0 <= config.independent_facing_fraction <= 1:
             raise ValueError("independent_facing_fraction must be in [0, 1]")
         if config.facing_offset_max is not None:
@@ -49,6 +60,10 @@ class ContinuousSteering(SteeringControl):
                     and not config.full_heading_for_turn):
                 raise ValueError("Relative facing requires finite positive rate and local turn/offset bounds < pi/2")
         self._goal_facing = torch.zeros_like(self._tar_dir_theta)
+        self._speed_anchors = (
+            torch.tensor(config.speed_anchor_targets, device=self._tar_speed.device)
+            if config.speed_anchor_probability > 0 else None
+        )
         self._goal_speed = torch.ones_like(self._tar_speed)
         self._goal_heading = torch.zeros_like(self._tar_dir_theta)
         self._acceleration = torch.ones_like(self._tar_speed) * config.acceleration_min
@@ -88,6 +103,9 @@ class ContinuousSteering(SteeringControl):
         c = self.config
         n, device = len(env_ids), env_ids.device
         speed = torch.rand(n, device=device) * (c.tar_speed_max-c.tar_speed_min) + c.tar_speed_min
+        if self._speed_anchors is not None:
+            anchored = self._speed_anchors[torch.randint(len(self._speed_anchors), (n,), device=device)]
+            speed = torch.where(torch.rand(n, device=device) < c.speed_anchor_probability, anchored, speed)
         speed = torch.where(torch.rand(n, device=device) < c.stop_probability, 0., speed)
         fixed = self._mode[env_ids] == 0
         # The fixed group retains its original command for the whole episode.

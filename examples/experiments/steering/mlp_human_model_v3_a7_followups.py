@@ -273,6 +273,15 @@ def stage_c_overspeed_recipe(robot_cfg, args, overspeed_err_scale):
     return cfg
 
 
+def stage_c_speed_anchor_recipe(robot_cfg, args):
+    """A-C candidate: sample Stage B transition endpoints more often."""
+    cfg = stage_c_stops_slow_lateral_recipe(robot_cfg, args, 1.0)
+    cfg.control_components["steering"] = dataclasses.replace(
+        cfg.control_components["steering"],
+        speed_anchor_targets=(0.4, 1.0, 1.4), speed_anchor_probability=0.7)
+    return cfg
+
+
 # Method 1 Stage D round 1, parent e16 (260926). Keep its reward and speed
 # distribution; compare the independent-facing probability inside the 60% turn
 # group. The other 40% replays fixed-speed and straight stop/restart commands.
