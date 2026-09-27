@@ -23,6 +23,23 @@ def test_overspeed_transition_penalty_preserves_other_rewards():
     assert candidate[1] < original[1]
 
 
+def test_overspeed_tail_keeps_gradient_at_large_error():
+    current = torch.tensor([[1.3, 0., 0.], [0.7, 0., 0.], [1.3, 0., 0.]])
+    previous = torch.zeros_like(current)
+    direction = torch.tensor([[1., 0.]]).expand(3, 2)
+    target = torch.ones(3)
+    transition = torch.tensor([True, True, False])
+    base = speed_transition_tracking(current, previous, direction, target, transition, 1., 20., 80.)
+    tail = speed_transition_tracking(current, previous, direction, target, transition, 1.,
+                                     20., 80., 8., 0.5)
+    assert tail[0] > base[0] + 0.2
+    torch.testing.assert_close(tail[1:], base[1:])
+    near = speed_transition_tracking(torch.tensor([[1.05, 0., 0.]]), torch.zeros(1, 3),
+                                     direction[:1], target[:1], transition[:1], 1.,
+                                     20., 80., 8., 0.5)
+    assert near[0] < 0.95
+
+
 def test_head_reward_rejects_static_tilt_but_allows_yaw():
     q = torch.tensor([[[0.,0.,0.,1.]], [[0.,0.,1.,0.]],
                       [[math.sin(math.pi/36),0.,0.,math.cos(math.pi/36)]], [[1.,0.,0.,0.]]])

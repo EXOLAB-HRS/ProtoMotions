@@ -273,6 +273,15 @@ def stage_c_overspeed_recipe(robot_cfg, args, overspeed_err_scale):
     return cfg
 
 
+def stage_c_overspeed_tail_recipe(robot_cfg, args):
+    """Keep a speed-error gradient when a deceleration lags far behind its command."""
+    cfg = stage_c_overspeed_recipe(robot_cfg, args, 80.0)
+    term = cfg.reward_components["speed_transition_tracking"].static_params
+    term["overspeed_tail_scale"] = 8.0
+    term["overspeed_tail_weight"] = 0.5
+    return cfg
+
+
 def stage_c_speed_anchor_recipe(robot_cfg, args):
     """A-C candidate: sample Stage B transition endpoints more often."""
     cfg = stage_c_stops_slow_lateral_recipe(robot_cfg, args, 1.0)
