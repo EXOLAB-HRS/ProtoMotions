@@ -586,6 +586,42 @@ class HumanJointModel:
         passive = elastic + damping
         return active + passive, active, passive, elastic, damping, negative, positive, outside
 
+    def _apply_implicit(self, simulator, command, mode):
+        """Experimental PhysX implicit PD (HC_HUMAN_IMPLICIT_PD=1; see isaaclab scene.py).
+
+        The drive (policy Kp/Kd, target = command) is solved inside the physics step.
+        Its force limit is the active strength cap in the direction of the PD torque
+        estimated at the start of the substep; passive torque is a feed-forward effort.
+        This is a different plant from the explicit model and is for low-rate tests only.
+        """
+        from protomotions.robot_configs.base import ControlType
+        if mode not in (ControlType.BUILT_IN_PD, ControlType.PROPORTIONAL) or self.features:
+            raise ValueError("Implicit human PD supports stateless PD-command models only")
+        state = simulator._get_simulator_dof_state().convert_to_common(simulator.data_conversion)
+        q, qd = state.dof_pos, state.dof_vel
+        requested = simulator._common_p_gains * (command - q) - simulator._common_d_gains * qd
+        negative, positive, outside = self.strength_caps(q, qd)
+        cap = torch.where(requested >= 0, positive, negative).clamp_min(0)
+        elastic, damping = self.elastic_torque(q), self.damping_torque(qd)
+        passive = elastic + damping
+        active = torch.maximum(torch.minimum(requested, positive), -negative)  # estimate, for logging
+        simulator.human_requested_torques = requested
+        simulator.human_active_torques = active
+        simulator.human_passive_torques = passive
+        simulator.human_elastic_torques = elastic
+        simulator.human_damping_torques = damping
+        simulator.human_applied_torques = active + passive
+        simulator.human_negative_caps, simulator.human_positive_caps = negative, positive
+        simulator.human_strength_outside_domain = outside
+        callback = getattr(simulator, "human_model_trace_callback", None)
+        if callback is not None:
+            callback(simulator, state)
+        to_sim = simulator.data_conversion.dof_convert_to_sim
+        robot = simulator._robot
+        robot.write_joint_effort_limit_to_sim(cap[..., to_sim])
+        robot.set_joint_position_target(command[..., to_sim])
+        simulator._apply_simulator_torques(passive[..., to_sim])
+
     def _graph_eligible(self, simulator, mode):
         """CUDA-graph fast path: Isaac Lab, CUDA, stateless model, PD command, no trace callback."""
         from protomotions.robot_configs.base import ControlType
@@ -669,6 +705,9 @@ class HumanJointModel:
             noise = randomization["action_noise"]
             command[..., noise["dof_indices"]] += noise["action_noise"]
         mode = simulator.robot_config.control.control_type
+        import os
+        if os.environ.get("HC_HUMAN_IMPLICIT_PD", "0") == "1":
+            return self._apply_implicit(simulator, command, mode)
         if self._graph_eligible(simulator, mode) and self._apply_graphed(simulator, command):
             return
         state = simulator._get_simulator_dof_state().convert_to_common(simulator.data_conversion)

@@ -31,6 +31,16 @@ from protomotions.simulator.base_simulator.config import ProjectileConfig
 from protomotions.robot_configs.base import ControlType
 
 
+def human_implicit_pd_enabled():
+    """Experimental: PhysX implicit PD drives for the human model (HC_HUMAN_IMPLICIT_PD=1).
+
+    Changes the plant (the PD torque is solved inside the physics step instead of held
+    for the whole substep); only for low physics-rate tests. Off by default.
+    """
+    import os
+    return os.environ.get("HC_HUMAN_IMPLICIT_PD", "0") == "1"
+
+
 def grouped_human_actuator(robot_config):
     """All human-model joints as one IdealPD group (zero gains, per-joint limits).
 
@@ -51,14 +61,24 @@ def grouped_human_actuator(robot_config):
         "velocity_limit_sim": [c.velocity_limit for _, c in items],
         "friction": [c.friction for _, c in items],
     }
-    kwargs = {"stiffness": 0.0, "damping": 0.0}
+    implicit = human_implicit_pd_enabled()
+    if implicit:
+        # PhysX drives carry the policy PD gains; the human model writes the drive force
+        # limit (strength cap) and the passive torque as a feed-forward effort each substep.
+        values.pop("effort_limit")
+        values["stiffness"] = [c.stiffness for _, c in items]
+        values["damping"] = [c.damping for _, c in items]
+        kwargs = {}
+    else:
+        kwargs = {"stiffness": 0.0, "damping": 0.0}
     for key, column in values.items():
         present = [v is not None for v in column]
         if all(present):
             kwargs[key] = {re.escape(name): float(v) for (name, _), v in zip(items, column)}
         elif any(present):
             return None
-    return IdealPDActuatorCfg(joint_names_expr=[re.escape(name) for name, _ in items], **kwargs)
+    actuator = ImplicitActuatorCfg if implicit else IdealPDActuatorCfg
+    return actuator(joint_names_expr=[re.escape(name) for name, _ in items], **kwargs)
 
 
 @configclass
@@ -176,6 +196,8 @@ class SceneCfg(InteractiveSceneCfg):
             else IdealPDActuatorCfg
         )
         human_group = grouped_human_actuator(robot_config) if explicit_human else None
+        if explicit_human and human_group is None and human_implicit_pd_enabled():
+            raise ValueError("HC_HUMAN_IMPLICIT_PD needs the grouped human actuator (all-or-none joint parameters)")
         if human_group is not None:
             actuators["human_model"] = human_group
         for dof_name, control_info in ({} if human_group is not None else robot_config.control.control_info).items():
