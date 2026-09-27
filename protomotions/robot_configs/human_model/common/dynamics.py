@@ -631,9 +631,16 @@ class HumanJointModel:
         if host is None or host[0].shape != cap_sim.shape:
             buf = torch.empty(cap_sim.shape, dtype=cap_sim.dtype, pin_memory=cap_sim.is_cuda)
             host = self._implicit_host = (buf, robot._ALL_INDICES.cpu())
-        robot._data.joint_effort_limits.copy_(cap_sim)
-        host[0].copy_(cap_sim)  # blocking device->host copy: PhysX reads the host buffer
-        robot.root_physx_view.set_dof_max_forces(host[0], indices=host[1])
+        # HC_HUMAN_IMPLICIT_CAP_EVERY=control (candidate, a further plant change): write the
+        # limit only on the first substep of each control step (state at the control step).
+        # The PhysX max-force write is a host API call and costs about as much as a substep.
+        import os
+        self._implicit_calls = getattr(self, "_implicit_calls", -1) + 1
+        if (os.environ.get("HC_HUMAN_IMPLICIT_CAP_EVERY", "substep") != "control"
+                or self._implicit_calls % simulator.decimation == 0):
+            robot._data.joint_effort_limits.copy_(cap_sim)
+            host[0].copy_(cap_sim)  # blocking device->host copy: PhysX reads the host buffer
+            robot.root_physx_view.set_dof_max_forces(host[0], indices=host[1])
         robot.set_joint_position_target(command_sim)
         simulator._apply_simulator_torques(passive_sim)
 
