@@ -2,6 +2,7 @@
 import math
 from types import SimpleNamespace
 import torch
+import pytest
 from protomotions.envs.rewards.locomotion_quality import (
     head_upright, head_angular_stability, reference_bounded_head_motion,
     target_second_difference,
@@ -72,7 +73,8 @@ def test_continuous_commands_bound_rates_keep_velocity_and_mix_modes():
         assert ((c._tar_speed >= 0) & (c._tar_speed <= 1.5)).all()
 
 
-def test_stage_d_continuous_commands_cover_full_heading_and_independent_facing():
+@pytest.mark.parametrize('fraction', [.5, 1.0])
+def test_stage_d_continuous_commands_cover_full_heading_and_independent_facing(fraction):
     torch.manual_seed(2947)
     root = torch.zeros(1000, 3)
     env = SimpleNamespace(num_envs=1000, device='cpu', dt=1/30,
@@ -80,7 +82,7 @@ def test_stage_d_continuous_commands_cover_full_heading_and_independent_facing()
         simulator=SimpleNamespace(get_root_state=lambda: SimpleNamespace(root_pos=root)))
     config = ContinuousSteeringConfig(
         fixed_fraction=0.2, turn_fraction=0.6,
-        full_heading_for_turn=True, independent_facing_fraction=1.0,
+        full_heading_for_turn=True, independent_facing_fraction=fraction,
         heading_change_steps_min=4, heading_change_steps_max=5,
     )
     control = ContinuousSteering(config, env)
@@ -90,3 +92,13 @@ def test_stage_d_continuous_commands_cover_full_heading_and_independent_facing()
     assert (control._goal_heading[turning].abs() > math.pi / 2).any()
     facing_alignment = (control._tar_face_dir[turning] * control._tar_dir[turning]).sum(-1)
     assert (facing_alignment < 0.5).any()
+    assert abs(control._independent_facing[turning].float().mean().item() - fraction) < .08
+    assert not control._independent_facing[~turning].any()
+    fixed = control._mode == 0
+    assert torch.isin(control._tar_speed[fixed], torch.tensor([.8, 1., 1.2])).all()
+    # Re-sampling must retain the aligned replay group while allowing the D
+    # group to point its travel and facing commands in different directions.
+    env.progress_buf += 5
+    control.step()
+    coupled = ~control._independent_facing
+    torch.testing.assert_close(control._tar_face_dir[coupled], control._tar_dir[coupled])

@@ -64,6 +64,7 @@ def compute_heading_velocity_rew(
     dt: float,
     vel_err_scale: float = 0.25,
     allow_standing: bool = False,
+    tangent_err_w: float = 0.1,
 ) -> Tensor:
     """Reward for moving in target direction at target speed while facing that direction.
 
@@ -88,8 +89,6 @@ def compute_heading_velocity_rew(
     # (a 0.4 m/s undershoot costs only ~4% reward), which lets the policy quantize to the
     # reference gaits instead of tracking commanded speed. Raise it (via the reward component's
     # static_params) to make speed tracking a real gradient. See mlp_speed.py.
-    tangent_err_w = 0.1
-
     dir_reward_w = 0.7
     facing_reward_w = 0.3
 

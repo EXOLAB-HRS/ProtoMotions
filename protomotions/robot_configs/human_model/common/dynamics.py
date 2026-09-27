@@ -227,9 +227,137 @@ class HumanJointModel:
                 self._pose_strength_rows.append((joint, conditioning, weights, direction, angles, torques))
                 (self.positive if direction else self.negative)[joint] = torques.max()
                 self.backend_limit[joint] = torch.maximum(self.backend_limit[joint], torques.max())
+        self._packed_strength = None
+
+    def _pack_strength_rows(self):
+        """Stack the per-row strength tables once so strength_caps runs as a few batched ops.
+
+        Same formulas and coefficients as strength_caps_reference; rows keep their
+        write order (curve rows, then pose rows; a later row for the same joint and
+        direction wins) and every row's extrapolation flag is still OR-ed in.
+        """
+        def last_writer(keys):
+            seen, keep = set(), [False] * len(keys)
+            for n in range(len(keys) - 1, -1, -1):
+                if keys[n] not in seen:
+                    seen.add(keys[n]); keep[n] = True
+            return keep
+        device, dtype = self.negative.device, self.negative.dtype
+        pack = {}
+        if self._strength_rows:
+            rows = self._strength_rows
+            f = lambda values: torch.tensor(values, device=device, dtype=dtype)
+            direction = [int(r["sign"] > 0) for _, r, _ in rows]
+            pack["curve"] = dict(
+                index=torch.tensor([i for i, _, _ in rows], device=device),
+                direction=torch.tensor(direction, device=device, dtype=torch.bool),
+                clinical=f([r["clinical_angle_sign"] for _, r, _ in rows]),
+                sign=f([r["sign"] for _, r, _ in rows]),
+                lo=f([r["angle_domain_rad"][0] for _, r, _ in rows]),
+                hi=f([r["angle_domain_rad"][1] for _, r, _ in rows]),
+                vmin=f([-r["eccentric_limit_rad_s"] for _, r, _ in rows]),
+                vmax=f([r["concentric_limit_rad_s"] for _, r, _ in rows]),
+                coefficients=torch.stack([c for _, _, c in rows]).to(device=device, dtype=dtype),
+                scale=torch.stack([self.active_strength_scale[i, d] for (i, _, _), d in zip(rows, direction)]),
+                keep=torch.tensor(last_writer([(i, d) for (i, _, _), d in zip(rows, direction)]), device=device))
+        if self._pose_strength_rows:
+            rows = self._pose_strength_rows
+            width = max(len(r[1]) for r in rows)
+            length = max(len(r[4]) for r in rows)
+            index = torch.zeros(len(rows), width, dtype=torch.long, device=device)
+            weights = torch.zeros(len(rows), width, device=device, dtype=dtype)
+            angles = torch.full((len(rows), length), float("inf"), device=device, dtype=dtype)
+            torques = torch.zeros(len(rows), length, device=device, dtype=dtype)
+            count = torch.tensor([len(r[4]) for r in rows], device=device)
+            for n, (_, conditioning, w, _, a, t) in enumerate(rows):
+                index[n, :len(conditioning)] = torch.tensor(conditioning, device=device)
+                weights[n, :len(conditioning)] = w
+                angles[n, :len(a)] = a
+                torques[n, :len(t)] = t
+                torques[n, len(t):] = t[-1]
+            pack["pose"] = dict(
+                joint=torch.tensor([r[0] for r in rows], device=device),
+                direction=torch.tensor([bool(r[3]) for r in rows], device=device),
+                index=index, weights=weights, angles=angles, torques=torques, count=count,
+                first=angles[:, 0].clone(), last=angles.gather(1, (count - 1)[:, None])[:, 0],
+                keep=torch.tensor(last_writer([(r[0], r[3]) for r in rows]), device=device))
+        for group in pack.values():
+            joint = group["index"] if "joint" not in group else group["joint"]
+            keep, direction = group["keep"].tolist(), group["direction"].tolist()
+            for name, positive_side in (("positive", True), ("negative", False)):
+                rows = [n for n, (k, d) in enumerate(zip(keep, direction)) if k and d == positive_side]
+                group[f"{name}_rows"] = torch.tensor(rows, dtype=torch.long, device=device)
+                group[f"{name}_joints"] = joint[group[f"{name}_rows"]]
+            group["flag_slot"] = (joint * 2 + group["direction"].long())
+        self._packed_strength = pack
+        return pack
+
+    @staticmethod
+    def _write_rows(negative, positive, outside, group, joint, value, flag, directional_domain):
+        """Last-writer assignment of row values; OR of every row's flag.
+
+        Target rows and joints are integer indices fixed at pack time, so no
+        boolean-mask indexing or host synchronization happens per substep.
+        """
+        for caps, name in ((positive, "positive"), (negative, "negative")):
+            if group[f"{name}_rows"].numel():
+                caps[..., group[f"{name}_joints"]] = value[..., group[f"{name}_rows"]]
+        if directional_domain:
+            flat = outside.view(*outside.shape[:-2], -1)
+            counts = torch.zeros_like(flat, dtype=value.dtype)
+            counts.index_add_(-1, group["flag_slot"], flag.to(value.dtype))
+            flat |= counts > 0
+        else:
+            counts = torch.zeros_like(outside, dtype=value.dtype)
+            counts.index_add_(-1, joint, flag.to(value.dtype))
+            outside |= counts > 0
 
     def strength_caps(self, q, qd, *, directional_domain=False):
         """Caps and extrapolation flags for enabled candidates; stateless.
+
+        Batched over joints (one op per stage instead of a Python loop over rows).
+        Equal to strength_caps_reference; see tests/test_human_model_strength_caps_vectorized.py.
+        """
+        pack = self._packed_strength if self._packed_strength is not None else self._pack_strength_rows()
+        negative = self.negative.expand_as(q).clone()
+        positive = self.positive.expand_as(q).clone()
+        outside = (torch.zeros((*q.shape, 2), device=q.device, dtype=torch.bool)
+                   if directional_domain else torch.zeros_like(q, dtype=torch.bool))
+        if "curve" in pack:
+            p = pack["curve"]
+            angle = q[..., p["index"]] * p["clinical"]
+            velocity = qd[..., p["index"]] * p["sign"]  # positive mechanical work = concentric
+            flag = (angle < p["lo"]) | (angle > p["hi"]) | (velocity < p["vmin"]) | (velocity > p["vmax"])
+            angle = torch.maximum(torch.minimum(angle, p["hi"]), p["lo"]).unsqueeze(-1)
+            velocity = torch.maximum(torch.minimum(velocity, p["vmax"]), p["vmin"]).unsqueeze(-1)
+            c = p["coefficients"]
+            speed = velocity.abs()
+            numerator = 2*c[..., 3]*c[..., 4] + speed*(c[..., 4] - 3*c[..., 3])
+            denominator = 2*c[..., 3]*c[..., 4] + speed*(2*c[..., 4] - 4*c[..., 3])
+            magnitude = c[..., 0] * torch.cos(c[..., 1]*(angle - c[..., 2])).clamp_min(0)
+            magnitude *= (numerator / denominator).clamp_min(0)
+            magnitude *= 1 + c[..., 5] * (-velocity).clamp_min(0)
+            value = (magnitude * self.strength_cohort_weights).sum(-1) * p["scale"]
+            self._write_rows(negative, positive, outside, p, p["index"], value, flag, directional_domain)
+        if "pose" in pack:
+            p = pack["pose"]
+            value = (q[..., p["index"]] * p["weights"]).sum(-1)
+            flag = (value < p["first"]) | (value > p["last"])
+            clamped = torch.maximum(torch.minimum(value, p["last"]), p["first"])
+            rows = clamped.shape[-1]
+            flat = clamped.reshape(-1, rows).T.contiguous()
+            upper = torch.searchsorted(p["angles"], flat, right=True)
+            upper = torch.minimum(upper, (p["count"] - 1)[:, None]).clamp_min(1)
+            lower = upper - 1
+            angle0, angle1 = p["angles"].gather(1, lower), p["angles"].gather(1, upper)
+            torque0, torque1 = p["torques"].gather(1, lower), p["torques"].gather(1, upper)
+            magnitude = torque0 + (torque1 - torque0) * (flat - angle0) / (angle1 - angle0)
+            magnitude = magnitude.T.reshape(clamped.shape)
+            self._write_rows(negative, positive, outside, p, p["joint"], magnitude, flag, directional_domain)
+        return self._strength_coupling(q, qd, negative, positive, outside, directional_domain)
+
+    def strength_caps_reference(self, q, qd, *, directional_domain=False):
+        """Original per-row loop; kept as the equivalence reference for strength_caps.
 
         Optional flags have shape [..., DOF, 2] in negative/positive torque
         order. Default flags retain the conservative OR across directions.
@@ -276,6 +404,9 @@ class HumanJointModel:
                 outside[..., i, direction] |= flag
             else:
                 outside[..., i] |= flag
+        return self._strength_coupling(q, qd, negative, positive, outside, directional_domain)
+
+    def _strength_coupling(self, q, qd, negative, positive, outside, directional_domain):
         if 'strength_coupling' in self.features:
             coupling=self.candidate_parameters['strength_coupling']
             lo,hi=coupling['knee_domain_rad']
@@ -455,6 +586,158 @@ class HumanJointModel:
         passive = elastic + damping
         return active + passive, active, passive, elastic, damping, negative, positive, outside
 
+    def _apply_implicit(self, simulator, command, mode):
+        """Experimental PhysX implicit PD (HC_HUMAN_IMPLICIT_PD=1; see isaaclab scene.py).
+
+        The drive (policy Kp/Kd, target = command) is solved inside the physics step.
+        Its force limit is the active strength cap in the direction of the PD torque
+        estimated at the start of the substep; passive torque is a feed-forward effort.
+        This is a different plant from the explicit model and is for low-rate tests only.
+        """
+        from protomotions.robot_configs.base import ControlType
+        if mode not in (ControlType.BUILT_IN_PD, ControlType.PROPORTIONAL) or self.features:
+            raise ValueError("Implicit human PD supports stateless PD-command models only")
+        state = simulator._get_simulator_dof_state().convert_to_common(simulator.data_conversion)
+        q, qd = state.dof_pos, state.dof_vel
+        requested = simulator._common_p_gains * (command - q) - simulator._common_d_gains * qd
+        negative, positive, outside = self.strength_caps(q, qd)
+        cap = torch.where(requested >= 0, positive, negative).clamp_min(0)
+        elastic, damping = self.elastic_torque(q), self.damping_torque(qd)
+        passive = elastic + damping
+        active = torch.maximum(torch.minimum(requested, positive), -negative)  # estimate, for logging
+        simulator.human_requested_torques = requested
+        simulator.human_active_torques = active
+        simulator.human_passive_torques = passive
+        simulator.human_elastic_torques = elastic
+        simulator.human_damping_torques = damping
+        simulator.human_applied_torques = active + passive
+        simulator.human_negative_caps, simulator.human_positive_caps = negative, positive
+        simulator.human_strength_outside_domain = outside
+        callback = getattr(simulator, "human_model_trace_callback", None)
+        if callback is not None:
+            callback(simulator, state)
+        to_sim = simulator.data_conversion.dof_convert_to_sim
+        self._write_implicit(simulator, cap[..., to_sim], command[..., to_sim], passive[..., to_sim])
+
+    def _write_implicit(self, simulator, cap_sim, command_sim, passive_sim):
+        """Drive limit, target and feed-forward effort for one substep.
+
+        Same values as Articulation.write_joint_effort_limit_to_sim, but the PhysX
+        max-force API is fed from a reused pinned host buffer and cached indices
+        instead of a fresh .cpu() copy of the limits and env indices every substep.
+        """
+        robot = simulator._robot
+        host = getattr(self, "_implicit_host", None)
+        if host is None or host[0].shape != cap_sim.shape:
+            buf = torch.empty(cap_sim.shape, dtype=cap_sim.dtype, pin_memory=cap_sim.is_cuda)
+            host = self._implicit_host = (buf, robot._ALL_INDICES.cpu())
+        # HC_HUMAN_IMPLICIT_CAP_EVERY=control (candidate, a further plant change): write the
+        # limit only on the first substep of each control step (state at the control step).
+        # The PhysX max-force write is a host API call and costs about as much as a substep.
+        import os
+        self._implicit_calls = getattr(self, "_implicit_calls", -1) + 1
+        if (os.environ.get("HC_HUMAN_IMPLICIT_CAP_EVERY", "substep") != "control"
+                or self._implicit_calls % simulator.decimation == 0):
+            robot._data.joint_effort_limits.copy_(cap_sim)
+            host[0].copy_(cap_sim)  # blocking device->host copy: PhysX reads the host buffer
+            robot.root_physx_view.set_dof_max_forces(host[0], indices=host[1])
+        robot.set_joint_position_target(command_sim)
+        simulator._apply_simulator_torques(passive_sim)
+
+    def _graph_eligible(self, simulator, mode):
+        """CUDA-graph fast path: Isaac Lab, CUDA, stateless model, PD command, no trace callback."""
+        from protomotions.robot_configs.base import ControlType
+        import os
+        robot = getattr(simulator, "_robot", None)
+        return (os.environ.get("PROTOMOTIONS_HUMAN_MODEL_CUDA_GRAPH", "1") != "0"
+                and not self.features and self.negative.is_cuda
+                and mode in (ControlType.BUILT_IN_PD, ControlType.PROPORTIONAL)
+                and robot is not None and hasattr(robot, "data")
+                and getattr(simulator, "human_model_trace_callback", None) is None)
+
+    def _graph_body(self):
+        """One physics substep of the stateless human model on static buffers (captured once)."""
+        g = self._graph_io
+        q = g["q_sim"][:, g["to_common"]]
+        qd = g["qd_sim"][:, g["to_common"]]
+        requested = g["p_gains"] * (g["command"] - q)
+        requested -= g["d_gains"] * qd
+        total, active, passive, elastic, damping, negative, positive, outside = self._torque_components(
+            requested, q, qd, dt=g["dt"])
+        return dict(requested=requested, total=total, active=active, passive=passive, elastic=elastic,
+                    damping=damping, negative=negative, positive=positive, outside=outside,
+                    torque_sim=total[..., g["to_sim"]],
+                    finite=torch.isfinite(g["q_sim"]).all() & torch.isfinite(g["qd_sim"]).all())
+
+    def _graph_body_implicit(self):
+        """Implicit-PD substep compute on static buffers (same kernels as _apply_implicit)."""
+        g = self._graph_io
+        q = g["q_sim"][:, g["to_common"]]
+        qd = g["qd_sim"][:, g["to_common"]]
+        requested = g["p_gains"] * (g["command"] - q) - g["d_gains"] * qd
+        negative, positive, outside = self.strength_caps(q, qd)
+        cap = torch.where(requested >= 0, positive, negative).clamp_min(0)
+        elastic, damping = self.elastic_torque(q), self.damping_torque(qd)
+        passive = elastic + damping
+        active = torch.maximum(torch.minimum(requested, positive), -negative)
+        return dict(requested=requested, total=active + passive, active=active, passive=passive,
+                    elastic=elastic, damping=damping, negative=negative, positive=positive, outside=outside,
+                    cap_sim=cap[..., g["to_sim"]], command_sim=g["command"][..., g["to_sim"]],
+                    torque_sim=passive[..., g["to_sim"]],
+                    finite=torch.isfinite(g["q_sim"]).all() & torch.isfinite(g["qd_sim"]).all())
+
+    def _apply_graphed(self, simulator, command, implicit=False):
+        """Replay the captured substep; identical kernels and inputs to the eager path.
+
+        Re-captures when the gain tensors or batch shape change. A non-finite state
+        falls back to the eager path, which raises the usual per-field error.
+        """
+        data = simulator._robot.data
+        conv = simulator.data_conversion
+        key = (simulator._common_p_gains.data_ptr(), simulator._common_d_gains.data_ptr(),
+               tuple(data.joint_pos.shape), float(simulator.config.sim.fps), implicit)
+        body = self._graph_body_implicit if implicit else self._graph_body
+        if getattr(self, "_graph_key", None) != key:
+            self._graph_io = dict(
+                q_sim=data.joint_pos.clone(), qd_sim=data.joint_vel.clone(), command=command.clone(),
+                p_gains=simulator._common_p_gains, d_gains=simulator._common_d_gains,
+                to_common=conv.dof_convert_to_common, to_sim=conv.dof_convert_to_sim,
+                dt=1.0 / simulator.config.sim.fps)
+            if self._packed_strength is None:
+                self._pack_strength_rows()
+            stream = torch.cuda.Stream()
+            stream.wait_stream(torch.cuda.current_stream())
+            with torch.cuda.stream(stream):
+                for _ in range(3):
+                    body()
+            torch.cuda.current_stream().wait_stream(stream)
+            self._graph = torch.cuda.CUDAGraph()
+            with torch.cuda.graph(self._graph):
+                self._graph_out = body()
+            self._graph_key = key
+        g = self._graph_io
+        g["q_sim"].copy_(data.joint_pos)
+        g["qd_sim"].copy_(data.joint_vel)
+        g["command"].copy_(command)
+        self._graph.replay()
+        out = self._graph_out
+        if not bool(out["finite"]):
+            return False
+        # Static buffers: valid for the current substep, overwritten by the next one.
+        simulator.human_requested_torques = out["requested"]
+        simulator.human_active_torques = out["active"]
+        simulator.human_passive_torques = out["passive"]
+        simulator.human_elastic_torques = out["elastic"]
+        simulator.human_damping_torques = out["damping"]
+        simulator.human_applied_torques = out["total"]
+        simulator.human_negative_caps, simulator.human_positive_caps = out["negative"], out["positive"]
+        simulator.human_strength_outside_domain = out["outside"]
+        if implicit:
+            self._write_implicit(simulator, out["cap_sim"], out["command_sim"], out["torque_sim"])
+        else:
+            simulator._apply_simulator_torques(out["torque_sim"])
+        return True
+
     def apply(self, simulator):
         from protomotions.robot_configs.base import ControlType
 
@@ -464,10 +747,17 @@ class HumanJointModel:
             command = command.clone()
             noise = randomization["action_noise"]
             command[..., noise["dof_indices"]] += noise["action_noise"]
+        mode = simulator.robot_config.control.control_type
+        import os
+        if os.environ.get("HC_HUMAN_IMPLICIT_PD", "0") == "1":
+            if self._graph_eligible(simulator, mode) and self._apply_graphed(simulator, command, implicit=True):
+                return
+            return self._apply_implicit(simulator, command, mode)
+        if self._graph_eligible(simulator, mode) and self._apply_graphed(simulator, command):
+            return
         state = simulator._get_simulator_dof_state().convert_to_common(simulator.data_conversion)
         # robot_config retains the checkpoint's action semantics. Only backend
         # drives switch to torque so active and passive can be added separately.
-        mode = simulator.robot_config.control.control_type
         if mode in (ControlType.BUILT_IN_PD, ControlType.PROPORTIONAL):
             requested = simulator._common_p_gains * (command - state.dof_pos)
             requested -= simulator._common_d_gains * state.dof_vel
