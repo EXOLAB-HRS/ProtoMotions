@@ -6,8 +6,21 @@ import pytest
 from protomotions.envs.rewards.locomotion_quality import (
     head_upright, head_angular_stability, reference_bounded_head_motion,
     target_second_difference,
+    speed_transition_tracking,
 )
 from protomotions.envs.control.continuous_steering import ContinuousSteering, ContinuousSteeringConfig
+
+
+def test_overspeed_transition_penalty_preserves_other_rewards():
+    current = torch.tensor([[0.9, 0., 0.], [1.1, 0., 0.], [1.1, 0., 0.]])
+    previous = torch.zeros_like(current)
+    direction = torch.tensor([[1., 0.]]).expand(3, 2)
+    target = torch.ones(3)
+    transition = torch.tensor([True, True, False])
+    original = speed_transition_tracking(current, previous, direction, target, transition, 1., 20.)
+    candidate = speed_transition_tracking(current, previous, direction, target, transition, 1., 20., 80.)
+    torch.testing.assert_close(candidate[[0, 2]], original[[0, 2]])
+    assert candidate[1] < original[1]
 
 
 def test_head_reward_rejects_static_tilt_but_allows_yaw():
