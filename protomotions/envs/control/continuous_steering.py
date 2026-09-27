@@ -19,6 +19,9 @@ class ContinuousSteeringConfig(SteeringControlConfig):
     speed_anchor_probability: float = 0.0
     acceleration_anchor_targets: tuple[float, ...] | None = None
     acceleration_anchor_probability: float = 0.0
+    transition_pair_targets: tuple[tuple[float, float], ...] | None = None
+    transition_pair_probability: float = 0.0
+    transition_pair_source_band: float = 0.05
     yaw_rate: float = 0.35
     turn_angle_max: float = math.pi / 4
     full_heading_for_turn: bool = False
@@ -81,6 +84,20 @@ class ContinuousSteering(SteeringControl):
             )
         ):
             raise ValueError("acceleration_anchor_targets must be finite rates inside the command range")
+        if not 0 <= config.transition_pair_probability <= 1:
+            raise ValueError("transition_pair_probability must be in [0, 1]")
+        if not math.isfinite(config.transition_pair_source_band) or config.transition_pair_source_band <= 0:
+            raise ValueError("transition_pair_source_band must be finite and positive")
+        if config.transition_pair_probability > 0 and (
+            not config.transition_pair_targets or any(
+                len(pair) != 2 or any(
+                    not math.isfinite(speed) or not config.tar_speed_min <= speed <= config.tar_speed_max
+                    for speed in pair
+                ) or pair[0] == pair[1]
+                for pair in config.transition_pair_targets
+            )
+        ):
+            raise ValueError("transition_pair_targets must contain distinct speeds inside the command range")
         if not 0 <= config.independent_facing_fraction <= 1:
             raise ValueError("independent_facing_fraction must be in [0, 1]")
         if config.facing_offset_max is not None:
@@ -97,6 +114,10 @@ class ContinuousSteering(SteeringControl):
         self._acceleration_anchors = (
             torch.tensor(config.acceleration_anchor_targets, device=self._tar_speed.device)
             if config.acceleration_anchor_probability > 0 else None
+        )
+        self._transition_pairs = (
+            torch.tensor(config.transition_pair_targets, device=self._tar_speed.device)
+            if config.transition_pair_probability > 0 else None
         )
         self._goal_speed = torch.ones_like(self._tar_speed)
         self._goal_heading = torch.zeros_like(self._tar_dir_theta)
@@ -141,6 +162,12 @@ class ContinuousSteering(SteeringControl):
             anchored = self._speed_anchors[torch.randint(len(self._speed_anchors), (n,), device=device)]
             speed = torch.where(torch.rand(n, device=device) < c.speed_anchor_probability, anchored, speed)
         speed = torch.where(torch.rand(n, device=device) < c.stop_probability, 0., speed)
+        if self._transition_pairs is not None:
+            pair = self._transition_pairs[
+                torch.randint(len(self._transition_pairs), (n,), device=device)]
+            paired = (self._tar_speed[env_ids] - pair[:, 0]).abs() <= c.transition_pair_source_band
+            paired &= (speed > 0) & (torch.rand(n, device=device) < c.transition_pair_probability)
+            speed = torch.where(paired, pair[:, 1], speed)
         fixed = self._mode[env_ids] == 0
         # The fixed group retains its original command for the whole episode.
         initial = self.env.progress_buf[env_ids] == 0

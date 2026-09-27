@@ -151,6 +151,41 @@ def test_acceleration_anchor_sampling_keeps_continuous_coverage():
     assert ((rates[~anchored] >= .4) & (rates[~anchored] <= .8)).all()
 
 
+def test_transition_pair_sampling_emphasizes_high_speed_braking_and_keeps_stops():
+    torch.manual_seed(2944)
+    root = torch.zeros(2000, 3)
+    env = SimpleNamespace(num_envs=2000, device='cpu', dt=1/30,
+        progress_buf=torch.ones(2000, dtype=torch.long),
+        simulator=SimpleNamespace(get_root_state=lambda: SimpleNamespace(root_pos=root)))
+    c = ContinuousSteering(ContinuousSteeringConfig(
+        tar_speed_min=.2, tar_speed_max=1.4, fixed_fraction=0., turn_fraction=0.,
+        stop_probability=.3, transition_pair_targets=((1.4, 1.0),),
+        transition_pair_probability=.7), env)
+    c._mode[:] = 1
+    c._tar_speed[:] = 1.4
+    c._resample_task(torch.arange(2000))
+    targets = c._goal_speed
+    assert .27 < (targets == 0).float().mean() < .33
+    assert (targets[targets > 0] == 1.0).float().mean() > .65
+    assert ((targets > 0) & (targets != 1.0)).any()
+    c._tar_speed[:] = 1.2
+    c._resample_task(torch.arange(2000))
+    assert (c._goal_speed[c._goal_speed > 0] == 1.0).float().mean() < .3
+
+
+@pytest.mark.parametrize('options', [
+    dict(transition_pair_probability=1., transition_pair_targets=None),
+    dict(transition_pair_probability=1., transition_pair_targets=((1.4, 1.4),)),
+    dict(transition_pair_probability=1., transition_pair_targets=((1.4, 10.),)),
+    dict(transition_pair_probability=-.1),
+    dict(transition_pair_source_band=0.),
+])
+def test_transition_pair_rejects_invalid_settings(options):
+    env = SimpleNamespace(num_envs=1, device='cpu', dt=1/30)
+    with pytest.raises(ValueError):
+        ContinuousSteering(ContinuousSteeringConfig(**options), env)
+
+
 def test_command_preview_is_bounded_and_keeps_current_reward_target():
     env = SimpleNamespace(num_envs=2, device='cpu', dt=1/30)
     c = ContinuousSteering(ContinuousSteeringConfig(

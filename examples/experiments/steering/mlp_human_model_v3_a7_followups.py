@@ -331,6 +331,15 @@ def stage_c_targeted_preview_recipe(robot_cfg, args):
     return cfg
 
 
+def stage_c_pair_curriculum_recipe(robot_cfg, args):
+    """Practice the lagging high-speed braking transition without reducing stops."""
+    cfg = stage_c_targeted_preview_recipe(robot_cfg, args)
+    cfg.control_components["steering"] = dataclasses.replace(
+        cfg.control_components["steering"],
+        transition_pair_targets=((1.4, 1.0),), transition_pair_probability=0.7)
+    return cfg
+
+
 def stage_c_slow_turn_recipe(robot_cfg, args):
     """A-C candidate: include slow coupled turns while replaying straight and stop commands."""
     cfg = stage_c_stops_slow_lateral_recipe(robot_cfg, args, 1.0)
