@@ -47,6 +47,7 @@ class ContinuousSteeringConfig(SteeringControlConfig):
     nonstop_deceleration_preview_seconds: float | None = None
     # Observation-only lead below the next walking target during a deceleration ramp.
     nonstop_deceleration_preview_undershoot_mps: float = 0.0
+    nonstop_deceleration_preview_undershoot_min_goal_mps: float = 0.0
 
 
 class ContinuousSteering(SteeringControl):
@@ -71,6 +72,9 @@ class ContinuousSteering(SteeringControl):
         undershoot = getattr(config, "nonstop_deceleration_preview_undershoot_mps", 0.0)
         if not math.isfinite(undershoot) or undershoot < 0:
             raise ValueError("nonstop_deceleration_preview_undershoot_mps must be finite and nonnegative")
+        min_goal = getattr(config, "nonstop_deceleration_preview_undershoot_min_goal_mps", 0.0)
+        if not math.isfinite(min_goal) or min_goal < 0:
+            raise ValueError("nonstop_deceleration_preview_undershoot_min_goal_mps must be finite and nonnegative")
         if not 0 <= config.speed_anchor_probability <= 1:
             raise ValueError("speed_anchor_probability must be in [0, 1]")
         if config.speed_anchor_probability > 0 and (
@@ -278,7 +282,9 @@ class ContinuousSteering(SteeringControl):
             self._goal_speed - self._tar_speed).clamp(-max_delta, max_delta)
         undershoot = getattr(self.config, "nonstop_deceleration_preview_undershoot_mps", 0.0)
         if undershoot:
-            walking_brake = (self._goal_speed > 0) & (self._goal_speed < self._tar_speed)
+            min_goal = getattr(self.config, "nonstop_deceleration_preview_undershoot_min_goal_mps", 0.0)
+            walking_brake = ((self._goal_speed > 0) & (self._goal_speed >= min_goal)
+                             & (self._goal_speed < self._tar_speed))
             speed_preview = torch.where(walking_brake, (speed_preview - undershoot).clamp_min(0), speed_preview)
         ctx.steering.tar_speed_preview = speed_preview
         error = (self._goal_heading - self._tar_dir_theta + math.pi) % (2 * math.pi) - math.pi

@@ -274,24 +274,28 @@ def test_command_preview_keeps_long_stop_but_shortens_walking_brake():
 
 
 def test_walking_brake_preview_undershoot_does_not_change_stop_or_restart():
-    env = SimpleNamespace(num_envs=4, device='cpu', dt=1/30)
+    env = SimpleNamespace(num_envs=5, device='cpu', dt=1/30)
     c = ContinuousSteering(ContinuousSteeringConfig(
         preview_seconds=1.0, acceleration_preview_seconds=.5,
         nonstop_deceleration_preview_seconds=1.0,
         nonstop_deceleration_preview_undershoot_mps=.1,
+        nonstop_deceleration_preview_undershoot_min_goal_mps=.8,
         acceleration_min=.4, acceleration_max=.8), env)
-    c._tar_speed[:] = torch.tensor([1.4, 1.4, 1.0, 0.0])
-    c._goal_speed[:] = torch.tensor([1.0, 1.0, 0.0, 1.0])
-    c._acceleration[:] = torch.tensor([.4, .8, .4, .4])
+    c._tar_speed[:] = torch.tensor([1.4, 1.4, 1.0, 0.0, 1.0])
+    c._goal_speed[:] = torch.tensor([1.0, 1.0, 0.0, 1.0, .4])
+    c._acceleration[:] = torch.tensor([.4, .8, .4, .4, .4])
     ctx = SimpleNamespace(steering=None)
     c.populate_context(ctx)
     torch.testing.assert_close(ctx.steering.tar_speed_preview,
-                               torch.tensor([.9, .9, .6, .2]))
+                               torch.tensor([.9, .9, .6, .2, .6]))
     torch.testing.assert_close(ctx.steering.tar_speed,
-                               torch.tensor([1.4, 1.4, 1.0, 0.0]))
+                               torch.tensor([1.4, 1.4, 1.0, 0.0, 1.0]))
     with pytest.raises(ValueError, match='nonstop_deceleration_preview_undershoot_mps'):
         ContinuousSteering(ContinuousSteeringConfig(
             nonstop_deceleration_preview_undershoot_mps=-.1), env)
+    with pytest.raises(ValueError, match='nonstop_deceleration_preview_undershoot_min_goal_mps'):
+        ContinuousSteering(ContinuousSteeringConfig(
+            nonstop_deceleration_preview_undershoot_min_goal_mps=-.1), env)
 
 
 @pytest.mark.parametrize('options', [
