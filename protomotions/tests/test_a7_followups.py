@@ -273,6 +273,27 @@ def test_command_preview_keeps_long_stop_but_shortens_walking_brake():
         ContinuousSteering(ContinuousSteeringConfig(nonstop_deceleration_preview_seconds=-.1), env)
 
 
+def test_walking_brake_preview_undershoot_does_not_change_stop_or_restart():
+    env = SimpleNamespace(num_envs=4, device='cpu', dt=1/30)
+    c = ContinuousSteering(ContinuousSteeringConfig(
+        preview_seconds=1.0, acceleration_preview_seconds=.5,
+        nonstop_deceleration_preview_seconds=1.0,
+        nonstop_deceleration_preview_undershoot_mps=.1,
+        acceleration_min=.4, acceleration_max=.8), env)
+    c._tar_speed[:] = torch.tensor([1.4, 1.4, 1.0, 0.0])
+    c._goal_speed[:] = torch.tensor([1.0, 1.0, 0.0, 1.0])
+    c._acceleration[:] = torch.tensor([.4, .8, .4, .4])
+    ctx = SimpleNamespace(steering=None)
+    c.populate_context(ctx)
+    torch.testing.assert_close(ctx.steering.tar_speed_preview,
+                               torch.tensor([.9, .9, .6, .2]))
+    torch.testing.assert_close(ctx.steering.tar_speed,
+                               torch.tensor([1.4, 1.4, 1.0, 0.0]))
+    with pytest.raises(ValueError, match='nonstop_deceleration_preview_undershoot_mps'):
+        ContinuousSteering(ContinuousSteeringConfig(
+            nonstop_deceleration_preview_undershoot_mps=-.1), env)
+
+
 @pytest.mark.parametrize('options', [
     dict(acceleration_anchor_probability=1., acceleration_anchor_targets=None),
     dict(acceleration_anchor_probability=1., acceleration_anchor_targets=(1.0,)),

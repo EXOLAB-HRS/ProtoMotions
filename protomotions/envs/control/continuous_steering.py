@@ -45,6 +45,8 @@ class ContinuousSteeringConfig(SteeringControlConfig):
     acceleration_preview_seconds: float | None = None
     # Keep long braking preview for a full stop while shortening walking-speed deceleration.
     nonstop_deceleration_preview_seconds: float | None = None
+    # Observation-only lead below the next walking target during a deceleration ramp.
+    nonstop_deceleration_preview_undershoot_mps: float = 0.0
 
 
 class ContinuousSteering(SteeringControl):
@@ -66,6 +68,9 @@ class ContinuousSteering(SteeringControl):
             or config.nonstop_deceleration_preview_seconds < 0
         ):
             raise ValueError("nonstop_deceleration_preview_seconds must be finite and nonnegative")
+        undershoot = getattr(config, "nonstop_deceleration_preview_undershoot_mps", 0.0)
+        if not math.isfinite(undershoot) or undershoot < 0:
+            raise ValueError("nonstop_deceleration_preview_undershoot_mps must be finite and nonnegative")
         if not 0 <= config.speed_anchor_probability <= 1:
             raise ValueError("speed_anchor_probability must be in [0, 1]")
         if config.speed_anchor_probability > 0 and (
@@ -269,8 +274,13 @@ class ContinuousSteering(SteeringControl):
                 (self._goal_speed > 0) & (self._goal_speed < self._tar_speed),
                 self.config.nonstop_deceleration_preview_seconds, speed_horizon)
         max_delta = self._acceleration * speed_horizon
-        ctx.steering.tar_speed_preview = self._tar_speed + (
+        speed_preview = self._tar_speed + (
             self._goal_speed - self._tar_speed).clamp(-max_delta, max_delta)
+        undershoot = getattr(self.config, "nonstop_deceleration_preview_undershoot_mps", 0.0)
+        if undershoot:
+            walking_brake = (self._goal_speed > 0) & (self._goal_speed < self._tar_speed)
+            speed_preview = torch.where(walking_brake, (speed_preview - undershoot).clamp_min(0), speed_preview)
+        ctx.steering.tar_speed_preview = speed_preview
         error = (self._goal_heading - self._tar_dir_theta + math.pi) % (2 * math.pi) - math.pi
         theta = self._tar_dir_theta + error.clamp(-self.config.yaw_rate * horizon,
                                                  self.config.yaw_rate * horizon)
