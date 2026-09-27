@@ -116,6 +116,29 @@ def test_speed_anchor_rejects_invalid_settings(options):
         ContinuousSteering(ContinuousSteeringConfig(**options), env)
 
 
+def test_slow_turn_commands_replay_straight_and_stop_groups():
+    torch.manual_seed(2944)
+    root = torch.zeros(1000, 3)
+    env = SimpleNamespace(num_envs=1000, device='cpu', dt=1/30,
+        progress_buf=torch.zeros(1000, dtype=torch.long),
+        simulator=SimpleNamespace(get_root_state=lambda: SimpleNamespace(root_pos=root)))
+    c = ContinuousSteering(ContinuousSteeringConfig(
+        fixed_fraction=.3, turn_fraction=.2, yaw_rate=.5,
+        heading_change_steps_min=2, heading_change_steps_max=3,
+        turn_angle_max=math.pi/2, stop_probability=.2), env)
+    c.reset(torch.arange(1000))
+    assert .25 < (c._mode == 0).float().mean() < .35
+    assert .15 < (c._mode == 2).float().mean() < .25
+    for _ in range(90):
+        previous = c._tar_dir_theta.clone()
+        env.progress_buf += 1
+        c.step()
+        assert (c._tar_dir_theta - previous).abs().max() <= .5/30 + 1e-6
+        torch.testing.assert_close(c._tar_face_dir, c._tar_dir)
+    assert (c._tar_dir_theta[c._mode == 2].abs() > .2).any()
+    assert torch.equal(c._tar_dir_theta[c._mode != 2], torch.zeros_like(c._tar_dir_theta[c._mode != 2]))
+
+
 @pytest.mark.parametrize('fraction', [.5, 1.0])
 def test_stage_d_continuous_commands_cover_full_heading_and_independent_facing(fraction):
     torch.manual_seed(2947)

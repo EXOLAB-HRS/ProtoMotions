@@ -282,6 +282,14 @@ def stage_c_speed_anchor_recipe(robot_cfg, args):
     return cfg
 
 
+def stage_c_slow_turn_recipe(robot_cfg, args):
+    """A-C candidate: include slow coupled turns while replaying straight and stop commands."""
+    cfg = stage_c_stops_slow_lateral_recipe(robot_cfg, args, 1.0)
+    cfg.control_components["steering"] = dataclasses.replace(
+        cfg.control_components["steering"], turn_fraction=0.2, yaw_rate=0.5)
+    return cfg
+
+
 # Method 1 Stage D round 1, parent e16 (260926). Keep its reward and speed
 # distribution; compare the independent-facing probability inside the 60% turn
 # group. The other 40% replays fixed-speed and straight stop/restart commands.
