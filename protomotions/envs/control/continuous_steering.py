@@ -15,10 +15,21 @@ class ContinuousSteeringConfig(SteeringControlConfig):
     turn_fraction: float = 0.2
     acceleration_min: float = 0.2
     acceleration_max: float = 0.8
+    speed_anchor_targets: tuple[float, ...] | None = None
+    speed_anchor_probability: float = 0.0
+    acceleration_anchor_targets: tuple[float, ...] | None = None
+    acceleration_anchor_probability: float = 0.0
+    transition_pair_targets: tuple[tuple[float, float], ...] | None = None
+    transition_pair_probability: float = 0.0
+    transition_pair_source_band: float = 0.05
     yaw_rate: float = 0.35
     turn_angle_max: float = math.pi / 4
     full_heading_for_turn: bool = False
     independent_facing_fraction: float = 0.0
+    # Opt-in Stage D candidate: bounded relative facing with synchronized ramps.
+    # None preserves the original absolute, instantaneous facing behavior.
+    facing_offset_max: float | None = None
+    facing_yaw_rate: float = 0.5
     # Only continuous groups sample stops; other targets use tar_speed_min/max.
     stop_probability: float = 0.1
     # Seconds after a speed ramp ends that still count as a speed transition
@@ -27,6 +38,16 @@ class ContinuousSteeringConfig(SteeringControlConfig):
     # > 0: after the hold, the transition also lasts until the trailing 1 s mean of
     # the speed along tar_dir is within this band of tar_speed. 0 keeps time only.
     transition_settle_band: float = 0.0
+    # Optional command lookahead exposed only to observations by a recipe.
+    preview_seconds: float = 0.0
+    # If set, accelerating speed commands use this horizon; deceleration and
+    # coupled turns keep preview_seconds.
+    acceleration_preview_seconds: float | None = None
+    # Keep long braking preview for a full stop while shortening walking-speed deceleration.
+    nonstop_deceleration_preview_seconds: float | None = None
+    # Observation-only lead below the next walking target during a deceleration ramp.
+    nonstop_deceleration_preview_undershoot_mps: float = 0.0
+    nonstop_deceleration_preview_undershoot_min_goal_mps: float = 0.0
 
 
 class ContinuousSteering(SteeringControl):
@@ -36,8 +57,77 @@ class ContinuousSteering(SteeringControl):
             raise ValueError("Invalid fixed/turn group fractions")
         if not (0 < config.acceleration_min <= config.acceleration_max and config.yaw_rate > 0):
             raise ValueError("Command rate limits must be positive")
+        if not math.isfinite(config.preview_seconds) or config.preview_seconds < 0:
+            raise ValueError("preview_seconds must be finite and nonnegative")
+        if config.acceleration_preview_seconds is not None and (
+            not math.isfinite(config.acceleration_preview_seconds)
+            or config.acceleration_preview_seconds < 0
+        ):
+            raise ValueError("acceleration_preview_seconds must be finite and nonnegative")
+        if config.nonstop_deceleration_preview_seconds is not None and (
+            not math.isfinite(config.nonstop_deceleration_preview_seconds)
+            or config.nonstop_deceleration_preview_seconds < 0
+        ):
+            raise ValueError("nonstop_deceleration_preview_seconds must be finite and nonnegative")
+        undershoot = getattr(config, "nonstop_deceleration_preview_undershoot_mps", 0.0)
+        if not math.isfinite(undershoot) or undershoot < 0:
+            raise ValueError("nonstop_deceleration_preview_undershoot_mps must be finite and nonnegative")
+        min_goal = getattr(config, "nonstop_deceleration_preview_undershoot_min_goal_mps", 0.0)
+        if not math.isfinite(min_goal) or min_goal < 0:
+            raise ValueError("nonstop_deceleration_preview_undershoot_min_goal_mps must be finite and nonnegative")
+        if not 0 <= config.speed_anchor_probability <= 1:
+            raise ValueError("speed_anchor_probability must be in [0, 1]")
+        if config.speed_anchor_probability > 0 and (
+            not config.speed_anchor_targets or any(
+                not math.isfinite(speed) or not config.tar_speed_min <= speed <= config.tar_speed_max
+                for speed in config.speed_anchor_targets
+            )
+        ):
+            raise ValueError("speed_anchor_targets must be finite speeds inside the command range")
+        if not 0 <= config.acceleration_anchor_probability <= 1:
+            raise ValueError("acceleration_anchor_probability must be in [0, 1]")
+        if config.acceleration_anchor_probability > 0 and (
+            not config.acceleration_anchor_targets or any(
+                not math.isfinite(rate) or not config.acceleration_min <= rate <= config.acceleration_max
+                for rate in config.acceleration_anchor_targets
+            )
+        ):
+            raise ValueError("acceleration_anchor_targets must be finite rates inside the command range")
+        if not 0 <= config.transition_pair_probability <= 1:
+            raise ValueError("transition_pair_probability must be in [0, 1]")
+        if not math.isfinite(config.transition_pair_source_band) or config.transition_pair_source_band <= 0:
+            raise ValueError("transition_pair_source_band must be finite and positive")
+        if config.transition_pair_probability > 0 and (
+            not config.transition_pair_targets or any(
+                len(pair) != 2 or any(
+                    not math.isfinite(speed) or not config.tar_speed_min <= speed <= config.tar_speed_max
+                    for speed in pair
+                ) or pair[0] == pair[1]
+                for pair in config.transition_pair_targets
+            )
+        ):
+            raise ValueError("transition_pair_targets must contain distinct speeds inside the command range")
         if not 0 <= config.independent_facing_fraction <= 1:
             raise ValueError("independent_facing_fraction must be in [0, 1]")
+        if config.facing_offset_max is not None:
+            if not (0 <= config.facing_offset_max < math.pi / 2
+                    and math.isfinite(config.facing_yaw_rate) and config.facing_yaw_rate > 0
+                    and 0 <= config.turn_angle_max < math.pi / 2
+                    and not config.full_heading_for_turn):
+                raise ValueError("Relative facing requires finite positive rate and local turn/offset bounds < pi/2")
+        self._goal_facing = torch.zeros_like(self._tar_dir_theta)
+        self._speed_anchors = (
+            torch.tensor(config.speed_anchor_targets, device=self._tar_speed.device)
+            if config.speed_anchor_probability > 0 else None
+        )
+        self._acceleration_anchors = (
+            torch.tensor(config.acceleration_anchor_targets, device=self._tar_speed.device)
+            if config.acceleration_anchor_probability > 0 else None
+        )
+        self._transition_pairs = (
+            torch.tensor(config.transition_pair_targets, device=self._tar_speed.device)
+            if config.transition_pair_probability > 0 else None
+        )
         self._goal_speed = torch.ones_like(self._tar_speed)
         self._goal_heading = torch.zeros_like(self._tar_dir_theta)
         self._acceleration = torch.ones_like(self._tar_speed) * config.acceleration_min
@@ -77,7 +167,16 @@ class ContinuousSteering(SteeringControl):
         c = self.config
         n, device = len(env_ids), env_ids.device
         speed = torch.rand(n, device=device) * (c.tar_speed_max-c.tar_speed_min) + c.tar_speed_min
+        if self._speed_anchors is not None:
+            anchored = self._speed_anchors[torch.randint(len(self._speed_anchors), (n,), device=device)]
+            speed = torch.where(torch.rand(n, device=device) < c.speed_anchor_probability, anchored, speed)
         speed = torch.where(torch.rand(n, device=device) < c.stop_probability, 0., speed)
+        if self._transition_pairs is not None:
+            pair = self._transition_pairs[
+                torch.randint(len(self._transition_pairs), (n,), device=device)]
+            paired = (self._tar_speed[env_ids] - pair[:, 0]).abs() <= c.transition_pair_source_band
+            paired &= (speed > 0) & (torch.rand(n, device=device) < c.transition_pair_probability)
+            speed = torch.where(paired, pair[:, 1], speed)
         fixed = self._mode[env_ids] == 0
         # The fixed group retains its original command for the whole episode.
         initial = self.env.progress_buf[env_ids] == 0
@@ -90,6 +189,12 @@ class ContinuousSteering(SteeringControl):
         self._goal_heading[env_ids] = torch.where(self._mode[env_ids] == 2, heading, 0.)
         self._goal_speed[env_ids] = speed
         self._acceleration[env_ids] = c.acceleration_min + torch.rand(n, device=device)*(c.acceleration_max-c.acceleration_min)
+        if self._acceleration_anchors is not None:
+            anchored = self._acceleration_anchors[
+                torch.randint(len(self._acceleration_anchors), (n,), device=device)]
+            self._acceleration[env_ids] = torch.where(
+                torch.rand(n, device=device) < c.acceleration_anchor_probability,
+                anchored, self._acceleration[env_ids])
         self._heading_change_steps[env_ids] = self.env.progress_buf[env_ids] + torch.randint(
             c.heading_change_steps_min, c.heading_change_steps_max, (n,), device=device)
         independent = (self._mode[env_ids] == 2) & (
@@ -97,6 +202,12 @@ class ContinuousSteering(SteeringControl):
         )
         self._independent_facing[env_ids] = independent
         face_angle = (2 * torch.rand(n, device=device) - 1) * math.pi
+        if c.facing_offset_max is not None:
+            offset = face_angle / math.pi * c.facing_offset_max
+            self._goal_facing[env_ids] = self._goal_heading[env_ids] + torch.where(
+                independent, offset, torch.zeros_like(offset))
+            # Resampling changes goals only, never the emitted facing command.
+            return
         facing = torch.stack((face_angle.cos(), face_angle.sin()), dim=-1)
         self._tar_face_dir[env_ids] = torch.where(
             independent[:, None], facing, self._tar_dir[env_ids]
@@ -126,12 +237,60 @@ class ContinuousSteering(SteeringControl):
             self._speed_transition |= self._settling
         angle_error = (self._goal_heading-self._tar_dir_theta+math.pi) % (2*math.pi)-math.pi
         max_turn = self.config.yaw_rate * self.env.dt
-        self._tar_dir_theta += angle_error.clamp(-max_turn, max_turn)
+        if self.config.facing_offset_max is not None:
+            face_angle = torch.atan2(self._tar_face_dir[:, 1], self._tar_face_dir[:, 0])
+            # Use the same angular branch as travel. A common interpolation
+            # fraction preserves the relative-angle bound even while turning.
+            current_offset = (face_angle-self._tar_dir_theta+math.pi) % (2*math.pi)-math.pi
+            goal_offset = self._goal_facing-self._goal_heading
+            face_error = angle_error + goal_offset - current_offset
+            fraction = torch.minimum(
+                (max_turn / angle_error.abs().clamp_min(1e-8)).clamp(max=1),
+                (self.config.facing_yaw_rate*self.env.dt / face_error.abs().clamp_min(1e-8)).clamp(max=1))
+            self._tar_dir_theta += fraction * angle_error
+            face_angle += fraction * face_error
+            self._tar_face_dir[:, 0] = face_angle.cos()
+            self._tar_face_dir[:, 1] = face_angle.sin()
+        else:
+            self._tar_dir_theta += angle_error.clamp(-max_turn, max_turn)
         self._tar_dir[:, 0] = self._tar_dir_theta.cos()
         self._tar_dir[:, 1] = self._tar_dir_theta.sin()
         coupled = ~self._independent_facing
-        self._tar_face_dir[coupled] = self._tar_dir[coupled]
+        if self.config.facing_offset_max is None:
+            self._tar_face_dir[coupled] = self._tar_dir[coupled]
 
     def populate_context(self, ctx):
         super().populate_context(ctx)
         ctx.steering.speed_transition = self._speed_transition
+        horizon = self.config.preview_seconds
+        if horizon == 0:
+            ctx.steering.tar_speed_preview = self._tar_speed
+            ctx.steering.tar_dir_preview = self._tar_dir
+            ctx.steering.tar_face_dir_preview = self._tar_face_dir
+            return
+        speed_horizon = torch.full_like(self._tar_speed, horizon)
+        if self.config.acceleration_preview_seconds is not None:
+            speed_horizon = torch.where(
+                self._goal_speed > self._tar_speed,
+                self.config.acceleration_preview_seconds, speed_horizon)
+        if self.config.nonstop_deceleration_preview_seconds is not None:
+            speed_horizon = torch.where(
+                (self._goal_speed > 0) & (self._goal_speed < self._tar_speed),
+                self.config.nonstop_deceleration_preview_seconds, speed_horizon)
+        max_delta = self._acceleration * speed_horizon
+        speed_preview = self._tar_speed + (
+            self._goal_speed - self._tar_speed).clamp(-max_delta, max_delta)
+        undershoot = getattr(self.config, "nonstop_deceleration_preview_undershoot_mps", 0.0)
+        if undershoot:
+            min_goal = getattr(self.config, "nonstop_deceleration_preview_undershoot_min_goal_mps", 0.0)
+            walking_brake = ((self._goal_speed > 0) & (self._goal_speed >= min_goal)
+                             & (self._goal_speed < self._tar_speed))
+            speed_preview = torch.where(walking_brake, (speed_preview - undershoot).clamp_min(0), speed_preview)
+        ctx.steering.tar_speed_preview = speed_preview
+        error = (self._goal_heading - self._tar_dir_theta + math.pi) % (2 * math.pi) - math.pi
+        theta = self._tar_dir_theta + error.clamp(-self.config.yaw_rate * horizon,
+                                                 self.config.yaw_rate * horizon)
+        direction = torch.stack((theta.cos(), theta.sin()), dim=-1)
+        ctx.steering.tar_dir_preview = direction
+        ctx.steering.tar_face_dir_preview = torch.where(
+            self._independent_facing[:, None], self._tar_face_dir, direction)

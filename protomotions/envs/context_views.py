@@ -410,7 +410,10 @@ class SteeringContext:
     tar_dir: Tensor = FieldPath()
     tar_dir_theta: Tensor = FieldPath()
     tar_speed: Tensor = FieldPath()
+    tar_speed_preview: Tensor = FieldPath()
     tar_face_dir: Tensor = FieldPath()
+    tar_dir_preview: Tensor = FieldPath()
+    tar_face_dir_preview: Tensor = FieldPath()
     prev_root_pos: Tensor = FieldPath()
     speed_transition: Tensor = FieldPath()
 

@@ -266,6 +266,99 @@ def stage_c_stops_slow_lateral_recipe(robot_cfg, args, tangent_err_w):
     return cfg
 
 
+def stage_c_overspeed_recipe(robot_cfg, args, overspeed_err_scale):
+    """A-C candidate: penalize excess speed during transitions while preserving e16 elsewhere."""
+    cfg = stage_c_stops_slow_lateral_recipe(robot_cfg, args, 1.0)
+    cfg.reward_components["speed_transition_tracking"].static_params["overspeed_err_scale"] = overspeed_err_scale
+    return cfg
+
+
+def stage_c_overspeed_tail_recipe(robot_cfg, args):
+    """Keep a speed-error gradient when a deceleration lags far behind its command."""
+    cfg = stage_c_overspeed_recipe(robot_cfg, args, 80.0)
+    term = cfg.reward_components["speed_transition_tracking"].static_params
+    term["overspeed_tail_scale"] = 8.0
+    term["overspeed_tail_weight"] = 0.5
+    return cfg
+
+
+def stage_c_speed_anchor_recipe(robot_cfg, args):
+    """A-C candidate: sample Stage B transition endpoints more often."""
+    cfg = stage_c_stops_slow_lateral_recipe(robot_cfg, args, 1.0)
+    cfg.control_components["steering"] = dataclasses.replace(
+        cfg.control_components["steering"],
+        speed_anchor_targets=(0.4, 1.0, 1.4), speed_anchor_probability=0.7)
+    return cfg
+
+
+def stage_c_endpoint_curriculum_recipe(robot_cfg, args):
+    """Repeat the tested speed and acceleration endpoints while retaining random commands."""
+    cfg = stage_c_overspeed_recipe(robot_cfg, args, 40.0)
+    cfg.control_components["steering"] = dataclasses.replace(
+        cfg.control_components["steering"],
+        speed_anchor_targets=(0.4, 1.0, 1.4), speed_anchor_probability=0.5,
+        acceleration_anchor_targets=(0.4, 0.8), acceleration_anchor_probability=0.7,
+        stop_probability=0.3)
+    return cfg
+
+
+def stage_c_command_preview_recipe(robot_cfg, args, horizon=0.5):
+    """Show a bounded future command to the actor only."""
+    cfg = stage_c_endpoint_curriculum_recipe(robot_cfg, args)
+    cfg.control_components["steering"] = dataclasses.replace(
+        cfg.control_components["steering"], preview_seconds=horizon,
+        turn_fraction=0.1, yaw_rate=0.5)
+    obs = cfg.observation_components["steering"].dynamic_vars
+    obs["tar_speed"] = EnvContext.steering.tar_speed_preview
+    obs["tar_dir"] = EnvContext.steering.tar_dir_preview
+    obs["tar_face_dir"] = EnvContext.steering.tar_face_dir_preview
+    return cfg
+
+
+def stage_c_split_preview_recipe(robot_cfg, args):
+    """Use long preview for braking/turning and shorter preview for acceleration."""
+    cfg = stage_c_command_preview_recipe(robot_cfg, args, horizon=1.0)
+    cfg.control_components["steering"] = dataclasses.replace(
+        cfg.control_components["steering"], acceleration_preview_seconds=0.5)
+    return cfg
+
+
+def stage_c_targeted_preview_recipe(robot_cfg, args):
+    """Keep early stop/turn notice; shorten notice for walking-speed braking."""
+    cfg = stage_c_split_preview_recipe(robot_cfg, args)
+    cfg.control_components["steering"] = dataclasses.replace(
+        cfg.control_components["steering"], nonstop_deceleration_preview_seconds=0.25)
+    return cfg
+
+
+def stage_c_pair_curriculum_recipe(robot_cfg, args):
+    """Practice the lagging high-speed braking transition without reducing stops."""
+    cfg = stage_c_targeted_preview_recipe(robot_cfg, args)
+    cfg.control_components["steering"] = dataclasses.replace(
+        cfg.control_components["steering"],
+        transition_pair_targets=((1.4, 1.0),), transition_pair_probability=0.7)
+    return cfg
+
+
+def stage_c_transition_tails_recipe(robot_cfg, args):
+    """Keep speed-error gradients during high-speed braking and restart from rest."""
+    cfg = stage_c_targeted_preview_recipe(robot_cfg, args)
+    term = cfg.reward_components["speed_transition_tracking"].static_params
+    term["overspeed_tail_scale"] = 8.0
+    term["overspeed_tail_weight"] = 0.5
+    term["underspeed_tail_scale"] = 4.0
+    term["underspeed_tail_weight"] = 0.5
+    return cfg
+
+
+def stage_c_slow_turn_recipe(robot_cfg, args):
+    """A-C candidate: include slow coupled turns while replaying straight and stop commands."""
+    cfg = stage_c_stops_slow_lateral_recipe(robot_cfg, args, 1.0)
+    cfg.control_components["steering"] = dataclasses.replace(
+        cfg.control_components["steering"], turn_fraction=0.2, yaw_rate=0.5)
+    return cfg
+
+
 # Method 1 Stage D round 1, parent e16 (260926). Keep its reward and speed
 # distribution; compare the independent-facing probability inside the 60% turn
 # group. The other 40% replays fixed-speed and straight stop/restart commands.
@@ -274,4 +367,15 @@ def stage_d_recipe(robot_cfg, args, independent_facing_fraction):
     cfg.control_components["steering"] = dataclasses.replace(
         cfg.control_components["steering"], fixed_fraction=.20, turn_fraction=.60,
         full_heading_for_turn=True, independent_facing_fraction=independent_facing_fraction)
+    return cfg
+
+
+def stage_d_relative_facing_recipe(robot_cfg, args):
+    """Candidate owned by d-a7-facing15: small facing offsets; untrained."""
+    cfg = stage_c_stops_slow_lateral_recipe(robot_cfg, args, 1.0)
+    cfg.control_components["steering"] = dataclasses.replace(
+        cfg.control_components["steering"], fixed_fraction=.30, turn_fraction=.30,
+        full_heading_for_turn=False, turn_angle_max=math.radians(45),
+        independent_facing_fraction=1.0, facing_offset_max=math.radians(15),
+        facing_yaw_rate=.5)
     return cfg
