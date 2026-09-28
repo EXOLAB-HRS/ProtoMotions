@@ -586,6 +586,64 @@ class HumanJointModel:
         passive = elastic + damping
         return active + passive, active, passive, elastic, damping, negative, positive, outside
 
+    def _apply_implicit(self, simulator, command, mode):
+        """Experimental PhysX implicit PD (HC_HUMAN_IMPLICIT_PD=1; see isaaclab scene.py).
+
+        The drive (policy Kp/Kd, target = command) is solved inside the physics step.
+        Its force limit is the active strength cap in the direction of the PD torque
+        estimated at the start of the substep; passive torque is a feed-forward effort.
+        This is a different plant from the explicit model and is for low-rate tests only.
+        """
+        from protomotions.robot_configs.base import ControlType
+        if mode not in (ControlType.BUILT_IN_PD, ControlType.PROPORTIONAL) or self.features:
+            raise ValueError("Implicit human PD supports stateless PD-command models only")
+        state = simulator._get_simulator_dof_state().convert_to_common(simulator.data_conversion)
+        q, qd = state.dof_pos, state.dof_vel
+        requested = simulator._common_p_gains * (command - q) - simulator._common_d_gains * qd
+        negative, positive, outside = self.strength_caps(q, qd)
+        cap = torch.where(requested >= 0, positive, negative).clamp_min(0)
+        elastic, damping = self.elastic_torque(q), self.damping_torque(qd)
+        passive = elastic + damping
+        active = torch.maximum(torch.minimum(requested, positive), -negative)  # estimate, for logging
+        simulator.human_requested_torques = requested
+        simulator.human_active_torques = active
+        simulator.human_passive_torques = passive
+        simulator.human_elastic_torques = elastic
+        simulator.human_damping_torques = damping
+        simulator.human_applied_torques = active + passive
+        simulator.human_negative_caps, simulator.human_positive_caps = negative, positive
+        simulator.human_strength_outside_domain = outside
+        callback = getattr(simulator, "human_model_trace_callback", None)
+        if callback is not None:
+            callback(simulator, state)
+        to_sim = simulator.data_conversion.dof_convert_to_sim
+        self._write_implicit(simulator, cap[..., to_sim], command[..., to_sim], passive[..., to_sim])
+
+    def _write_implicit(self, simulator, cap_sim, command_sim, passive_sim):
+        """Drive limit, target and feed-forward effort for one substep.
+
+        Same values as Articulation.write_joint_effort_limit_to_sim, but the PhysX
+        max-force API is fed from a reused pinned host buffer and cached indices
+        instead of a fresh .cpu() copy of the limits and env indices every substep.
+        """
+        robot = simulator._robot
+        host = getattr(self, "_implicit_host", None)
+        if host is None or host[0].shape != cap_sim.shape:
+            buf = torch.empty(cap_sim.shape, dtype=cap_sim.dtype, pin_memory=cap_sim.is_cuda)
+            host = self._implicit_host = (buf, robot._ALL_INDICES.cpu())
+        # HC_HUMAN_IMPLICIT_CAP_EVERY=control (candidate, a further plant change): write the
+        # limit only on the first substep of each control step (state at the control step).
+        # The PhysX max-force write is a host API call and costs about as much as a substep.
+        import os
+        self._implicit_calls = getattr(self, "_implicit_calls", -1) + 1
+        if (os.environ.get("HC_HUMAN_IMPLICIT_CAP_EVERY", "substep") != "control"
+                or self._implicit_calls % simulator.decimation == 0):
+            robot._data.joint_effort_limits.copy_(cap_sim)
+            host[0].copy_(cap_sim)  # blocking device->host copy: PhysX reads the host buffer
+            robot.root_physx_view.set_dof_max_forces(host[0], indices=host[1])
+        robot.set_joint_position_target(command_sim)
+        simulator._apply_simulator_torques(passive_sim)
+
     def _graph_eligible(self, simulator, mode):
         """CUDA-graph fast path: Isaac Lab, CUDA, stateless model, PD command, no trace callback."""
         from protomotions.robot_configs.base import ControlType
@@ -611,7 +669,24 @@ class HumanJointModel:
                     torque_sim=total[..., g["to_sim"]],
                     finite=torch.isfinite(g["q_sim"]).all() & torch.isfinite(g["qd_sim"]).all())
 
-    def _apply_graphed(self, simulator, command):
+    def _graph_body_implicit(self):
+        """Implicit-PD substep compute on static buffers (same kernels as _apply_implicit)."""
+        g = self._graph_io
+        q = g["q_sim"][:, g["to_common"]]
+        qd = g["qd_sim"][:, g["to_common"]]
+        requested = g["p_gains"] * (g["command"] - q) - g["d_gains"] * qd
+        negative, positive, outside = self.strength_caps(q, qd)
+        cap = torch.where(requested >= 0, positive, negative).clamp_min(0)
+        elastic, damping = self.elastic_torque(q), self.damping_torque(qd)
+        passive = elastic + damping
+        active = torch.maximum(torch.minimum(requested, positive), -negative)
+        return dict(requested=requested, total=active + passive, active=active, passive=passive,
+                    elastic=elastic, damping=damping, negative=negative, positive=positive, outside=outside,
+                    cap_sim=cap[..., g["to_sim"]], command_sim=g["command"][..., g["to_sim"]],
+                    torque_sim=passive[..., g["to_sim"]],
+                    finite=torch.isfinite(g["q_sim"]).all() & torch.isfinite(g["qd_sim"]).all())
+
+    def _apply_graphed(self, simulator, command, implicit=False):
         """Replay the captured substep; identical kernels and inputs to the eager path.
 
         Re-captures when the gain tensors or batch shape change. A non-finite state
@@ -620,7 +695,8 @@ class HumanJointModel:
         data = simulator._robot.data
         conv = simulator.data_conversion
         key = (simulator._common_p_gains.data_ptr(), simulator._common_d_gains.data_ptr(),
-               tuple(data.joint_pos.shape), float(simulator.config.sim.fps))
+               tuple(data.joint_pos.shape), float(simulator.config.sim.fps), implicit)
+        body = self._graph_body_implicit if implicit else self._graph_body
         if getattr(self, "_graph_key", None) != key:
             self._graph_io = dict(
                 q_sim=data.joint_pos.clone(), qd_sim=data.joint_vel.clone(), command=command.clone(),
@@ -633,11 +709,11 @@ class HumanJointModel:
             stream.wait_stream(torch.cuda.current_stream())
             with torch.cuda.stream(stream):
                 for _ in range(3):
-                    self._graph_body()
+                    body()
             torch.cuda.current_stream().wait_stream(stream)
             self._graph = torch.cuda.CUDAGraph()
             with torch.cuda.graph(self._graph):
-                self._graph_out = self._graph_body()
+                self._graph_out = body()
             self._graph_key = key
         g = self._graph_io
         g["q_sim"].copy_(data.joint_pos)
@@ -656,7 +732,10 @@ class HumanJointModel:
         simulator.human_applied_torques = out["total"]
         simulator.human_negative_caps, simulator.human_positive_caps = out["negative"], out["positive"]
         simulator.human_strength_outside_domain = out["outside"]
-        simulator._apply_simulator_torques(out["torque_sim"])
+        if implicit:
+            self._write_implicit(simulator, out["cap_sim"], out["command_sim"], out["torque_sim"])
+        else:
+            simulator._apply_simulator_torques(out["torque_sim"])
         return True
 
     def apply(self, simulator):
@@ -669,6 +748,11 @@ class HumanJointModel:
             noise = randomization["action_noise"]
             command[..., noise["dof_indices"]] += noise["action_noise"]
         mode = simulator.robot_config.control.control_type
+        import os
+        if os.environ.get("HC_HUMAN_IMPLICIT_PD", "0") == "1":
+            if self._graph_eligible(simulator, mode) and self._apply_graphed(simulator, command, implicit=True):
+                return
+            return self._apply_implicit(simulator, command, mode)
         if self._graph_eligible(simulator, mode) and self._apply_graphed(simulator, command):
             return
         state = simulator._get_simulator_dof_state().convert_to_common(simulator.data_conversion)
