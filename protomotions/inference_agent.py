@@ -300,6 +300,11 @@ def main():
     simulator_extra_params = {}
     if args.simulator == "isaaclab":
         app_launcher_flags = {"headless": args.headless, "device": str(fabric.device)}
+        # Native viewport capture needs Kit cameras when video output is requested.
+        if _os.environ.get("HC_NATIVE_VIDEO"):
+            app_launcher_flags["enable_cameras"] = True
+            if not args.headless:
+                app_launcher_flags["visualizer"] = ["kit"]
         # Offscreen recording needs the camera/replicator extensions loaded.
         if getattr(simulator_config, "record_viewer", False):
             app_launcher_flags["enable_cameras"] = True
