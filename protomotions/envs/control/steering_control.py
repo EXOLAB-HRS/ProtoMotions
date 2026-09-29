@@ -49,6 +49,8 @@ class SteeringControlConfig(ControlComponentConfig):
         heading_change_steps_min: Minimum steps between heading changes.
         heading_change_steps_max: Maximum steps between heading changes.
         random_heading_probability: Probability of fully random heading vs incremental change.
+        random_heading_min: Lower bound for fully random heading samples.
+        random_heading_max: Upper bound for fully random heading samples.
         random_speed_probability: Probability of sampling speed uniformly over the
             full range.  ``None`` preserves the legacy coupling to
             ``random_heading_probability``.
@@ -65,6 +67,8 @@ class SteeringControlConfig(ControlComponentConfig):
     heading_change_steps_min: int = 50
     heading_change_steps_max: int = 150
     random_heading_probability: float = 0.1
+    random_heading_min: float = -np.pi
+    random_heading_max: float = np.pi
     random_speed_probability: Optional[float] = None
     standard_heading_change: float = 0.5  # radians
     standard_speed_change: float = 0.5
@@ -87,6 +91,8 @@ class SteeringControl(ControlComponent):
     def __init__(self, config: SteeringControlConfig, env: "BaseEnv"):
         super().__init__(config, env)
         self.config: SteeringControlConfig = config
+        if config.random_heading_max <= config.random_heading_min:
+            raise ValueError("random_heading_max must exceed random_heading_min")
 
         # Task state buffers
         self._heading_change_steps = torch.zeros(
@@ -120,13 +126,23 @@ class SteeringControl(ControlComponent):
         )
 
     def reset(self, env_ids: Tensor):
-        """Reset steering task for given environments."""
+        """Reset steering task and velocity history for given environments."""
         if len(env_ids) == 0:
             return
 
+        # Only a real environment reset may seed the double buffer.  Doing it on
+        # an in-episode command change would make the measured root velocity
+        # exactly zero for that control step.
         root_pos = self.env.simulator.get_root_state().root_pos[env_ids]
         self._prev_root_pos[env_ids] = root_pos
         self._curr_root_pos[env_ids] = root_pos
+
+        self._resample_task(env_ids)
+
+    def _resample_task(self, env_ids: Tensor):
+        """Sample a new heading/speed command without touching velocity history."""
+        if len(env_ids) == 0:
+            return
 
         n = len(env_ids)
         device = self.env.device
@@ -143,7 +159,9 @@ class SteeringControl(ControlComponent):
             use_random_speed = torch.bernoulli(speed_rand_probs).bool()
 
         # Fully random heading and speed (for envs with use_random=True)
-        rand_dir_theta = 2 * np.pi * torch.rand(n, device=device) - np.pi
+        rand_dir_theta = (
+            self.config.random_heading_max - self.config.random_heading_min
+        ) * torch.rand(n, device=device) + self.config.random_heading_min
         rand_tar_speed = (
             self.config.tar_speed_max - self.config.tar_speed_min
         ) * torch.rand(n, device=device) + self.config.tar_speed_min
@@ -211,7 +229,7 @@ class SteeringControl(ControlComponent):
         reset_task_mask = self.env.progress_buf >= self._heading_change_steps
         env_ids = reset_task_mask.nonzero(as_tuple=False).flatten()
         if len(env_ids) > 0:
-            self.reset(env_ids)
+            self._resample_task(env_ids)
 
     def check_resets_and_terminations(self) -> Tuple[Tensor, Tensor]:
         """No terminations from steering control."""

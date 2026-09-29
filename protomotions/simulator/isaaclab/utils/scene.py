@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025-2026 The ProtoMotions Developers
 # SPDX-License-Identifier: Apache-2.0
+# Modified to let the human joint model apply active and passive forces once.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -28,6 +29,36 @@ from protomotions.simulator.isaaclab.utils.usd_utils import TrimeshTerrainImport
 from protomotions.simulator.isaaclab.config import IsaacLabSimulatorConfig
 from protomotions.simulator.base_simulator.config import ProjectileConfig
 from protomotions.robot_configs.base import ControlType
+
+
+def grouped_human_actuator(robot_config):
+    """All human-model joints as one IdealPD group (zero gains, per-joint limits).
+
+    The explicit human model computes its own torques and only needs PhysX-side
+    clipping. One actuator per joint made Isaac Lab loop over 59 groups every
+    physics substep (about half of the step time at 480 Hz); one group runs the
+    same per-joint math once. Isaac Lab fills joints missing from a per-joint dict
+    with 0, not the USD default, so a parameter is grouped only when it is set for
+    every joint or for none; otherwise return None and keep per-joint groups.
+    """
+    import re
+    items = list(robot_config.control.control_info.items())
+    values = {
+        "armature": [c.armature for _, c in items],
+        "effort_limit_sim": [c.effort_limit for _, c in items],
+        # IdealPD must not clip passive torque to an active-only ceiling.
+        "effort_limit": [c.effort_limit for _, c in items],
+        "velocity_limit_sim": [c.velocity_limit for _, c in items],
+        "friction": [c.friction for _, c in items],
+    }
+    kwargs = {"stiffness": 0.0, "damping": 0.0}
+    for key, column in values.items():
+        present = [v is not None for v in column]
+        if all(present):
+            kwargs[key] = {re.escape(name): float(v) for (name, _), v in zip(items, column)}
+        elif any(present):
+            return None
+    return IdealPDActuatorCfg(joint_names_expr=[re.escape(name) for name, _ in items], **kwargs)
 
 
 @configclass
@@ -138,15 +169,19 @@ class SceneCfg(InteractiveSceneCfg):
                 setattr(self, f"projectile_{proj_idx}", proj_cfg)
 
         actuators = {}
+        explicit_human = getattr(robot_config, "_human_model_enabled", False)
         ActuatorConfig = (
             ImplicitActuatorCfg
-            if robot_config.control.control_type == ControlType.BUILT_IN_PD
+            if robot_config.control.control_type == ControlType.BUILT_IN_PD and not explicit_human
             else IdealPDActuatorCfg
         )
-        for dof_name, control_info in robot_config.control.control_info.items():
+        human_group = grouped_human_actuator(robot_config) if explicit_human else None
+        if human_group is not None:
+            actuators["human_model"] = human_group
+        for dof_name, control_info in ({} if human_group is not None else robot_config.control.control_info).items():
             stiffness = control_info.stiffness
             damping = control_info.damping
-            if robot_config.control.control_type != ControlType.BUILT_IN_PD:
+            if robot_config.control.control_type != ControlType.BUILT_IN_PD or explicit_human:
                 stiffness = 0.0
                 damping = 0.0
             actuators[dof_name] = ActuatorConfig(
@@ -159,6 +194,9 @@ class SceneCfg(InteractiveSceneCfg):
                         "damping": damping,
                         "armature": control_info.armature,
                         "effort_limit_sim": control_info.effort_limit,
+                        # IdealPD must not clip passive torque to an active-only
+                        # ceiling before forwarding it to PhysX.
+                        "effort_limit": control_info.effort_limit if explicit_human else None,
                         "velocity_limit_sim": control_info.velocity_limit,
                         "friction": control_info.friction,
                     }.items()
@@ -182,6 +220,7 @@ class SceneCfg(InteractiveSceneCfg):
                     max_depenetration_velocity=config.sim.physx.max_depenetration_velocity,
                 ),
                 articulation_props=sim_utils.ArticulationRootPropertiesCfg(
+                    fix_root_link=robot_config.asset.fix_base_link,
                     enabled_self_collisions=robot_config.asset.self_collisions,
                     solver_position_iteration_count=config.sim.physx.num_position_iterations,
                     solver_velocity_iteration_count=config.sim.physx.num_velocity_iterations,
@@ -220,6 +259,7 @@ class SceneCfg(InteractiveSceneCfg):
                     prim_path=f"{robot_config.asset.usd_bodies_root_prim_path}{body_name}",
                     filter_prim_paths_expr=sensing_filter,
                     history_length=config.sim.decimation,
+                    max_contact_data_count_per_prim=getattr(robot_config, "validation_contact_capacity", 4),
                 )
                 setattr(self, f"contact_sensor_{body_name}", contact_sensor_cfg)
 
@@ -251,3 +291,7 @@ class SceneCfg(InteractiveSceneCfg):
             )
         else:
             self.terrain = None
+
+# Native integration already applies human joint forces. Prevent the earlier
+# parent-repository bootstrap from installing another layer of model adapters.
+_hc_human_model_adapter = True

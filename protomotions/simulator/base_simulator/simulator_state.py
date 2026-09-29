@@ -561,12 +561,16 @@ class RobotState(BaseBatchedState):
         return translation_vecs
 
     def __post_init__(self):
-        self._check_finite("rigid_body_pos", self.rigid_body_pos)
-        self._check_finite("rigid_body_rot", self.rigid_body_rot)
-        self._check_finite("rigid_body_vel", self.rigid_body_vel)
-        self._check_finite("rigid_body_ang_vel", self.rigid_body_ang_vel)
-        self._check_finite("dof_pos", self.dof_pos)
-        self._check_finite("dof_vel", self.dof_vel)
+        fields = [("rigid_body_pos", self.rigid_body_pos), ("rigid_body_rot", self.rigid_body_rot),
+                  ("rigid_body_vel", self.rigid_body_vel), ("rigid_body_ang_vel", self.rigid_body_ang_vel),
+                  ("dof_pos", self.dof_pos), ("dof_vel", self.dof_vel)]
+        present = [t for _, t in fields if t is not None]
+        # One host synchronization for the common all-finite case (states are built every
+        # physics substep); the per-field check below reports which field and envs failed.
+        if present and bool(torch.stack([torch.isfinite(t).all() for t in present]).all()):
+            return
+        for name, tensor in fields:
+            self._check_finite(name, tensor)
 
     def _check_finite(self, name: str, tensor) -> None:
         if tensor is None:

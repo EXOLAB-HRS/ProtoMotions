@@ -20,6 +20,10 @@
 # python data/scripts/convert_amass_to_proto.py /home/amassx --humanoid-type=smplx --robot-type=g1
 
 import os
+import copy
+import hashlib
+import json
+from functools import lru_cache
 from pathlib import Path
 import pickle
 from typing import List
@@ -63,6 +67,56 @@ TMP_SMPL_DIR = "/tmp/smpl"
 
 
 app = typer.Typer(pretty_exceptions_enable=False)
+
+
+@lru_cache(maxsize=3)
+def _smplh_shape_model(path):
+    with np.load(path, allow_pickle=False) as model:
+        template = model['J_regressor'] @ model['v_template']
+        directions = np.einsum('jv,vck->jck', model['J_regressor'], model['shapedirs'])
+        parents = model['kintree_table'][0].astype(np.int64)
+    return template, directions, parents, hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def smplh_subject_kinematics(body_model_dir, betas, gender, kinematic_info):
+    """Restore AMASS subject joints before fixed-target retargeting (e03 candidate).
+
+    SMPL-H middle-finger bases serve as the two SMPL24 hand-end proxies.
+    No body mass, inertia or temporal scaling is inferred from shape parameters.
+    """
+    gender = np.asarray(gender).item()
+    if isinstance(gender, bytes):
+        gender = gender.decode('utf8')
+    if gender not in ('male', 'female', 'neutral'):
+        raise ValueError(f'Unsupported SMPL-H gender: {gender}')
+    path = Path(body_model_dir) / gender / 'model.npz'
+    template, directions, parents, model_sha = _smplh_shape_model(str(path.resolve()))
+    betas = np.asarray(betas, dtype=np.float64).reshape(-1)
+    if len(betas) != directions.shape[-1] or not np.isfinite(betas).all():
+        raise ValueError('Shape coefficient count/finite mismatch; do not truncate betas')
+    joints = template + np.einsum('jck,k->jc', directions, betas)
+    # Existing importer changes body frames by right-multiplying this rotation.
+    basis = sRot.from_euler('xyz', [-np.pi/2, -np.pi/2, 0]).as_matrix()
+    index = {name: i for i, name in enumerate(SMPLH_BONE_ORDER_NAMES)}
+    index.update(L_Hand=25, R_Hand=40)
+    shaped = copy.deepcopy(kinematic_info)
+    lengths = {}
+    for b, name in enumerate(shaped.body_names):
+        if b == 0:
+            continue
+        parent_name = shaped.body_names[int(shaped.parent_indices[b])]
+        j, parent = index[name], index[parent_name]
+        if parents[j] != parent:
+            raise ValueError(f'SMPL-H topology mismatch at {name}')
+        offset = basis.T @ (joints[j] - joints[parent])
+        shaped.local_pos[b] = torch.as_tensor(offset, dtype=shaped.local_pos.dtype)
+        lengths[name] = float(np.linalg.norm(offset))
+    return shaped, joints[0].copy(), dict(
+        mode='smplh_subject_shape', gender=gender, betas=betas.tolist(),
+        body_model=str(path.resolve()), body_model_sha256=model_sha,
+        source_segment_lengths_m=lengths, rest_pelvis_offset_m=joints[0].tolist(),
+        hand_endpoint_mapping={'L_Hand':'L_Middle1', 'R_Hand':'R_Middle1'},
+        mass_inertia='not inferred', time_scaling='none')
 
 
 def closest_divisor_larger_than_target(rounded_fps, target_fps):
@@ -313,6 +367,7 @@ def main(
     humanoid_type: str = "smpl",
     force_remake: bool = False,
     output_fps: int = 30,
+    body_model_dir: Path = typer.Option(None, help='SMPL-H male/female/neutral model directories; restores subject shape'),
     motion_configs: List[str] = typer.Option(
         None, "--motion-config", help="YAML files containing motion configurations"
     ),
@@ -434,6 +489,8 @@ def main(
 
             # Check if the output file already exists
             if not force_remake and outpath.exists():
+                if body_model_dir is not None:
+                    raise ValueError('Use a fresh output tree or --force-remake for shape-aware import')
                 # print(f"Skipping {filename} as it already exists.")
                 continue
 
@@ -441,11 +498,21 @@ def main(
             os.makedirs(output_dir / relative_path_dir, exist_ok=True)
 
             print(f"Processing {filename}")
+            subject_kinematics = kinematic_info
+            anthropometry = None
             if filename.suffix == ".npz" and "samp" not in str(filename):
                 motion_data = np.load(filename)
 
                 # gender = "neutral"      # assume neutral gender with beta = 0
                 amass_trans = motion_data["trans"]
+                if body_model_dir is not None:
+                    if humanoid_type != 'smpl':
+                        raise ValueError('Shape-aware import currently supports SMPL24 target only')
+                    subject_kinematics, rest_pelvis, anthropometry = smplh_subject_kinematics(
+                        body_model_dir, motion_data['betas'], motion_data['gender'], kinematic_info)
+                    amass_trans = amass_trans + rest_pelvis
+                    anthropometry.update(source=str(filename.resolve()),
+                        source_sha256=hashlib.sha256(filename.read_bytes()).hexdigest())
                 
                 # Handle both combined "poses" format and separate keys format
                 if "poses" in motion_data:
@@ -556,11 +623,13 @@ def main(
                 humanoid_type,
                 joint_names,
                 mujoco_joint_names,
-                kinematic_info,
+                subject_kinematics,
                 device,
                 dtype,
                 outpath,
             )
+            if anthropometry is not None:
+                outpath.with_suffix('.anthropometry.json').write_text(json.dumps(anthropometry, indent=2)+'\n')
 
             processed_files += 1
             elapsed_time = time.time() - start_time

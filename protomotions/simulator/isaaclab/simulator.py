@@ -19,8 +19,19 @@ import torch
 
 import isaaclab.sim as sim_utils
 
+log = logging.getLogger(__name__)
 from isaaclab.scene import InteractiveScene
-from isaaclab.sim import SimulationContext, PhysxCfg
+from isaaclab.sim import SimulationContext
+
+try:  # Isaac Lab 2.x keeps PhysX in the core package and SimulationCfg.physx
+    from isaaclab.sim import PhysxCfg
+
+    _PHYSICS_FIELD = "physx"
+except ImportError:  # Isaac Lab 3.0 moved PhysX out to isaaclab_physx and
+    # generalised the field to `physics`, PhysX being one backend among several.
+    from isaaclab_physx.physics import PhysxCfg
+
+    _PHYSICS_FIELD = "physics"
 from isaaclab.markers import VisualizationMarkers as IsaacLabVisualizationMarkers
 from isaaclab.markers import VisualizationMarkersCfg as IsaacLabVisualizationMarkersCfg
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
@@ -56,8 +67,6 @@ from protomotions.simulator.base_simulator.simulator_state import (
     ObjectState,
     ResetState,
 )
-
-log = logging.getLogger(__name__)
 
 
 class IsaacLabSimulator(Simulator):
@@ -98,20 +107,21 @@ class IsaacLabSimulator(Simulator):
         # Store custom key handlers
         self._custom_key_handlers = custom_key_handlers or {}
 
+        physx_cfg = PhysxCfg(
+            solver_type=self.config.sim.physx.solver_type,
+            max_position_iteration_count=self.config.sim.physx.num_position_iterations,
+            max_velocity_iteration_count=self.config.sim.physx.num_velocity_iterations,
+            bounce_threshold_velocity=self.config.sim.physx.bounce_threshold_velocity,
+            gpu_max_rigid_contact_count=self.config.sim.physx.gpu_max_rigid_contact_count,
+            gpu_found_lost_pairs_capacity=self.config.sim.physx.gpu_found_lost_pairs_capacity,
+            gpu_found_lost_aggregate_pairs_capacity=self.config.sim.physx.gpu_found_lost_aggregate_pairs_capacity,
+            gpu_max_rigid_patch_count=self.config.sim.physx.gpu_max_rigid_patch_count,
+        )
         sim_cfg = sim_utils.SimulationCfg(
             device=str(device),
             dt=1.0 / self.config.sim.fps,
             render_interval=self.config.sim.decimation,
-            physx=PhysxCfg(
-                solver_type=self.config.sim.physx.solver_type,
-                max_position_iteration_count=self.config.sim.physx.num_position_iterations,
-                max_velocity_iteration_count=self.config.sim.physx.num_velocity_iterations,
-                bounce_threshold_velocity=self.config.sim.physx.bounce_threshold_velocity,
-                gpu_max_rigid_contact_count=self.config.sim.physx.gpu_max_rigid_contact_count,
-                gpu_found_lost_pairs_capacity=self.config.sim.physx.gpu_found_lost_pairs_capacity,
-                gpu_found_lost_aggregate_pairs_capacity=self.config.sim.physx.gpu_found_lost_aggregate_pairs_capacity,
-                gpu_max_rigid_patch_count=self.config.sim.physx.gpu_max_rigid_patch_count,
-            ),
+            **{_PHYSICS_FIELD: physx_cfg},
         )
         self._simulation_app = simulation_app
         self._sim = SimulationContext(sim_cfg)
@@ -465,8 +475,11 @@ class IsaacLabSimulator(Simulator):
             coms = self._robot.root_physx_view.get_coms().clone()
 
             # Randomize the com in range
+            body_names=[self.robot_config.kinematic_info.body_names[int(i)]
+                        for i in self._domain_randomization['center_of_mass']['body_indices']]
+            native_ids,_=self._robot.find_bodies(body_names,preserve_order=True)
             coms[
-                :, self._domain_randomization["center_of_mass"]["body_indices"], :3
+                :, native_ids, :3
             ] += self._domain_randomization["center_of_mass"]["com"].to(coms.device)
 
             # Set the new COMs.
@@ -548,7 +561,14 @@ class IsaacLabSimulator(Simulator):
         Advance the simulation by stepping for a number of iterations equal to the decimation factor.
         """
         for idx in range(self.decimation):
+            # Optional side-channel hooks. The native loop remains the only
+            # physics owner; absent hooks preserve the original call sequence.
+            hook = getattr(self, "native_substep_observer", None)
+            if hook is not None:
+                hook.before_control(self, idx)
             self._apply_control()
+            if hook is not None:
+                hook.after_control(self, idx)
             self._scene.write_data_to_sim()
             self._sim.step(render=False)
             if (idx + 1) % self.decimation == 0 and (
@@ -557,6 +577,8 @@ class IsaacLabSimulator(Simulator):
             ):
                 self._sim.render()
             self._scene.update(dt=self._sim.get_physics_dt())
+            if hook is not None:
+                hook.after_step(self, idx)
 
     def _apply_simulator_pd_targets(self, pd_targets: torch.Tensor) -> None:
         """Applies PD position targets using IsaacLab's internal PD controller."""
@@ -621,8 +643,13 @@ class IsaacLabSimulator(Simulator):
         Returns:
             SimBodyOrdering: An object containing the body names and DOF names.
         """
+        # Serial human joint assets contain invisible numerical frame links.
+        # Expose only the physical SMPL bodies in the existing 24-body contract.
+        names=self._robot.data.body_names
+        serial_human=getattr(self.robot_config,'human_model_usd_joint_mode','d6') in ('serial','anatomical') and self._human_joint_model is not None
+        self._physical_body_indices=[i for i,name in enumerate(names) if not (serial_human and name.startswith('_joint_frame_'))]
         return SimBodyOrdering(
-            body_names=self._robot.data.body_names,
+            body_names=[names[i] for i in self._physical_body_indices],
             dof_names=self._robot.data.joint_names,
         )
 
@@ -638,10 +665,11 @@ class IsaacLabSimulator(Simulator):
         Returns:
             RobotState: The state of the bodies.
         """
-        isaacsim_bodies_positions = self._robot.data.body_pos_w.clone()
-        isaacsim_bodies_rotations = self._robot.data.body_quat_w.clone()
-        isaacsim_bodies_velocities = self._robot.data.body_lin_vel_w.clone()
-        isaacsim_bodies_ang_velocities = self._robot.data.body_ang_vel_w.clone()
+        indices=self._physical_body_indices
+        isaacsim_bodies_positions = self._robot.data.body_pos_w[:,indices].clone()
+        isaacsim_bodies_rotations = self._robot.data.body_quat_w[:,indices].clone()
+        isaacsim_bodies_velocities = self._robot.data.body_lin_vel_w[:,indices].clone()
+        isaacsim_bodies_ang_velocities = self._robot.data.body_ang_vel_w[:,indices].clone()
 
         isaacsim_bodies_positions = isaacsim_bodies_positions.view(
             self.num_envs, self._num_bodies, 3
@@ -738,7 +766,7 @@ class IsaacLabSimulator(Simulator):
             RobotState: Robot state containing contact forces in simulator body order.
         """
         # Get simulator body ordering
-        sim_body_names = self._robot.data.body_names
+        sim_body_names = [self._robot.data.body_names[i] for i in self._physical_body_indices]
         num_bodies = len(sim_body_names)
 
         # Pre-allocate tensor for contact forces (initialized to zeros)
@@ -963,20 +991,7 @@ class IsaacLabSimulator(Simulator):
                     PerspectiveViewer,
                 )
 
-                width = int(getattr(self.config, "viewer_record_width", 500))
-                height = int(getattr(self.config, "viewer_record_height", 500))
-                if width <= 0 or height <= 0:
-                    raise ValueError("viewer recording resolution must be positive")
-                self._perspective_view = PerspectiveViewer(
-                    resolution=(width, height),
-                    disable_advanced_rendering=bool(
-                        getattr(
-                            self.config,
-                            "viewer_record_disable_advanced_rendering",
-                            True,
-                        )
-                    ),
-                )
+                self._perspective_view = PerspectiveViewer()
                 self._init_camera()
             else:
                 self._update_camera()
@@ -989,18 +1004,9 @@ class IsaacLabSimulator(Simulator):
         self._cam_prev_char_pos = (
             self._get_simulator_root_state(0).root_pos.cpu().numpy()
         )
-        pos = self._cam_prev_char_pos + np.array(
-            [
-                float(getattr(self.config, "viewer_camera_offset_x", 0.0)),
-                float(getattr(self.config, "viewer_camera_offset_y", -5.0)),
-                float(getattr(self.config, "viewer_camera_offset_z", 1.0)),
-            ]
-        )
-        target_height = float(
-            getattr(self.config, "viewer_camera_target_height", 0.2)
-        )
+        pos = self._cam_prev_char_pos + np.array([0, -5, 1])
         self._perspective_view.set_camera_view(
-            pos, self._cam_prev_char_pos + np.array([0, 0, target_height])
+            pos, self._cam_prev_char_pos + np.array([0, 0, 0.2])
         )
 
     def _update_camera(self) -> None:
@@ -1013,9 +1019,7 @@ class IsaacLabSimulator(Simulator):
                 .root_pos.cpu()
                 .numpy()
             )
-            height_offset = float(
-                getattr(self.config, "viewer_camera_target_height", 0.2)
-            )
+            height_offset = 0.2
         else:
             in_scene_object_id = self._camera_target["element"] - 1
             char_root_pos = (

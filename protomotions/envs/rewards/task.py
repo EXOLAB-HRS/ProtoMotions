@@ -42,6 +42,8 @@ Provides reward functions for specific tasks:
 - Path following rewards
 """
 
+from typing import Optional
+
 import torch
 from torch import Tensor
 
@@ -61,6 +63,8 @@ def compute_heading_velocity_rew(
     tar_face_dir: Tensor,
     dt: float,
     vel_err_scale: float = 0.25,
+    allow_standing: bool = False,
+    tangent_err_w: float = 0.1,
 ) -> Tensor:
     """Reward for moving in target direction at target speed while facing that direction.
 
@@ -85,8 +89,6 @@ def compute_heading_velocity_rew(
     # (a 0.4 m/s undershoot costs only ~4% reward), which lets the policy quantize to the
     # reference gaits instead of tracking commanded speed. Raise it (via the reward component's
     # static_params) to make speed tracking a real gradient. See mlp_speed.py.
-    tangent_err_w = 0.1
-
     dir_reward_w = 0.7
     facing_reward_w = 0.3
 
@@ -106,8 +108,12 @@ def compute_heading_velocity_rew(
         -vel_err_scale * (tar_vel_err * tar_vel_err + tangent_err_w * tangent_vel_err)
     )
 
-    # Zero reward for moving backwards
+    # Zero reward for moving backwards. With allow_standing, a zero speed command is
+    # exempt: standing still sways around 0 m/s, and zeroing every backward sway
+    # would halve the reward for obeying a stop.
     speed_mask = tar_dir_speed <= 0
+    if allow_standing:
+        speed_mask = speed_mask & (tar_speed > 0)
     dir_reward[speed_mask] = 0
 
     # Facing reward: robot should face the target facing direction
@@ -122,6 +128,24 @@ def compute_heading_velocity_rew(
     reward = dir_reward_w * dir_reward + facing_reward_w * facing_reward
 
     return reward
+
+
+def compute_neck_stability_rew(
+    dof_vel: Tensor,
+    dof_indices: list[int],
+    reference_abs_velocity_p95: list[float],
+) -> Tensor:
+    """Reward neck/head speeds that stay inside the expert-motion envelope.
+
+    The per-axis envelope is supplied by the experiment configuration. Speeds
+    inside it receive full credit; only normalized excess speed is penalized.
+    """
+    selected = torch.abs(dof_vel[:, dof_indices])
+    envelope = torch.as_tensor(
+        reference_abs_velocity_p95, device=dof_vel.device, dtype=dof_vel.dtype
+    )
+    normalized_excess = torch.relu(selected - envelope) / envelope
+    return torch.exp(-torch.mean(torch.square(normalized_excess), dim=-1))
 
 
 def compute_split_heading_velocity_rew(
@@ -184,6 +208,80 @@ def compute_split_heading_velocity_rew(
         (root_pos[..., 2] - upright_height_min) / upright_height_margin,
         min=0.0,
         max=1.0,
+    )
+    return (1.0 - upright_reward_w) * motion_reward + upright_reward_w * upright_reward
+
+
+def compute_split_heading_velocity_stop_rew(
+    root_pos: Tensor,
+    prev_root_pos: Tensor,
+    root_rot: Tensor,
+    tar_dir: Tensor,
+    tar_speed: Tensor,
+    tar_face_dir: Tensor,
+    dt: float,
+    speed_err_scale: float = 8.0,
+    tangent_err_scale: float = 0.025,
+    speed_reward_w: float = 0.35,
+    direction_reward_w: float = 0.35,
+    facing_reward_w: float = 0.30,
+    stop_speed_eps: float = 0.05,
+    upright_reward_w: float = 0.0,
+    upright_height_min: float = 0.5,
+    upright_height_margin: float = 0.4,
+    stop_speed_err_scale: Optional[float] = None,
+) -> Tensor:
+    """Split steering reward that also scores zero-speed (stop) commands.
+
+    :func:`compute_split_heading_velocity_rew` gates its speed and direction
+    channels on ``projected_speed > 0``, so a correctly standing character earns
+    nothing while a stop command is active. Below ``stop_speed_eps`` the target
+    direction carries no information, so both channels switch to the planar
+    speed magnitude and the forward gate is dropped. Above the threshold the
+    kernel matches the split reward exactly.
+    """
+    root_vel = (root_pos - prev_root_pos) / dt
+    planar_vel = root_vel[..., :2]
+    projected_speed = torch.sum(tar_dir * planar_vel, dim=-1)
+
+    tangent_velocity = planar_vel - projected_speed.unsqueeze(-1) * tar_dir
+    tangent_error = torch.sum(torch.square(tangent_velocity), dim=-1)
+    planar_speed_sq = torch.sum(torch.square(planar_vel), dim=-1)
+
+    stopped = tar_speed <= stop_speed_eps
+    speed_error_sq = torch.where(
+        stopped, planar_speed_sq, torch.square(tar_speed - projected_speed)
+    )
+    direction_error = torch.where(stopped, planar_speed_sq, tangent_error)
+
+    speed_reward = torch.exp(-speed_err_scale * speed_error_sq)
+    direction_reward = torch.exp(-tangent_err_scale * direction_error)
+    if stop_speed_err_scale is not None:
+        # A stop command scores planar speed with its own scale: at the moving-command
+        # scales a 0.13 m/s drift still earns ~0.87 of the channel (p2f3, 2026-09-26).
+        stop_reward = torch.exp(-stop_speed_err_scale * planar_speed_sq)
+        speed_reward = torch.where(stopped, stop_reward, speed_reward)
+        direction_reward = torch.where(stopped, stop_reward, direction_reward)
+
+    forward_gate = torch.where(stopped, torch.ones_like(projected_speed), (projected_speed > 0).float())
+    speed_reward = speed_reward * forward_gate
+    direction_reward = direction_reward * forward_gate
+
+    heading_rot = calc_heading_quat(root_rot, w_last=True)
+    facing_dir = torch.zeros_like(root_pos)
+    facing_dir[..., 0] = 1.0
+    facing_dir = quat_rotate(heading_rot, facing_dir, w_last=True)
+    facing_alignment = torch.sum(tar_face_dir * facing_dir[..., 0:2], dim=-1)
+    facing_reward = torch.clamp_min(facing_alignment, 0.0)
+
+    motion_reward = (
+        speed_reward_w * speed_reward
+        + direction_reward_w * direction_reward
+        + facing_reward_w * facing_reward
+    )
+
+    upright_reward = torch.clamp(
+        (root_pos[..., 2] - upright_height_min) / upright_height_margin, min=0.0, max=1.0
     )
     return (1.0 - upright_reward_w) * motion_reward + upright_reward_w * upright_reward
 
@@ -279,6 +377,8 @@ def compute_path_following_rew(
 
 __all__ = [
     "compute_heading_velocity_rew",
+    "compute_neck_stability_rew",
     "compute_split_heading_velocity_rew",
+    "compute_split_heading_velocity_stop_rew",
     "compute_path_following_rew",
 ]

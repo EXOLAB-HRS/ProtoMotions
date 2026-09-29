@@ -1,0 +1,113 @@
+{
+  "status": "candidate",
+  "owner": "human_model_joint_design/trunk_ghlee",
+  "sources": {
+    "stiffness": {
+      "url": "https://vtechworks.lib.vt.edu/handle/10919/52241",
+      "location": "Table 4.5, p52, healthy controls n17",
+      "neutral_zone_stiffness_nm_per_degree": {
+        "x": 0.199,
+        "y": 0.181,
+        "z": 0.157
+      },
+      "sd_nm_per_degree": {
+        "x": 0.059,
+        "y": 0.055,
+        "z": 0.076
+      },
+      "neutral_zone_full_width_deg": {
+        "x": 33.44,
+        "z": 33.76
+      }
+    },
+    "damping_context": {
+      "url": "https://doi.org/10.1088/1741-2552/ac63ed",
+      "location": "Equations 5-6 and section3.2",
+      "K1": 139.05,
+      "B1": 12.78,
+      "B2": 1.19,
+      "scope": "Sagittal seated intrinsic impedance includes tonic muscle activity; not relaxed tissue damping."
+    }
+  },
+  "assumptions": [
+    "Equal angular sharing among Torso/Spine/Chest: local K=3 times whole-trunk K; do not divide active moment by3.",
+    "Linear neutral-zone stiffness only; linear extrapolation outside neutral zone is unvalidated and force guard is numerical.",
+    "Damping is an engineering prior B=K*(12.78/139.05)s. The time ratio uses a 1rad/s secant of seated sagittal intrinsic data. It is NOT a measured relaxed damping or measured lateral/twist damping.",
+    "Lumbar measurement mapped to three thoracolumbar proxy joints; anatomical mapping unvalidated."
+  ],
+  "human_model_parameters": {
+    "passive_joint_parameters": {
+      "Torso_x": {
+        "stiffness_nm_per_rad": [
+          34.20558036931015,
+          34.20558036931015
+        ],
+        "damping_nms_per_rad": 3.1438138591857867
+      },
+      "Torso_y": {
+        "stiffness_nm_per_rad": [
+          31.111608275603697,
+          31.111608275603697
+        ],
+        "damping_nms_per_rad": 2.8594487864956144
+      },
+      "Torso_z": {
+        "stiffness_nm_per_rad": [
+          26.986312150661774,
+          26.986312150661774
+        ],
+        "damping_nms_per_rad": 2.4802953562420527
+      },
+      "Spine_x": {
+        "stiffness_nm_per_rad": [
+          34.20558036931015,
+          34.20558036931015
+        ],
+        "damping_nms_per_rad": 3.1438138591857867
+      },
+      "Spine_y": {
+        "stiffness_nm_per_rad": [
+          31.111608275603697,
+          31.111608275603697
+        ],
+        "damping_nms_per_rad": 2.8594487864956144
+      },
+      "Spine_z": {
+        "stiffness_nm_per_rad": [
+          26.986312150661774,
+          26.986312150661774
+        ],
+        "damping_nms_per_rad": 2.4802953562420527
+      },
+      "Chest_x": {
+        "stiffness_nm_per_rad": [
+          34.20558036931015,
+          34.20558036931015
+        ],
+        "damping_nms_per_rad": 3.1438138591857867
+      },
+      "Chest_y": {
+        "stiffness_nm_per_rad": [
+          31.111608275603697,
+          31.111608275603697
+        ],
+        "damping_nms_per_rad": 2.8594487864956144
+      },
+      "Chest_z": {
+        "stiffness_nm_per_rad": [
+          26.986312150661774,
+          26.986312150661774
+        ],
+        "damping_nms_per_rad": 2.4802953562420527
+      }
+    }
+  },
+  "pd_candidate": {
+    "trunk_kp_multiplier": 4.0,
+    "trunk_kd_multiplier": 0.5,
+    "physics_fps": 480,
+    "control_fps": 30,
+    "selection": "e05 screening selected Kp4/Kd0.5; confirmation seed2932 on held-out source IDs passed engine accounting/ROM gates. Harness tracking only; not autonomous policy performance.",
+    "scope": "Engineering controller choice, not human tissue stiffness or reflex gain."
+  }
+}
