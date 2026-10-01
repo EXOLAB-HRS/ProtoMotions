@@ -416,6 +416,16 @@ class SteeringContext:
     tar_face_dir_preview: Tensor = FieldPath()
     prev_root_pos: Tensor = FieldPath()
     speed_transition: Tensor = FieldPath()
+    # CadenceSteering only (c-a7-cadence candidate).
+    tar_cadence_ratio: Tensor = FieldPath()
+    tar_cadence: Tensor = FieldPath()
+    measured_cadence: Tensor = FieldPath()
+    cadence_valid: Tensor = FieldPath()
+    # CadencePhaseSteering only (teacher_cadence_v1).
+    cadence_phase: Tensor = FieldPath()
+    phase_single_support: Tensor = FieldPath()
+    phase_stance_left: Tensor = FieldPath()
+    foot_contact: Tensor = FieldPath()
 
     def __init__(
         self,

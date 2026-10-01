@@ -176,3 +176,28 @@ def knee_gait_shape(dof_pos: Tensor, rigid_body_vel: Tensor, knee_dof_ids: Tenso
     bent = torch.relu(q - stance_knee_max_rad) / stance_scale_rad
     straight = torch.relu(swing_knee_min_rad - q) / swing_scale_rad
     return torch.exp(-(stance * bent.square() + swing * straight.square()).sum(-1))
+
+
+def cadence_tracking(measured_cadence: Tensor, tar_cadence: Tensor, cadence_valid: Tensor,
+                     relative_scale: float) -> Tensor:
+    """Cadence tracking for the c-a7-cadence candidate (CadenceSteering).
+
+    exp(-((f - f*) / (relative_scale * f*))^2) with f the measured and f* the commanded
+    cadence in steps/s. Outside walking commands, or before two alternating steps
+    after a reset, the reward is 1 so the term adds no gradient there.
+    """
+    error = (measured_cadence - tar_cadence) / (relative_scale * tar_cadence.clamp_min(1e-3))
+    return torch.where(cadence_valid, torch.exp(-error.square()), torch.ones_like(error))
+
+
+def cadence_phase_contact(foot_contact: Tensor, phase_stance_left: Tensor,
+                          phase_single_support: Tensor) -> Tensor:
+    """Gait-clock stance reward for teacher_cadence_v1 (CadencePhaseSteering).
+
+    1 when the clock's stance foot is down during the single-support window of its half
+    cycle, else 0. The other foot is not judged: penalising its contact pushed the first
+    teacher_cadence_v1 run to long steps and a 5% lower cadence. Outside the window
+    (double support) or while the clock is inactive the reward is 1.
+    """
+    stance = torch.where(phase_stance_left, foot_contact[:, 0], foot_contact[:, 1]).float()
+    return torch.where(phase_single_support, stance, torch.ones_like(stance))
