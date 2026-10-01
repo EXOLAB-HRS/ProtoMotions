@@ -39,6 +39,8 @@ import logging
 import torch.nn as nn
 
 import time
+import os
+import json
 import math
 from pathlib import Path
 from typing import Optional, Dict
@@ -450,6 +452,11 @@ class BaseAgent:
 
         while self.current_epoch < self.max_epochs:
             self.epoch_start_time = time.time()
+            runtime_benchmark = os.environ.get('HC_RUNTIME_BENCHMARK') == '1'
+            if runtime_benchmark:
+                if self.device.type == 'cuda':
+                    torch.cuda.synchronize(self.device)
+                benchmark_start = time.perf_counter()
 
             # Set networks in eval mode so that normalizers are not updated
             self.eval()
@@ -502,6 +509,10 @@ class BaseAgent:
 
                 self.normalize_rewards_in_buffer()
 
+            if runtime_benchmark:
+                if self.device.type == 'cuda':
+                    torch.cuda.synchronize(self.device)
+                benchmark_rollout_end = time.perf_counter()
             # Skip policy update right after eval to avoid training spikes (hacky fix)
             if self._skip_next_policy_update:
                 training_log_dict = {"skipped_policy_update": 1.0}
@@ -513,6 +524,15 @@ class BaseAgent:
             else:
                 training_log_dict = self.optimize_model()
 
+            if runtime_benchmark:
+                if self.device.type == 'cuda':
+                    torch.cuda.synchronize(self.device)
+                benchmark_end = time.perf_counter()
+                print('HC_RUNTIME_BENCHMARK=' + json.dumps(dict(
+                    epoch=self.current_epoch, steps=self.num_steps * self.get_step_count_increment(),
+                    rollout_seconds=benchmark_rollout_end-benchmark_start,
+                    update_seconds=benchmark_end-benchmark_rollout_end,
+                    total_seconds=benchmark_end-benchmark_start)), flush=True)
             training_log_dict["epoch"] = self.current_epoch
             self.current_epoch += 1
             self.fabric.call("after_train", self)

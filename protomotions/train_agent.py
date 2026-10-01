@@ -803,6 +803,20 @@ def main():
     agent: BaseAgent = AgentClass(config=agent_config, env=env, fabric=fabric)
 
     agent.setup()
+    if os.environ.get('HC_RUNTIME_BENCHMARK') == '1' and args.simulator == 'isaaclab':
+        import omni.usd
+        from protomotions.robot_configs.human_model.human_model_v3_1.collision import inspect_stage
+        audit = inspect_stage(omni.usd.get_context().get_stage(), '/World/envs/env_0/Robot')
+        uncovered = audit['physical_neighbors'] - audit['excluded'] - audit['adjacent']
+        print('HC_RUNTIME_MODEL_AUDIT=' + json.dumps(dict(
+            collider_count=len(audit['colliding']), exclusions=len(audit['excluded']),
+            uncovered_neighbors=len(uncovered), self_collisions=robot_config.asset.self_collisions,
+            collision_profile=robot_config.human_model_collision_profile,
+            head_neck_pd={n: dict(kp=g.stiffness, kd=g.damping)
+                          for n,g in robot_config.control.control_info.items()
+                          if n.startswith(('Neck_', 'Head_'))})), flush=True)
+        if robot_config.human_model_collision_profile == 'human_model_v3.1':
+            assert len(audit['colliding']) == 24 and len(audit['excluded']) == 33 and not uncovered
     agent.fabric.strategy.barrier()
     agent.load(args.checkpoint)
 
