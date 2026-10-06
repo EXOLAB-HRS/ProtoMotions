@@ -34,6 +34,9 @@ class CadenceSteeringConfig(ContinuousSteeringConfig):
     right_foot_bodies: tuple[str, ...] = ("R_Ankle", "R_Toe")
     # Contact height of each foot body origin above flat ground, same order as the bodies.
     foot_contact_heights: tuple[float, ...] = (0.055, 0.040)
+    # Step intervals averaged into the measured cadence. Intervals are whole control steps
+    # (1/30 s), so 2 intervals quantise f in ~3% steps (teacher_cadence_v1 r6 uses 4).
+    cadence_intervals: int = 2
 
 
 class CadenceSteering(ContinuousSteering):
@@ -55,7 +58,7 @@ class CadenceSteering(ContinuousSteering):
         self._contact = torch.zeros(n, 2, dtype=torch.bool, device=device)
         self._last_side = torch.full((n,), -1, dtype=torch.long, device=device)
         self._last_strike = torch.zeros(n, device=device)
-        self._intervals = torch.ones(n, 2, device=device)
+        self._intervals = torch.ones(n, config.cadence_intervals, device=device)
         self._strikes = torch.zeros(n, dtype=torch.long, device=device)
         self._measured = torch.zeros(n, device=device)
 
@@ -96,8 +99,8 @@ class CadenceSteering(ContinuousSteering):
             strike = onset[:, side] & (self._last_side != side)
             interval = now - self._last_strike
             counted = strike & (self._last_side >= 0)
-            self._intervals[counted] = torch.stack(
-                (self._intervals[counted, 1], interval[counted]), dim=-1)
+            self._intervals[counted] = torch.cat(
+                (self._intervals[counted, 1:], interval[counted, None]), dim=-1)
             self._strikes += counted.long()
             self._last_strike[strike] = now[strike]
             self._last_side[strike] = side
@@ -122,7 +125,7 @@ class CadenceSteering(ContinuousSteering):
         ctx.steering.tar_cadence_ratio = ratio
         ctx.steering.tar_cadence = ratio * (c.cadence_f0_slope * self._tar_speed + c.cadence_f0_intercept)
         ctx.steering.measured_cadence = self._measured
-        ctx.steering.cadence_valid = (self._tar_speed >= c.cadence_min_speed) & (self._strikes >= 2)
+        ctx.steering.cadence_valid = (self._tar_speed >= c.cadence_min_speed) & (self._strikes >= max(2, c.cadence_intervals))
 
 
 @dataclass

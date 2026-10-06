@@ -201,3 +201,20 @@ def cadence_phase_contact(foot_contact: Tensor, phase_stance_left: Tensor,
     """
     stance = torch.where(phase_stance_left, foot_contact[:, 0], foot_contact[:, 1]).float()
     return torch.where(phase_single_support, stance, torch.ones_like(stance))
+
+
+def cadence_phase_contact_signed(foot_contact: Tensor, phase_stance_left: Tensor,
+                                 phase_single_support: Tensor) -> Tensor:
+    """Signed gait-clock contact reward for teacher_cadence_v1 r3 (CadencePhaseSteering).
+
+    In the single-support window of each half cycle: +1 when the clock's stance foot is
+    down and the other foot is up, -1 for the mirrored pattern (stepping against the
+    clock), 0 for double support or flight. 0 outside the window or while the clock is
+    inactive. The r2 0/1 reward started at 0.82 for the parent's natural gait and gave
+    little signal to follow rho*; here following the clock and opposing it differ by 2.
+    """
+    left, right = foot_contact[:, 0], foot_contact[:, 1]
+    stance = torch.where(phase_stance_left, left, right)
+    swing = torch.where(phase_stance_left, right, left)
+    signed = (stance & ~swing).float() - (swing & ~stance).float()
+    return torch.where(phase_single_support, signed, torch.zeros_like(signed))
