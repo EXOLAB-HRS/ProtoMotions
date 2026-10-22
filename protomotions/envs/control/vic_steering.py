@@ -120,6 +120,7 @@ class VicSteering(CadenceGaitPercentSteering):
         self._fall_sum = 0.0
         self._fall_ema = None
         self._held = 0
+        self._fall_acc = 0
         self._band = torch.zeros(n, device=dev)
         self._cocon = torch.zeros(n, device=dev)
         self._effort = torch.zeros(n, device=dev)
@@ -169,9 +170,10 @@ class VicSteering(CadenceGaitPercentSteering):
     def _advance_schedule(self):
         c = self.config
         self._steps += 1
-        # Falls of the last step only: terminate_buf starts at 1 and keeps stale values right after resets,
-        # so envs within their first two steps are excluded (otherwise the baseline is ~20x the real rate).
-        fell = (self.env.terminate_buf & (self.env.progress_buf > 2)).float().mean().item()
+        # Falls per env-step, counted when an env is reset after a fall termination (same quantity as the
+        # training log's termination/fallen_mean). Reading terminate_buf before physics gave ~20x that value.
+        fell = self._fall_acc / len(self._tar_speed)
+        self._fall_acc = 0
         if self._steps <= c.baseline_steps:
             self._fall_sum += fell
             if self._steps == c.baseline_steps:
@@ -212,6 +214,10 @@ class VicSteering(CadenceGaitPercentSteering):
 
     # ------------------------------------------------------------------ main hook
     def reset(self, env_ids):
+        if len(env_ids) and hasattr(self.env, "terminate_buf"):
+            # Called before the env clears terminate_buf; skip envs that never ran (initial reset).
+            fell = self.env.terminate_buf[env_ids] & (self.env.progress_buf[env_ids] > 2)
+            self._fall_acc = getattr(self, "_fall_acc", 0) + int(fell.sum().item())
         super().reset(env_ids)
         if len(env_ids):
             self._fresh[env_ids] = True
