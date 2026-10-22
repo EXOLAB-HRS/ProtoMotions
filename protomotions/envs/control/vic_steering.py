@@ -169,7 +169,9 @@ class VicSteering(CadenceGaitPercentSteering):
     def _advance_schedule(self):
         c = self.config
         self._steps += 1
-        fell = self.env.terminate_buf.float().mean().item()
+        # Falls of the last step only: terminate_buf starts at 1 and keeps stale values right after resets,
+        # so envs within their first two steps are excluded (otherwise the baseline is ~20x the real rate).
+        fell = (self.env.terminate_buf & (self.env.progress_buf > 2)).float().mean().item()
         if self._steps <= c.baseline_steps:
             self._fall_sum += fell
             if self._steps == c.baseline_steps:
