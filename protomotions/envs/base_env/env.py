@@ -357,7 +357,8 @@ class BaseEnv:
         Returns:
             Number of action dimensions
         """
-        return self.simulator.num_act
+        extra = sum(getattr(c, "extra_action_dim", 0) for c in self.control_manager.components.values())
+        return self.simulator.num_act + extra
 
     ###############################################################
     # Component Processing
@@ -659,6 +660,13 @@ class BaseEnv:
         self._current_context = None
         self._current_noisy_obs = None
 
+        # Extra policy outputs beyond the PD targets go to control components that take them
+        # (vic_tc_v1 candidate: joint impedance and feed-forward torque).
+        extra = None
+        n_act = self.robot_config.number_of_actions
+        if action.shape[-1] > n_act:
+            action, extra = action[..., :n_act], action[..., n_act:]
+
         # Store current actions
         self._current_raw_action[:] = action
 
@@ -666,6 +674,10 @@ class BaseEnv:
         action_dict = self._process_action(action, self.context)
         processed_action = action_dict["processed_action"]
         self._current_processed_action[:] = processed_action
+        if extra is not None:
+            for component in self.control_manager.components.values():
+                if hasattr(component, "pre_physics_extra_action"):
+                    component.pre_physics_extra_action(extra, processed_action)
 
         self.simulator.step(processed_action, markers_callback=self.get_markers_state)
 
