@@ -34,6 +34,9 @@ from protomotions.envs.control.cadence_gait_prior import (
 VIC_BAND_COST = steering_path("vic_band_cost")
 VIC_COCONTRACTION = steering_path("vic_cocontraction")
 VIC_EFFORT = steering_path("vic_effort")
+# vic_TC_r2 (2026-10-23): foot impact above the human step peak, and a metabolic proxy of the sagittal leg joints.
+VIC_IMPACT = steering_path("vic_impact")
+VIC_METAB = steering_path("vic_metab")
 
 # Human joint impedance ranges (k N m/rad, b N m s/rad) for swing / stance / standing, model 63.3 kg.
 # Hip and knee in stance and standing: relaxed-static values (no walking stance measurement).
@@ -74,6 +77,13 @@ class VicSteeringConfig(CadenceGaitPercentSteeringConfig):
     fall_ratio_tol: float = 1.5
     fall_abs_tol: float = 0.0005
     log_every: int = 200
+    # vic_TC_r2 cost inputs (rewards only exist when a recipe adds them). Human walking step peak of the vertical
+    # GRF is 1.1-1.3 body weights; metabolic proxy P+/0.25 + |P-|/1.20 (muscle efficiencies, Margaria 1968) of
+    # Hip_y, Knee_y, Ankle_y, in units of m*g*(1 m/s).
+    body_mass: float = 63.3
+    grf_ref_bw: float = 1.3
+    grf_bodies: tuple = (("L_Ankle", "L_Toe"), ("R_Ankle", "R_Toe"))
+    fresh_stance: bool = False           # contact from foot heights on the first step after a reset (r2 trains with it)
 
 
 class VicSteering(CadenceGaitPercentSteering):
@@ -131,6 +141,13 @@ class VicSteering(CadenceGaitPercentSteering):
         self._fixed = bool(fixed)
         if fixed:
             self.alpha, self.beta = (float(x) for x in fixed.split(","))
+        # HC_VIC_FRESH_STANCE=1 (evaluation, 2026-10-23): on the first control step after a reset the cadence
+        # contact flags are still False (both legs "swing", knee k ~ 2 N m/rad); take them from foot heights instead.
+        self._fresh_stance = c.fresh_stance or os.environ.get("HC_VIC_FRESH_STANCE", "0") == "1"
+        self._sag = torch.tensor([i for i, j in enumerate(c.vic_joints) if j[2:] in HUMAN_RANGES], device=dev)
+        self._bw = c.body_mass * 9.81
+        self._impact = torch.zeros(n, device=dev)
+        self._metab = torch.zeros(n, device=dev)
         self._sim_ready = False
 
     # ------------------------------------------------------------------ simulator buffers
@@ -203,6 +220,7 @@ class VicSteering(CadenceGaitPercentSteering):
                    fall_base=None if self._fall_base is None else round(self._fall_base, 5),
                    held_steps=self._held, band_cost=round(self._band.mean().item(), 4),
                    cocontraction=round(self._cocon.mean().item(), 4), effort=round(self._effort.mean().item(), 4),
+                   impact=round(self._impact.mean().item(), 4), metab=round(self._metab.mean().item(), 4),
                    mean_kp_swing_stance_stand=mk, joints=list(c.vic_joints))
         print("[vic] " + json.dumps(rec), flush=True)
         if self._state_file:
@@ -234,9 +252,14 @@ class VicSteering(CadenceGaitPercentSteering):
         delta = c.delta_max * torch.tanh(extra[:, :J])
         tau_res = c.tau_res_scale * self._tau_max * torch.tanh(extra[:, J:2 * J])
         # Leg state: 0 swing, 1 stance, 2 standing (both feet down, slow command and body).
-        stance = self._stance[:, self._leg]                                   # [N, J]
+        contact = self._stance
+        if self._fresh_stance and self._fresh.any():
+            height = sim.get_robot_state().rigid_body_pos[..., 2]
+            measured = torch.stack([(height[:, idx] < self._stance_heights).any(-1) for idx in self._feet], dim=-1)
+            contact = torch.where(self._fresh[:, None], measured, contact)
+        stance = contact[:, self._leg]                                        # [N, J]
         root_v = sim.get_robot_state().rigid_body_vel[:, 0, :2].norm(dim=-1)
-        standing = self._stance.all(-1) & (self._tar_speed < c.stand_speed) & (root_v < c.stand_root_speed)
+        standing = contact.all(-1) & (self._tar_speed < c.stand_speed) & (root_v < c.stand_root_speed)
         state = torch.where(stance, torch.ones_like(stance, dtype=torch.long),
                             torch.zeros_like(stance, dtype=torch.long))
         state = torch.where(standing[:, None], torch.full_like(state, 2), state)
@@ -270,14 +293,29 @@ class VicSteering(CadenceGaitPercentSteering):
         self._cocon = torch.relu(delta).mean(-1)
         tau = kp * err - kd * qd + self.beta * prior + sim.vic_ff_res[:, self._idx]
         self._effort = ((tau / self._tau_max) ** 2).clamp(max=4.0).mean(-1)
+        p = (tau * qd)[:, self._sag]
+        self._metab = (p.clamp(min=0).sum(-1) / 0.25 + (-p).clamp(min=0).sum(-1) / 1.20) / self._bw
         for st in range(3):
             m = state == st
             cnt = m.float().sum(0).clamp_min(1)
             self._mean_k[st] = torch.where(m.any(0), ((self._lk + delta) * m).sum(0) / cnt, self._mean_k[st])
         self._log()
 
+    def _update_impact(self):
+        """Per leg, peak vertical contact force over the physics substeps of the last control step (body weights);
+        cost = mean over legs of max(0, peak - grf_ref_bw), clamped at 3."""
+        sm = getattr(self.env.simulator, "_contact_sensor_map", None)
+        if not sm:
+            return
+        legs = [sum(sm[b].data.net_forces_w_history[:, :, 0, 2] for b in bodies).amax(-1) for bodies in self.config.grf_bodies]
+        peak = torch.stack(legs, -1) / self._bw
+        self._impact = torch.relu(peak - self.config.grf_ref_bw).clamp(max=3.0).mean(-1)
+
     def populate_context(self, ctx):
         super().populate_context(ctx)
+        self._update_impact()
+        ctx.steering.vic_impact = self._impact
+        ctx.steering.vic_metab = self._metab
         ctx.steering.vic_band_cost = self._band
         ctx.steering.vic_cocontraction = self._cocon
         ctx.steering.vic_effort = self._effort
