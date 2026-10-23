@@ -83,6 +83,9 @@ class VicSteeringConfig(CadenceGaitPercentSteeringConfig):
     body_mass: float = 63.3
     grf_ref_bw: float = 1.3
     grf_bodies: tuple = (("L_Ankle", "L_Toe"), ("R_Ankle", "R_Toe"))
+    # k_d = exp(lb + damp_delta_gain * delta): 1 scales damping with stiffness (zeta grows as sqrt(k)); 0.5 keeps the
+    # damping ratio zeta of the reference while the policy changes k (k_d ~ sqrt(k_p)), vic_TC_r4 (2026-10-23).
+    damp_delta_gain: float = 1.0
     fresh_stance: bool = False           # contact from foot heights on the first step after a reset (r2 trains with it)
 
 
@@ -274,7 +277,7 @@ class VicSteering(CadenceGaitPercentSteering):
         self._lb = torch.where(self._fresh[:, None], lb_t, self._lb + s * (lb_t - self._lb))
         self._fresh[:] = False
         kp = torch.exp(self._lk + delta)
-        kd = torch.exp(self._lb + delta)
+        kd = torch.exp(self._lb + c.damp_delta_gain * delta)
         sim._common_p_gains[:, self._idx] = kp
         sim._common_d_gains[:, self._idx] = kd
         self._write_gains()
