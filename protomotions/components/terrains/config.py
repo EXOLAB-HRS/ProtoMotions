@@ -121,6 +121,15 @@ class TerrainConfig:
         default=None,
         metadata={"help": "Total terrain observation samples. Auto-computed if None."}
     )
+    height_grid_x: Optional[tuple] = field(
+        default=None,
+        metadata={"help": "Rectangular height grid, forward axis (start, stop, count) in m, heading frame. "
+                          "With height_grid_y it replaces the square num_samples_per_axis grid (teacher_se_v1)."}
+    )
+    height_grid_y: Optional[tuple] = field(
+        default=None,
+        metadata={"help": "Rectangular height grid, lateral axis (start, stop, count) in m, heading frame."}
+    )
 
     horizontal_scale: float = field(
         default=0.1,
@@ -160,7 +169,11 @@ class TerrainConfig:
     )
 
     def __post_init__(self):
-        if self.terrain_obs_num_samples is None:
+        if (self.height_grid_x is None) != (self.height_grid_y is None):
+            raise ValueError("height_grid_x and height_grid_y must be set together")
+        if self.height_grid_x is not None:
+            self.terrain_obs_num_samples = int(self.height_grid_x[2]) * int(self.height_grid_y[2])
+        elif self.terrain_obs_num_samples is None:
             self.terrain_obs_num_samples = self.num_samples_per_axis**2
 
 
