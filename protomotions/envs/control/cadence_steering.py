@@ -27,6 +27,8 @@ class CadenceSteeringConfig(ContinuousSteeringConfig):
     cadence_ratio_max: float = 1.1
     # Share of resamples that keep the natural gait (rho* = 1).
     cadence_natural_fraction: float = 0.3
+    # Evaluation only (2026-10-25): hold every walking resample at this ratio; None keeps the random schedule.
+    cadence_ratio_fixed: float | None = None
     cadence_f0_slope: float = 0.558
     cadence_f0_intercept: float = 1.060
     cadence_min_speed: float = 0.5
@@ -82,6 +84,9 @@ class CadenceSteering(ContinuousSteering):
         ratio = c.cadence_ratio_min + torch.rand(n, device=device) * (c.cadence_ratio_max - c.cadence_ratio_min)
         natural = (torch.rand(n, device=device) < c.cadence_natural_fraction) | (self._goal_speed[env_ids] <= 0)
         self._ratio[env_ids] = torch.where(natural, torch.ones_like(ratio), ratio)
+        fixed = getattr(c, "cadence_ratio_fixed", None)
+        if fixed is not None:
+            self._ratio[env_ids] = float(fixed)
 
     def step(self):
         super().step()
