@@ -114,12 +114,14 @@ def pelvis_yaw_stability(root_rot: Tensor, tar_face_dir: Tensor, yaw_scale_rad: 
 def speed_transition_tracking(root_pos, prev_root_pos, tar_dir, tar_speed, speed_transition, dt,
                               vel_err_scale, overspeed_err_scale=None,
                               overspeed_tail_scale=None, overspeed_tail_weight=0.0,
-                              underspeed_tail_scale=None, underspeed_tail_weight=0.0):
+                              underspeed_tail_scale=None, underspeed_tail_weight=0.0, score_in="transition"):
     """Speed tracking scored only while the speed command changes and just after.
 
     Outside a transition the reward is 1, so the term adds no gradient and no bias
     there; inside it is exp(-vel_err_scale * err^2) with err the commanded speed
     minus the root speed along the commanded direction, as in the heading reward.
+    score_in="steady" (teacher_se_v1_s3) inverts the mask: the same error is scored only
+    outside transitions, for a steady-state speed term separate from heading_rew.
     """
     speed = ((root_pos - prev_root_pos)[..., :2] / dt * tar_dir).sum(-1)
     scale = vel_err_scale if overspeed_err_scale is None else torch.where(
@@ -136,7 +138,8 @@ def speed_transition_tracking(root_pos, prev_root_pos, tar_dir, tar_speed, speed
         tracked = torch.where(speed < tar_speed,
                               (1 - underspeed_tail_weight) * tracked + underspeed_tail_weight * tail,
                               tracked)
-    return torch.where(speed_transition, tracked, torch.ones_like(tracked))
+    active = speed_transition if score_in == "transition" else ~speed_transition
+    return torch.where(active, tracked, torch.ones_like(tracked))
 
 
 def head_yaw_stability(body_ang_vel: Tensor, head_index: int, chest_index: int,
