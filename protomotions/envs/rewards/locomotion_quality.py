@@ -221,3 +221,19 @@ def cadence_phase_contact_signed(foot_contact: Tensor, phase_stance_left: Tensor
     swing = torch.where(phase_stance_left, right, left)
     signed = (stance & ~swing).float() - (swing & ~stance).float()
     return torch.where(phase_single_support, signed, torch.zeros_like(signed))
+
+
+def quiet_stance(dof_vel, root_pos, prev_root_pos, tar_speed, speed_transition, dt,
+                 dof_vel_scale, root_vel_err_scale):
+    """Quiet standing once a stop command has settled (teacher_se_v1_s3stop, 2026-10-25).
+
+    Active only when the commanded speed is 0 and no speed transition is running; elsewhere the
+    reward is 1, so walking gets no gradient from it. heading_rew alone also rewards stepping in
+    place and slow sway at a stop (root speed ~0), so this scores joint stillness,
+    exp(-mean(qdot^2) / dof_vel_scale^2), times root stillness, exp(-root_vel_err_scale * v^2).
+    With dof_vel_scale 0.5 rad/s, six leg joints swinging at 3 rad/s keep ~2 % of the term.
+    """
+    v = ((root_pos - prev_root_pos)[..., :2] / dt).norm(dim=-1)
+    still = torch.exp(-dof_vel.square().mean(-1) / dof_vel_scale ** 2) * torch.exp(-root_vel_err_scale * v.square())
+    standing = (tar_speed <= 0) & ~speed_transition
+    return torch.where(standing, still, torch.ones_like(still))
