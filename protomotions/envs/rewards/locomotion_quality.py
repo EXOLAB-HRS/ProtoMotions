@@ -114,12 +114,14 @@ def pelvis_yaw_stability(root_rot: Tensor, tar_face_dir: Tensor, yaw_scale_rad: 
 def speed_transition_tracking(root_pos, prev_root_pos, tar_dir, tar_speed, speed_transition, dt,
                               vel_err_scale, overspeed_err_scale=None,
                               overspeed_tail_scale=None, overspeed_tail_weight=0.0,
-                              underspeed_tail_scale=None, underspeed_tail_weight=0.0):
+                              underspeed_tail_scale=None, underspeed_tail_weight=0.0, score_in="transition"):
     """Speed tracking scored only while the speed command changes and just after.
 
     Outside a transition the reward is 1, so the term adds no gradient and no bias
     there; inside it is exp(-vel_err_scale * err^2) with err the commanded speed
     minus the root speed along the commanded direction, as in the heading reward.
+    score_in="steady" (teacher_se_v1_s3) inverts the mask: the same error is scored only
+    outside transitions, for a steady-state speed term separate from heading_rew.
     """
     speed = ((root_pos - prev_root_pos)[..., :2] / dt * tar_dir).sum(-1)
     scale = vel_err_scale if overspeed_err_scale is None else torch.where(
@@ -136,7 +138,8 @@ def speed_transition_tracking(root_pos, prev_root_pos, tar_dir, tar_speed, speed
         tracked = torch.where(speed < tar_speed,
                               (1 - underspeed_tail_weight) * tracked + underspeed_tail_weight * tail,
                               tracked)
-    return torch.where(speed_transition, tracked, torch.ones_like(tracked))
+    active = speed_transition if score_in == "transition" else ~speed_transition
+    return torch.where(active, tracked, torch.ones_like(tracked))
 
 
 def head_yaw_stability(body_ang_vel: Tensor, head_index: int, chest_index: int,
@@ -218,3 +221,19 @@ def cadence_phase_contact_signed(foot_contact: Tensor, phase_stance_left: Tensor
     swing = torch.where(phase_stance_left, right, left)
     signed = (stance & ~swing).float() - (swing & ~stance).float()
     return torch.where(phase_single_support, signed, torch.zeros_like(signed))
+
+
+def quiet_stance(dof_vel, root_pos, prev_root_pos, tar_speed, speed_transition, dt,
+                 dof_vel_scale, root_vel_err_scale):
+    """Quiet standing once a stop command has settled (teacher_se_v1_s3stop, 2026-10-25).
+
+    Active only when the commanded speed is 0 and no speed transition is running; elsewhere the
+    reward is 1, so walking gets no gradient from it. heading_rew alone also rewards stepping in
+    place and slow sway at a stop (root speed ~0), so this scores joint stillness,
+    exp(-mean(qdot^2) / dof_vel_scale^2), times root stillness, exp(-root_vel_err_scale * v^2).
+    With dof_vel_scale 0.5 rad/s, six leg joints swinging at 3 rad/s keep ~2 % of the term.
+    """
+    v = ((root_pos - prev_root_pos)[..., :2] / dt).norm(dim=-1)
+    still = torch.exp(-dof_vel.square().mean(-1) / dof_vel_scale ** 2) * torch.exp(-root_vel_err_scale * v.square())
+    standing = (tar_speed <= 0) & ~speed_transition
+    return torch.where(standing, still, torch.ones_like(still))

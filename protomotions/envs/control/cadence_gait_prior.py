@@ -24,6 +24,9 @@ human_gait_prior rewards knee flexion and ankle dorsiflexion close to a human ta
 r = exp(-0.5 * mean_j ((q_j - mu_j) / (k * max(sd_j, sd_floor)))^2), averaged over both legs
 (k = kernel_scale, 1 in r10);
 1 where the gait percent is not yet valid (first stride after reset, stop commands).
+
+pelvis_gait_prior (2026-10-26, teacher_se_v1 s4pelvis): pelvis tilt rate / obliquity close to a WBDS table in the
+W2 v4 judge's references (scripts/build_pelvis_gait_table.py), same kernel, gait percent and cadence gate.
 """
 from dataclasses import dataclass
 
@@ -186,4 +189,76 @@ def ankle_pushoff_prior(dof_pos: Tensor, tar_speed: Tensor, gait_pct: Tensor, ga
         r = torch.exp(-0.5 * ((q - mean[s, p, a]) / sigma_deg) ** 2)
         window = gait_pct_valid[:, leg] & (p >= pct_range[0]) & (p <= pct_range[1])
         rewards.append(torch.where(window, r, torch.ones_like(r)))
+    return (rewards[0] + rewards[1]) / 2
+
+
+_PELVIS_TABLES = {}
+
+
+def _pelvis_table(path, device):
+    key = (path, str(device))
+    if key not in _PELVIS_TABLES:
+        t = torch.load(path, map_location=device, weights_only=False)
+        if list(t["joints"]) != ["PelvisTiltRate", "PelvisObliquity"]:
+            raise ValueError(f"{path}: joints {t['joints']} are not ['PelvisTiltRate', 'PelvisObliquity']")
+        _PELVIS_TABLES[key] = (t["speeds"].to(device), t["mean"].to(device), t["sd"].to(device))
+    return _PELVIS_TABLES[key]
+
+
+def pelvis_frame(root_rot: Tensor):
+    """Pelvis up axis, yaw heading and its left axis (world) from the root quaternion (xyzw), as the W2 v4 judge."""
+    u, w = root_rot[..., :3], root_rot[..., 3:4]
+
+    def rot(v):
+        t = 2 * torch.cross(u, v, dim=-1)
+        return v + w * t + torch.cross(u, t, dim=-1)
+
+    ez = torch.zeros_like(u); ez[..., 2] = 1
+    ex = torch.zeros_like(u); ex[..., 0] = 1
+    up, fw = rot(ez), rot(ex)
+    fw = torch.stack([fw[..., 0], fw[..., 1], torch.zeros_like(fw[..., 0])], -1)
+    fw = fw / (fw.norm(dim=-1, keepdim=True) + 1e-9)
+    left = torch.stack([-fw[..., 1], fw[..., 0], torch.zeros_like(fw[..., 0])], -1)
+    return up, fw, left
+
+
+def pelvis_tilt_obliquity(root_rot: Tensor):
+    """Pelvis tilt (anterior +) and obliquity (right side up +) in deg, as criteria_w2v4.sim_gait:
+    lean of the pelvis up axis toward the heading / toward the left."""
+    up, fw, left = pelvis_frame(root_rot)
+    tilt = torch.rad2deg(torch.atan2((up * fw).sum(-1), up[..., 2]))
+    obl = torch.rad2deg(torch.atan2((up * left).sum(-1), up[..., 2]))
+    return tilt, obl
+
+
+def pelvis_gait_prior(root_rot: Tensor, root_ang_vel: Tensor, tar_speed: Tensor, gait_pct: Tensor,
+                      gait_pct_valid: Tensor, table_file: str, tilt_rate_sd_floor: float = 4.0,
+                      obl_sd_floor_deg: float = 1.0, min_speed: float = 0.3, kernel_scale: float = 1.0,
+                      tar_cadence_ratio: Tensor = None, ratio_tol: float = 0.0) -> Tensor:
+    """Pelvis tilt rate and obliquity close to the WBDS table in the W2 v4 judge's rows and conventions
+    (scripts/build_pelvis_gait_table.py): r = exp(-0.5 * mean(z_rate^2, z_obl^2)) per leg, averaged over both legs.
+
+    Tilt rate (deg/s, anterior +) = world root angular velocity about the heading's left axis, which is d(tilt)/dt of
+    the judge's tilt (corr 0.94 with a 30 Hz central difference on s3 rollouts). A rate has no offset, so it scores the
+    tilt shape and ROM, not the standing posture. Obliquity: ipsilateral side up + (left leg -obl, right leg +obl); the
+    table is cycle-mean removed (as the judge), the sim value is used as is, so a steady sideways lean also costs.
+    Each leg is scored at its own gait percent, as the judge cycles the pelvis from each foot's heel strike.
+    kernel_scale widens the kernel (error divided by kernel_scale * sd), as in human_gait_prior.
+    1 where the gait percent is not valid, below min_speed or (ratio_tol > 0) off the nominal cadence.
+    """
+    speeds, mean, sd = _pelvis_table(table_file, root_rot.device)
+    s = torch.bucketize(tar_speed, (speeds[1:] + speeds[:-1]) / 2).clamp(0, len(speeds) - 1)
+    up, fw, left = pelvis_frame(root_rot)
+    obl = torch.rad2deg(torch.atan2((up * left).sum(-1), up[..., 2]))
+    rate = torch.rad2deg((root_ang_vel * left).sum(-1))
+    floor = torch.tensor([tilt_rate_sd_floor, obl_sd_floor_deg], device=root_rot.device, dtype=root_rot.dtype)
+    on = tar_speed >= min_speed
+    if ratio_tol > 0 and tar_cadence_ratio is not None:
+        on = on & ((tar_cadence_ratio - 1).abs() < ratio_tol)
+    rewards = []
+    for leg, obl_sign in enumerate((-1.0, 1.0)):
+        p = (gait_pct[:, leg].clamp(0, 1) * 100).round().long()
+        z = (torch.stack([rate, obl_sign * obl], -1) - mean[s, p]) / (kernel_scale * torch.maximum(sd[s, p], floor))
+        r = torch.exp(-0.5 * (z ** 2).mean(-1))
+        rewards.append(torch.where(gait_pct_valid[:, leg] & on, r, torch.ones_like(r)))
     return (rewards[0] + rewards[1]) / 2

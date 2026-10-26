@@ -483,6 +483,15 @@ class Terrain:
         """
         Pre-defines the grid for the height-map observation.
         """
+        if self.config.height_grid_x is not None:
+            (x0, x1, nx), (y0, y1, ny) = self.config.height_grid_x, self.config.height_grid_y
+            x = torch.tensor(np.linspace(x0, x1, int(nx)), device=self.device, dtype=torch.float)
+            y = torch.tensor(np.linspace(y0, y1, int(ny)), device=self.device, dtype=torch.float)
+            grid_x, grid_y = torch.meshgrid(x, y, indexing="ij")
+            points = torch.zeros(num_envs, grid_x.numel(), 3, device=self.device, requires_grad=False)
+            points[:, :, 0] = grid_x.flatten()
+            points[:, :, 1] = grid_y.flatten()
+            return grid_x.numel(), points
         y = torch.tensor(
             np.linspace(
                 -self.config.sample_width,

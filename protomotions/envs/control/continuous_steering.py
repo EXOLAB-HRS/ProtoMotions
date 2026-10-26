@@ -48,6 +48,10 @@ class ContinuousSteeringConfig(SteeringControlConfig):
     # Observation-only lead below the next walking target during a deceleration ramp.
     nonstop_deceleration_preview_undershoot_mps: float = 0.0
     nonstop_deceleration_preview_undershoot_min_goal_mps: float = 0.0
+    # teacher_se_v1 stage 2: on reset, start the ramping command (modes 1 and 2) at the spawn frame's horizontal root
+    # speed instead of 1 m/s, so a moving AMASS spawn with a stop goal decelerates from its own speed (r25: ~10 % of
+    # starts fell within 3 s of a reset). The fixed group (mode 0) keeps its constant command.
+    reset_speed_from_spawn: bool = False
 
 
 class ContinuousSteering(SteeringControl):
@@ -159,6 +163,10 @@ class ContinuousSteering(SteeringControl):
         self._resample_task(env_ids)
         fixed = env_ids[self._mode[env_ids] == 0]
         self._tar_speed[fixed] = self._goal_speed[fixed]
+        if self.config.reset_speed_from_spawn:
+            moving = env_ids[self._mode[env_ids] != 0]
+            spawn = self.env.simulator.get_root_state().root_vel[moving, :2].norm(dim=-1)
+            self._tar_speed[moving] = spawn.clamp(0., self.config.tar_speed_max)
         self._speed_history[env_ids] = self._tar_speed[env_ids, None]
 
     def _resample_task(self, env_ids):
