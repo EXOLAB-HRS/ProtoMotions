@@ -49,6 +49,18 @@ HUMAN_RANGES = {
     "Knee_y": {"k": ((0.5, 3.5), (15, 75), (15, 75)), "b": ((0.02, 0.14), (1, 2.2), (1, 2.2))},
     "Ankle_y": {"k": ((22, 100), (22, 406), (290, 340)), "b": ((0.6, 1.5), (0.6, 1.5), (0.6, 1.5))},
 }
+# Frontal joints (candidate, 2026-10-26, used only with frontal_human_ref): scale-level ranges, not phase references
+# (share/HMV_v1_teacher_261026/human_impedance_ref_3state.csv, frontal rows).
+# Hip_x stance: WBDS frontal hip quasi-stiffness (moment / angle slope, 0-50 % cycle, 753 cycles, p10-p90 167-679, median
+#   335 N m/rad at 63.3 kg); standing: Winter 1998 quiet-stance M/L stiffness 627-1137 N m/rad shared by two hips;
+#   swing: assumption = sagittal hip swing. Damping: assumption = sagittal hip.
+# Subtalar_x (ankle inversion-eversion): relaxed 8.8 +- 2.2 N m/rad, 0.18 +- 0.09 N m s/rad (Ho, Lee, Hogan 2016);
+#   active stance: relaxed + 1.1 N m/rad per % MVC (Lee, Krebs, Hogan 2014) at 10-50 % MVC, inside the WBDS frontal ankle
+#   quasi-stiffness p10-p90 10-146. Damping above relaxed: assumption.
+HUMAN_RANGES_FRONTAL = {
+    "Hip_x": {"k": ((34, 66), (100, 700), (300, 600)), "b": ((1.9, 4.6), (2, 21), (2, 21))},
+    "Subtalar_x": {"k": ((5, 15), (10, 70), (10, 30)), "b": ((0.1, 0.3), (0.2, 1.5), (0.2, 0.6))},
+}
 
 
 def vic_cost(value: Tensor) -> Tensor:
@@ -96,6 +108,7 @@ class VicSteeringConfig(CadenceGaitPercentSteeringConfig):
     #   delta_max. The bound follows the smoothed state weights, so it changes as smoothly as the reference.
     # delta_lowpass_s: first-order lowpass of delta per control step (muscle activation ~30-50 ms); 0 = off.
     delta_band: bool = False
+    frontal_human_ref: bool = False      # Hip_x / Subtalar_x follow HUMAN_RANGES_FRONTAL instead of the current gain
     delta_band_margin: float = 1.5
     delta_lowpass_s: float = 0.0
 
@@ -119,12 +132,13 @@ class VicSteering(CadenceGaitPercentSteering):
         lk_h = torch.zeros(J, 3, device=dev)
         lb_h = torch.zeros(J, 3, device=dev)
         half = torch.zeros(J, 3, device=dev)       # log half-width of the tolerated band
+        ranges = dict(HUMAN_RANGES, **(HUMAN_RANGES_FRONTAL if c.frontal_human_ref else {}))
         for i, j in enumerate(c.vic_joints):
             key = j[2:]
-            if key in HUMAN_RANGES:
+            if key in ranges:
                 for s in range(3):
-                    lo, hi = HUMAN_RANGES[key]["k"][s]
-                    blo, bhi = HUMAN_RANGES[key]["b"][s]
+                    lo, hi = ranges[key]["k"][s]
+                    blo, bhi = ranges[key]["b"][s]
                     lk_h[i, s] = 0.5 * (math.log(lo) + math.log(hi))
                     lb_h[i, s] = 0.5 * (math.log(blo) + math.log(bhi))
                     half[i, s] = 0.5 * (math.log(hi) - math.log(lo)) + math.log(c.band_widen)
@@ -137,9 +151,9 @@ class VicSteering(CadenceGaitPercentSteering):
         if c.delta_band:
             for i, j in enumerate(c.vic_joints):
                 key = j[2:]
-                if key in HUMAN_RANGES:
+                if key in ranges:
                     for s in range(3):
-                        lo, hi = HUMAN_RANGES[key]["k"][s]
+                        lo, hi = ranges[key]["k"][s]
                         dmax[i, s] = 0.5 * (math.log(hi) - math.log(lo)) + math.log(c.delta_band_margin)
         self._dmax_h = dmax
         n = len(self._tar_speed)
