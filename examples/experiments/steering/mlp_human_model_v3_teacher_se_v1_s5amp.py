@@ -10,6 +10,8 @@ SD 11-82 x the pack's, mean offsets z 2-9, plus wrist offsets. The discriminator
 This recipe keeps the plant and every reward and only changes what the discriminator sees:
   DISC_BODIES = "legs": Pelvis, both legs (Hip, Knee, Talus, Ankle, Toe), Torso, Spine, Chest (14 bodies)
   DISC_BODIES = "prox": legs + L/R Thorax and Shoulder (upper arms, 18 bodies)
+DISC_HISTORY = 2 keeps only the two most recent history steps (s3 uses 8; the original AMP discriminator sees one
+transition), which limits how much of the motion the discriminator can use to separate agent from reference.
 The discriminator's first layer and input normalizer are cut to the kept columns by the launcher
 (teacher_followup.py subset_disc_inputs), so it starts from the s3 discriminator on those inputs.
 """
@@ -26,6 +28,7 @@ from examples.experiments.steering.mlp_human_model_v3_teacher_se_v1_s3 import ag
 
 BODY_SETS = {"legs": list(range(14)), "prox": list(range(14)) + [16, 17, 21, 22]}
 DISC_BODIES = "legs"
+DISC_HISTORY = None          # None = all 8 history steps (as s3); 2 = the two most recent steps only
 DISC_KEY = "disc_coords_obs"
 
 
@@ -38,7 +41,8 @@ def env_config(robot_cfg, args):
                       "historical_rigid_body_vel": hist.rigid_body_vel,
                       "historical_rigid_body_ang_vel": hist.rigid_body_ang_vel,
                       "historical_ground_heights": hist.ground_heights, "historical_body_contacts": hist.body_contacts},
-        static_params={"body_ids": BODY_SETS[DISC_BODIES], "local_obs": True, "root_height_obs": True, "w_last": True})
+        static_params={"body_ids": BODY_SETS[DISC_BODIES], "local_obs": True, "root_height_obs": True, "w_last": True,
+                       **({"history_steps": DISC_HISTORY} if DISC_HISTORY else {})})
     return cfg
 
 
@@ -52,5 +56,6 @@ def agent_config(robot_cfg, env_cfg, args):
     old = cfg.reference_obs_components["historical_max_coords_obs"]
     cfg.reference_obs_components[DISC_KEY] = MdpComponent(
         compute_func=compute_historical_max_coords_subset_from_motion_lib, dynamic_vars={},
-        static_params={**old.get_params(), "body_ids": BODY_SETS[DISC_BODIES]})
+        static_params={**old.get_params(), "body_ids": BODY_SETS[DISC_BODIES],
+                       **({"history_steps": DISC_HISTORY} if DISC_HISTORY else {})})
     return cfg
