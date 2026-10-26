@@ -19,6 +19,9 @@ baseline measured at alpha = 0.
 
 State is per leg from the cadence stance rule (foot body heights), not from a gait clock, so it also
 applies to standing, stopping and turning.
+
+Candidate options (2026-10-26, off by default): delta_band (delta_max per joint and leg state from the human range)
+and delta_lowpass_s (lowpass on delta); recipe vic_TC_r11.
 """
 from dataclasses import dataclass, field
 import json
@@ -87,6 +90,14 @@ class VicSteeringConfig(CadenceGaitPercentSteeringConfig):
     # damping ratio zeta of the reference while the policy changes k (k_d ~ sqrt(k_p)), vic_TC_r4 (2026-10-23).
     damp_delta_gain: float = 1.0
     fresh_stance: bool = False           # contact from foot heights on the first step after a reset (r2 trains with it)
+    # Candidate change (2026-10-26, HMV_v1 meeting follow-up Q2; defaults keep r1-r10 behaviour):
+    # delta_band: delta_max per joint and leg state = half log-width of the human range + ln(delta_band_margin), so
+    #   every state can reach its whole range (ankle stance needs 1.46 > 1.1); joints without a human value keep
+    #   delta_max. The bound follows the smoothed state weights, so it changes as smoothly as the reference.
+    # delta_lowpass_s: first-order lowpass of delta per control step (muscle activation ~30-50 ms); 0 = off.
+    delta_band: bool = False
+    delta_band_margin: float = 1.5
+    delta_lowpass_s: float = 0.0
 
 
 class VicSteering(CadenceGaitPercentSteering):
@@ -122,10 +133,21 @@ class VicSteering(CadenceGaitPercentSteering):
                 lb_h[i] = math.log(float(b_old[i]))
                 half[i] = math.log(c.frontal_band)
         self._lk_h, self._lb_h, self._half = lk_h, lb_h, half
+        dmax = torch.full((J, 3), float(c.delta_max), device=dev)
+        if c.delta_band:
+            for i, j in enumerate(c.vic_joints):
+                key = j[2:]
+                if key in HUMAN_RANGES:
+                    for s in range(3):
+                        lo, hi = HUMAN_RANGES[key]["k"][s]
+                        dmax[i, s] = 0.5 * (math.log(hi) - math.log(lo)) + math.log(c.delta_band_margin)
+        self._dmax_h = dmax
         n = len(self._tar_speed)
         self._lk = torch.log(k_old).expand(n, J).clone()
         self._lb = torch.log(b_old).expand(n, J).clone()
         self._fresh = torch.ones(n, dtype=torch.bool, device=dev)
+        self._dmax = dmax[:, 0].expand(n, J).clone()          # smoothed per-env bound (delta_band)
+        self._delta = torch.zeros(n, J, device=dev)            # lowpassed delta (delta_lowpass_s)
         self.alpha = float(c.alpha_init)
         self.beta = float(c.beta_init)
         self._steps = 0
@@ -252,7 +274,7 @@ class VicSteering(CadenceGaitPercentSteering):
         self._advance_schedule()
         sim = self.env.simulator
         J = len(c.vic_joints)
-        delta = c.delta_max * torch.tanh(extra[:, :J])
+        unit = torch.tanh(extra[:, :J])
         tau_res = c.tau_res_scale * self._tau_max * torch.tanh(extra[:, J:2 * J])
         # Leg state: 0 swing, 1 stance, 2 standing (both feet down, slow command and body).
         contact = self._stance
@@ -275,7 +297,18 @@ class VicSteering(CadenceGaitPercentSteering):
         s = 1.0 - math.exp(-self.env.dt / c.gain_smooth_s)
         self._lk = torch.where(self._fresh[:, None], lk_t, self._lk + s * (lk_t - self._lk))
         self._lb = torch.where(self._fresh[:, None], lb_t, self._lb + s * (lb_t - self._lb))
+        fresh = self._fresh.clone()
         self._fresh[:] = False
+        if c.delta_band:
+            dm_t = self._dmax_h[jj, state]
+            self._dmax = torch.where(fresh[:, None], dm_t, self._dmax + s * (dm_t - self._dmax))
+            delta = self._dmax * unit
+        else:
+            delta = c.delta_max * unit
+        if c.delta_lowpass_s > 0:
+            sd = 1.0 - math.exp(-self.env.dt / c.delta_lowpass_s)
+            self._delta = torch.where(fresh[:, None], delta, self._delta + sd * (delta - self._delta))
+            delta = self._delta
         kp = torch.exp(self._lk + delta)
         kd = torch.exp(self._lb + c.damp_delta_gain * delta)
         sim._common_p_gains[:, self._idx] = kp
