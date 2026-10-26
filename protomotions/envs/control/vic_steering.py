@@ -21,7 +21,8 @@ State is per leg from the cadence stance rule (foot body heights), not from a ga
 applies to standing, stopping and turning.
 
 Candidate options (2026-10-26, off by default): delta_band (delta_max per joint and leg state from the human range)
-and delta_lowpass_s (lowpass on delta); recipe vic_TC_r11.
+and delta_lowpass_s (lowpass on delta) or delta_tau_up_s / delta_tau_down_s (activation-like asymmetric lowpass);
+recipe vic_TC_r11.
 """
 from dataclasses import dataclass, field
 import atexit
@@ -112,6 +113,11 @@ class VicSteeringConfig(CadenceGaitPercentSteeringConfig):
     frontal_human_ref: bool = False      # Hip_x / Subtalar_x follow HUMAN_RANGES_FRONTAL instead of the current gain
     delta_band_margin: float = 1.5
     delta_lowpass_s: float = 0.0
+    # Activation-like asymmetric lowpass (2026-10-26, overrides delta_lowpass_s when both > 0): delta read as the
+    # co-contraction level; rising (stiffening) follows tau_up, falling (relaxing) tau_down, like muscle activation
+    # vs deactivation (~10-20 ms vs ~30-60 ms, Zajac 1989; Thelen 2003). Gains change once per control step.
+    delta_tau_up_s: float = 0.0
+    delta_tau_down_s: float = 0.0
 
 
 class VicSteering(CadenceGaitPercentSteering):
@@ -334,7 +340,13 @@ class VicSteering(CadenceGaitPercentSteering):
             delta = self._dmax * unit
         else:
             delta = c.delta_max * unit
-        if c.delta_lowpass_s > 0:
+        if c.delta_tau_up_s > 0 and c.delta_tau_down_s > 0:
+            up = 1.0 - math.exp(-self.env.dt / c.delta_tau_up_s)
+            down = 1.0 - math.exp(-self.env.dt / c.delta_tau_down_s)
+            step = torch.where(delta > self._delta, up, down) * (delta - self._delta)
+            self._delta = torch.where(fresh[:, None], delta, self._delta + step)
+            delta = self._delta
+        elif c.delta_lowpass_s > 0:
             sd = 1.0 - math.exp(-self.env.dt / c.delta_lowpass_s)
             self._delta = torch.where(fresh[:, None], delta, self._delta + sd * (delta - self._delta))
             delta = self._delta
