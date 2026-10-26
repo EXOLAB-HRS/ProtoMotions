@@ -24,6 +24,7 @@ Candidate options (2026-10-26, off by default): delta_band (delta_max per joint 
 and delta_lowpass_s (lowpass on delta); recipe vic_TC_r11.
 """
 from dataclasses import dataclass, field
+import atexit
 import json
 import math
 import os
@@ -188,6 +189,12 @@ class VicSteering(CadenceGaitPercentSteering):
         self._impact = torch.zeros(n, device=dev)
         self._metab = torch.zeros(n, device=dev)
         self._sim_ready = False
+        # HC_VIC_GAIN_LOG=<path.npz> (evaluation, 2026-10-27, off by default): k_p, k_d, delta and leg state of the VIC
+        # joints at every control step, written at exit (jitter analysis of the stiffness output).
+        self._gain_log_path = os.environ.get("HC_VIC_GAIN_LOG")
+        self._gain_log = []
+        if self._gain_log_path:
+            atexit.register(self._dump_gain_log)
 
     # ------------------------------------------------------------------ simulator buffers
     def _setup_sim(self):
@@ -221,6 +228,14 @@ class VicSteering(CadenceGaitPercentSteering):
         self._host_d.copy_(d_sim)
         robot.root_physx_view.set_dof_stiffnesses(self._host_k, indices=self._host_idx)
         robot.root_physx_view.set_dof_dampings(self._host_d, indices=self._host_idx)
+
+    def _dump_gain_log(self):
+        if not self._gain_log:
+            return
+        import numpy as np
+        a = torch.stack(self._gain_log, 0).float().numpy()          # [T, 4, N, J]
+        np.savez_compressed(self._gain_log_path, kp=a[:, 0], kd=a[:, 1], delta=a[:, 2], state=a[:, 3].astype("int8"),
+                            joints=np.array(self.config.vic_joints), dt=float(self.env.dt))
 
     # ------------------------------------------------------------------ schedule
     def _advance_schedule(self):
@@ -325,6 +340,10 @@ class VicSteering(CadenceGaitPercentSteering):
             delta = self._delta
         kp = torch.exp(self._lk + delta)
         kd = torch.exp(self._lb + c.damp_delta_gain * delta)
+        if self._gain_log_path:
+            self._gain_log.append(torch.stack([kp, kd, delta, state.float()], 0).half().cpu())
+            if len(self._gain_log) % 250 == 0:      # the simulator may exit without running atexit hooks
+                self._dump_gain_log()
         sim._common_p_gains[:, self._idx] = kp
         sim._common_d_gains[:, self._idx] = kd
         self._write_gains()
