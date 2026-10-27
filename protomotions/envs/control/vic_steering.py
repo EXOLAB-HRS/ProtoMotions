@@ -130,6 +130,19 @@ class VicSteeringConfig(CadenceGaitPercentSteeringConfig):
     delta_tau_up_s: float = 0.0
     delta_tau_down_s: float = 0.0
     coact_unit_cost: bool = False        # vic_tc_v2: cocontraction cost on the level u = delta / h (not on delta)
+    # Exoskeleton hip assist / resist randomisation during training (2026-10-28, candidate change, off by default; user:
+    # implement now, run decided later). Same gait-phase profile as the W4 evaluation (scripts/hc_mc_cb_rollout.py
+    # HC_EXO_PHASE): per leg gait % p, extension bump +A_ext sin(pi p / 0.3) on 0-30 % and flexion bump
+    # -A_flex sin(pi (p - 0.45) / 0.3) on 45-75 % [N m] on Hip_y, added outside the muscle caps (an exoskeleton motor),
+    # only while the leg has a stride estimate and the command is faster than exo_min_speed. Per env, a new segment every
+    # exo_interval_range s: off with exo_off_prob, resist with exo_resist_prob, else assist; A_ext, A_flex ~
+    # U(exo_amp_range) with the segment's sign. The policy does not observe the exo torque (as with a real device).
+    exo_rand: bool = False
+    exo_amp_range: tuple = (5.0, 20.0)
+    exo_off_prob: float = 0.3
+    exo_resist_prob: float = 0.3
+    exo_interval_range: tuple = (4.0, 8.0)
+    exo_min_speed: float = 0.3
 
 
 class VicSteering(CadenceGaitPercentSteering):
@@ -207,6 +220,11 @@ class VicSteering(CadenceGaitPercentSteering):
         self._impact = torch.zeros(n, device=dev)
         self._metab = torch.zeros(n, device=dev)
         self._sim_ready = False
+        if c.exo_rand:
+            self._exo_hips = torch.tensor([names.index(j) for j in ("L_Hip_y", "R_Hip_y")], device=dev)
+            self._exo_amp = torch.zeros(n, 2, device=dev)               # (A_ext, A_flex) with the segment's sign
+            self._exo_left = torch.zeros(n, device=dev)                 # control steps until the next segment
+            self._exo_tau = torch.zeros(n, 2, device=dev)               # applied torque (L_Hip_y, R_Hip_y)
         # HC_VIC_GAIN_LOG=<path.npz> (evaluation, 2026-10-27, off by default): k_p, k_d, delta and leg state of the VIC
         # joints at every control step, written at exit (jitter analysis of the stiffness output).
         self._gain_log_path = os.environ.get("HC_VIC_GAIN_LOG")
@@ -234,7 +252,41 @@ class VicSteering(CadenceGaitPercentSteering):
         self._host_k = torch.empty((n, ndof), dtype=torch.float, pin_memory=True)
         self._host_d = torch.empty((n, ndof), dtype=torch.float, pin_memory=True)
         self._host_idx = robot._ALL_INDICES.cpu()
+        if self.config.exo_rand:
+            self._exo_sim = torch.zeros(n, ndof, device=p.device)   # simulator dof order, updated in place
+            apply_ = sim._apply_simulator_torques
+
+            def _apply_with_exo(torques, *a, **k):
+                return apply_(torques + self._exo_sim, *a, **k)
+            sim._apply_simulator_torques = _apply_with_exo
         self._sim_ready = True
+
+    def _exo_update(self):
+        """New exo segments where due (or after a reset), then this control step's hip torque from each leg's gait %."""
+        c = self.config
+        env = self.env
+        n, dev = len(self._tar_speed), self._tar_speed.device
+        self._exo_left -= 1
+        new = (self._exo_left <= 0) | (env.progress_buf <= 1)
+        if new.any():
+            r = torch.rand(n, device=dev)
+            sign = torch.where(r < c.exo_off_prob, torch.zeros_like(r),
+                               torch.where(r < c.exo_off_prob + c.exo_resist_prob, -torch.ones_like(r), torch.ones_like(r)))
+            lo, hi = c.exo_amp_range
+            amp = (lo + (hi - lo) * torch.rand(n, 2, device=dev)) * sign[:, None]
+            t0, t1 = c.exo_interval_range
+            left = (t0 + (t1 - t0) * torch.rand(n, device=dev)) / env.dt
+            self._exo_amp = torch.where(new[:, None], amp, self._exo_amp)
+            self._exo_left = torch.where(new, left, self._exo_left)
+        now = env.progress_buf.float()[:, None]
+        pct = (now - self._leg_onset) / self._leg_stride.clamp_min(1.)                 # [n, 2] (L, R)
+        valid = (self._leg_strides >= 2) & (pct <= 1.2) & (self._tar_speed[:, None] > c.exo_min_speed)
+        ext = torch.where((pct >= 0) & (pct < 0.3), torch.sin(math.pi * pct / 0.3), torch.zeros_like(pct))
+        flx = torch.where((pct >= 0.45) & (pct < 0.75), torch.sin(math.pi * (pct - 0.45) / 0.3), torch.zeros_like(pct))
+        self._exo_tau = (self._exo_amp[:, :1] * ext - self._exo_amp[:, 1:] * flx) * valid
+        vec = torch.zeros(n, len(self.env.robot_config.kinematic_info.dof_names), device=dev)
+        vec[:, self._exo_hips] = self._exo_tau
+        self._exo_sim.copy_(vec[:, self._to_sim])
 
     def _write_gains(self):
         sim = self.env.simulator
@@ -296,6 +348,10 @@ class VicSteering(CadenceGaitPercentSteering):
                    cocontraction=round(self._cocon.mean().item(), 4), effort=round(self._effort.mean().item(), 4),
                    impact=round(self._impact.mean().item(), 4), metab=round(self._metab.mean().item(), 4),
                    mean_kp_swing_stance_stand=mk, joints=list(c.vic_joints))
+        if c.exo_rand:
+            rec.update(exo_abs_tau=round(self._exo_tau.abs().mean().item(), 3),
+                       exo_assist_frac=round((self._exo_amp[:, 0] > 0).float().mean().item(), 3),
+                       exo_resist_frac=round((self._exo_amp[:, 0] < 0).float().mean().item(), 3))
         print("[vic] " + json.dumps(rec), flush=True)
         if self._state_file:
             try:
@@ -338,6 +394,8 @@ class VicSteering(CadenceGaitPercentSteering):
                             torch.zeros_like(stance, dtype=torch.long))
         state = torch.where(standing[:, None], torch.full_like(state, 2), state)
         jj = torch.arange(J, device=state.device).expand_as(state)
+        if c.exo_rand:
+            self._exo_update()
         lk_h = self._lk_h[jj, state]
         lb_h = self._lb_h[jj, state]
         a = self.alpha
