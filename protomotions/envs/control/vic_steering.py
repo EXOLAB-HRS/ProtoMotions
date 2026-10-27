@@ -23,6 +23,18 @@ applies to standing, stopping and turning.
 Candidate options (2026-10-26, off by default): delta_band (delta_max per joint and leg state from the human range)
 and delta_lowpass_s (lowpass on delta) or delta_tau_up_s / delta_tau_down_s (activation-like asymmetric lowpass);
 recipe vic_TC_r11.
+
+vic_tc_v2 (2026-10-28, user-approved version: "강성은 지글거리지 않고 유각·입각·양발 서기·외란 대응으로 큼지막하게 구분, 생리적
+범위 안"): coact_per_leg replaces the 10 per-joint residuals with one co-activation level per leg,
+
+    u_leg = tanh(a_leg) in [-1, 1],  delta_j = h_j(state) * u_leg(j),  h_j = half log-width of the human range of state
+
+filtered like a muscle activation (delta_tau_up_s / delta_tau_down_s, 50 / 150 ms in the v2 recipes) and used with
+delta_band_margin = 1: u = -1 / 0 / +1 gives the low end / geometric centre / high end of the human range of the
+joint's current state, never outside it. The state reference still moves the level between swing, stance and standing;
+the policy only chooses how much the whole leg co-contracts (relaxed vs stiffened), which is what the disturbance
+curriculum of the v2 recipes asks for. The cocontraction cost becomes mean_leg relu(u). Extra outputs: 2 + J
+(u_L, u_R, then the J feed-forward residuals).
 """
 from dataclasses import dataclass, field
 import atexit
@@ -118,6 +130,7 @@ class VicSteeringConfig(CadenceGaitPercentSteeringConfig):
     # vs deactivation (~10-20 ms vs ~30-60 ms, Zajac 1989; Thelen 2003). Gains change once per control step.
     delta_tau_up_s: float = 0.0
     delta_tau_down_s: float = 0.0
+    coact_per_leg: bool = False          # vic_tc_v2: one co-activation level per leg instead of J residuals
 
 
 class VicSteering(CadenceGaitPercentSteering):
@@ -130,7 +143,7 @@ class VicSteering(CadenceGaitPercentSteering):
         self._idx = torch.tensor([names.index(j) for j in c.vic_joints], device=dev)
         self._leg = torch.tensor([0 if j.startswith("L_") else 1 for j in c.vic_joints], device=dev)
         J = len(c.vic_joints)
-        self.extra_action_dim = 2 * J
+        self.extra_action_dim = (2 if c.coact_per_leg else J) + J
         info = env.robot_config.control.control_info
         k_old = torch.tensor([info[j].stiffness for j in c.vic_joints], device=dev, dtype=torch.float)
         b_old = torch.tensor([info[j].damping for j in c.vic_joints], device=dev, dtype=torch.float)
@@ -199,6 +212,7 @@ class VicSteering(CadenceGaitPercentSteering):
         # joints at every control step, written at exit (jitter analysis of the stiffness output).
         self._gain_log_path = os.environ.get("HC_VIC_GAIN_LOG")
         self._gain_log = []
+        self._u_log = []                                       # vic_tc_v2: per-leg co-activation u [T, N, 2]
         if self._gain_log_path:
             atexit.register(self._dump_gain_log)
 
@@ -240,8 +254,9 @@ class VicSteering(CadenceGaitPercentSteering):
             return
         import numpy as np
         a = torch.stack(self._gain_log, 0).float().numpy()          # [T, 4, N, J]
+        extra = {"u": torch.stack(self._u_log[:len(a)], 0).float().numpy()} if self._u_log else {}
         np.savez_compressed(self._gain_log_path, kp=a[:, 0], kd=a[:, 1], delta=a[:, 2], state=a[:, 3].astype("int8"),
-                            joints=np.array(self.config.vic_joints), dt=float(self.env.dt))
+                            joints=np.array(self.config.vic_joints), dt=float(self.env.dt), **extra)
 
     # ------------------------------------------------------------------ schedule
     def _advance_schedule(self):
@@ -309,8 +324,13 @@ class VicSteering(CadenceGaitPercentSteering):
         self._advance_schedule()
         sim = self.env.simulator
         J = len(c.vic_joints)
-        unit = torch.tanh(extra[:, :J])
-        tau_res = c.tau_res_scale * self._tau_max * torch.tanh(extra[:, J:2 * J])
+        if c.coact_per_leg:
+            u_leg = torch.tanh(extra[:, :2])
+            unit = u_leg[:, self._leg]
+            tau_res = c.tau_res_scale * self._tau_max * torch.tanh(extra[:, 2:2 + J])
+        else:
+            unit = torch.tanh(extra[:, :J])
+            tau_res = c.tau_res_scale * self._tau_max * torch.tanh(extra[:, J:2 * J])
         # Leg state: 0 swing, 1 stance, 2 standing (both feet down, slow command and body).
         contact = self._stance
         if self._fresh_stance and self._fresh.any():
@@ -354,6 +374,8 @@ class VicSteering(CadenceGaitPercentSteering):
         kd = torch.exp(self._lb + c.damp_delta_gain * delta)
         if self._gain_log_path:
             self._gain_log.append(torch.stack([kp, kd, delta, state.float()], 0).half().cpu())
+            if c.coact_per_leg:
+                self._u_log.append(u_leg.half().cpu())
             if len(self._gain_log) % 250 == 0:      # the simulator may exit without running atexit hooks
                 self._dump_gain_log()
         sim._common_p_gains[:, self._idx] = kp
@@ -371,7 +393,7 @@ class VicSteering(CadenceGaitPercentSteering):
         # Reward inputs.
         dev_ = (self._lk + delta) - lk_t
         self._band = (torch.relu(dev_.abs() - self._half[jj, state]) / math.log(2.0)).clamp(max=4.0).mean(-1)
-        self._cocon = torch.relu(delta).mean(-1)
+        self._cocon = torch.relu(u_leg).mean(-1) if c.coact_per_leg else torch.relu(delta).mean(-1)
         tau = kp * err - kd * qd + self.beta * prior + sim.vic_ff_res[:, self._idx]
         self._effort = ((tau / self._tau_max) ** 2).clamp(max=4.0).mean(-1)
         p = (tau * qd)[:, self._sag]
