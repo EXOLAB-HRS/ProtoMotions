@@ -10,12 +10,13 @@ from examples.experiments.steering import mlp_human_model_v3_vic2_tc_s5_r1 as _r
 from examples.experiments.steering.mlp_human_model_v3_vic2_tc_s5_r1 import *  # noqa: F401,F403
 
 ARM_KP = {"Shoulder_x": 15.0, "Shoulder_y": 10.0, "Shoulder_z": 15.0, "Elbow_z": 8.0}
+# Declared plant change: the launcher allows exactly these gains to differ from the frozen robot (teacher_followup.py).
+PLANT_GAIN_OVERRIDES = {f"{side}_{j}": (kp, 0.1 * kp) for side in "LR" for j, kp in ARM_KP.items()}
 
 
 def configure_robot_and_simulator(robot_cfg, simulator_cfg, args):
     _r1.configure_robot_and_simulator(robot_cfg, simulator_cfg, args)
-    for side in "LR":
-        for j, kp in ARM_KP.items():
-            info = robot_cfg.control.control_info[f"{side}_{j}"]
-            info.stiffness = kp
-            info.damping = 0.1 * kp
+    for name, (kp, kd) in PLANT_GAIN_OVERRIDES.items():
+        info = robot_cfg.control.control_info[name]
+        info.stiffness = kp
+        info.damping = kd
