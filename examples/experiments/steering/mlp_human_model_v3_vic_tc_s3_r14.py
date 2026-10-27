@@ -10,7 +10,7 @@ import os
 
 from examples.experiments.steering.mlp_human_model_v3_vic_tc_r12 import *  # noqa: F401,F403
 from examples.experiments.steering.mlp_human_model_v3_vic_tc_r12 import (
-    env_config as _r12_env_config)
+    env_config as _r12_env_config, agent_config)  # noqa: F401
 
 R13_STATE = os.environ.get(
     "HC_VIC_RESUME_STATE",
@@ -22,13 +22,4 @@ def env_config(robot_cfg, args):
     s = json.load(open(R13_STATE))
     cfg.control_components["steering"] = dataclasses.replace(
         cfg.control_components["steering"], alpha_init=float(s["alpha"]), beta_init=float(s["beta"]), schedule=True)
-    return cfg
-
-
-def agent_config(robot_cfg, env_cfg, args):  # noqa: F811
-    from examples.experiments.steering.mlp_human_model_v3_vic_tc_r12 import agent_config as _r12_agent_config
-    cfg = _r12_agent_config(robot_cfg, env_cfg, args)
-    # The launcher writes 2e-5 into the forked optimizer state (the value actually used, as in r13 whose recipe still
-    # said 5e-5); set it here too so resolved_configs records the real step size.
-    cfg.model.actor_optimizer.lr = 2e-5
     return cfg
