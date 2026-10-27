@@ -2,22 +2,23 @@
 
 Why v2: in vic_tc_v1 (vic_TC_s5_r15 / r17) the stiffness came from the state table alone. The policy's 10 per-joint
 residuals stayed at delta ~ 0 (x1.0-1.15) in walking, standing and after pushes, k did not change with speed, and W3
-"band" passed by construction. User (2026-10-28): stiffness should not jitter like a trajectory but separate coarsely
-into swing / stance / both feet / standing / disturbance response, inside a physiologically reasonable range.
+"band" passed by construction. User (2026-10-28): per joint (hip, knee, ankle ...), stiffness / damping should not
+jitter like a trajectory but take clearly separated, physiologically reasonable levels for swing / stance / both feet /
+standing / disturbance response.
 
 What changes against vic_TC_s5_r17 (r15 continued, actor lr 2e-5, human cadence law 0.558 v + 1.060):
-1. Stiffness output (VicSteering coact_per_leg): one co-activation level u per leg, delta_j = h_j(state) * u,
-   h = half log-width of the human range of the joint's state (delta_band_margin 1: never outside the range),
-   activation-like filter 50 ms up / 150 ms down (coarse, no jitter). Cocontraction cost = relu(u) (weight 0.03).
+1. Stiffness output per joint: co-activation level u_j in [-1, 1], delta_j = h_j(state) * u_j, h = half log-width of the
+   human range of the joint's state (delta_band_margin 1: never outside the range; v1 x1.5 beyond), activation-like
+   filter 50 ms up / 150 ms down (v1 15 / 50 ms; no jitter), cocontraction cost on u (coact_unit_cost, weight 0.03).
 2. A reason to stiffen: velocity pushes during training (PUSH_INTERVAL s apart, up to PUSH_LIN m/s horizontally),
    comparable to the evaluation battery (walk 0.2-0.5 m/s, stand 0.3-0.5 m/s).
 3. Basics the user asked for: left-right gait symmetry reward (gait_symmetry.VicSymSteering, legs + arms at the same
    gait percent, SYM_WEIGHT) and the upper arms back in the AMP discriminator (s5amp "prox": + L/R Thorax and
    Shoulder; elbows / hands stay out because their passive joints wobble). Stability, speed / heading / cadence
    tracking, human joint-angle, knee-strike and pelvis priors and the VIC effort / band costs are r17's.
-Starts from vic_TC_s5_r17 epoch 190 (best checkpoint: 4/16 W1-W4 rows fail, cadence / W3 / W4 pass); the launcher maps
-the 79 v1 actor outputs to 59 + 2 + 10 (u at 0 = centre of the human range, feed-forward rows kept) and widens the
-discriminator with zero-weight arm columns, so the run starts from the parent's behaviour.
+Starts from vic_TC_s5_r17 epoch 190 (best checkpoint: 4/16 W1-W4 rows fail, cadence / W3 / W4 pass); actor outputs stay
+59 + 10 + 10 (the parent's residual outputs are read as u), and the launcher widens the discriminator with zero-weight
+arm columns, so the run starts close to the parent's behaviour.
 """
 import dataclasses
 
@@ -36,7 +37,7 @@ PUSH_INTERVAL = (3.0, 6.0)
 PUSH_LIN = (0.4, 0.4, 0.0)
 ARMS_IN_DISC = True
 SYM_WEIGHT = 0.2
-COACT = dict(coact_per_leg=True, delta_band=True, delta_band_margin=1.0, delta_tau_up_s=0.05, delta_tau_down_s=0.15)
+COACT = dict(delta_band=True, delta_band_margin=1.0, delta_tau_up_s=0.05, delta_tau_down_s=0.15, coact_unit_cost=True)
 
 
 def configure_robot_and_simulator(robot_cfg, simulator_cfg, args):
@@ -64,8 +65,4 @@ def env_config(robot_cfg, args):
 
 def agent_config(robot_cfg, env_cfg, args):
     _s5amp.DISC_BODIES = "prox" if ARMS_IN_DISC else "legs"
-    cfg = _r17_agent_config(robot_cfg, env_cfg, args)
-    n = robot_cfg.number_of_actions + 2 + len(VicSymSteeringConfig.vic_joints)
-    cfg.model.actor.num_out = n
-    cfg.model.actor.mu_model.num_out = n
-    return cfg
+    return _r17_agent_config(robot_cfg, env_cfg, args)
