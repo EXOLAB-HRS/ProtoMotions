@@ -159,6 +159,21 @@ def vic_cost(value: Tensor) -> Tensor:
     return -value
 
 
+def fill_missing_fields(cfg):
+    """Configs pickled before a field existed (resolved_configs.pt of earlier runs) lack fields that use a
+    default_factory (no class attribute to fall back on); give them the dataclass default. 2026-10-28."""
+    import dataclasses
+    if not dataclasses.is_dataclass(cfg):
+        return cfg
+    for f in dataclasses.fields(type(cfg)):
+        if f.name not in vars(cfg) and not hasattr(type(cfg), f.name):
+            if f.default_factory is not dataclasses.MISSING:
+                setattr(cfg, f.name, f.default_factory())
+            elif f.default is not dataclasses.MISSING:
+                setattr(cfg, f.name, f.default)
+    return cfg
+
+
 @dataclass
 class VicSteeringConfig(CadenceGaitPercentSteeringConfig):
     _target_: str = "protomotions.envs.control.vic_steering.VicSteering"
@@ -224,6 +239,7 @@ class VicSteeringConfig(CadenceGaitPercentSteeringConfig):
 
 class VicSteering(CadenceGaitPercentSteering):
     def __init__(self, config, env):
+        fill_missing_fields(config)
         super().__init__(config, env)
         c = config
         sim = env.simulator

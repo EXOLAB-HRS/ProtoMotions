@@ -32,7 +32,7 @@ import torch
 from torch import Tensor
 
 from protomotions.envs.control.cadence_gait_prior import steering_path
-from protomotions.envs.control.vic_steering import VicSteering, VicSteeringConfig
+from protomotions.envs.control.vic_steering import VicSteering, VicSteeringConfig, fill_missing_fields
 
 GAIT_SYMMETRY = steering_path("gait_symmetry")
 
@@ -81,6 +81,7 @@ def stance_symmetry_factor(frac: Tensor, ok: Tensor, tol: float, sigma: float) -
 
 class VicSymSteering(VicSteering):
     def __init__(self, config, env):
+        fill_missing_fields(config)
         super().__init__(config, env)
         c = config
         names = list(env.robot_config.kinematic_info.dof_names)
