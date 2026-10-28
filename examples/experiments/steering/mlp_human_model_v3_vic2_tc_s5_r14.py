@@ -1,4 +1,4 @@
-"""vic2_TC_s5_r14 (vic_tc_v2 candidate, DRAFT 2026-10-28, user decision: joint-level spinal stretch reflex on the plant):
+"""vic2_TC_s5_r14 (vic_tc_v2 candidate, 2026-10-28, thresholds calibrated, user decision: joint-level spinal stretch reflex on the plant):
 vic2_TC_s5_r13 (= r11, no training pushes, + afferent delay on the actor's body-state observations) with the joint
 stretch reflex (protomotions/robot_configs/human_model/common/joint_reflex.py) on the 10 VIC joints.
 
@@ -25,9 +25,13 @@ from protomotions.robot_configs.human_model.common.joint_reflex import DEFAULT_K
 from examples.experiments.steering import mlp_human_model_v3_vic2_tc_s5_r13 as _r13
 from examples.experiments.steering.mlp_human_model_v3_vic2_tc_s5_r13 import *  # noqa: F401,F403
 
-V_TH = {"Hip_y": 1.5, "Knee_y": 1.5, "Ankle_y": 1.5, "Hip_x": 1.5, "Subtalar_x": 1.5}   # rad/s, PLACEHOLDER (calibrate)
+# Calibrated 2026-10-28 on vic2_TC_s5_r11 (sensor-only block, steady walking 64 env x 25 s, physics rate): the PD-deviation
+# signal was as large in walking as after pushes, so the reflex uses signal="highpass" (qdot - lowpass(qdot), 0.1 s) and
+# v_th = walking p99.9 of the high-passed stretch velocity, max of left / right (rad/s). Right after the 0.35 m/s lateral
+# push the 30 Hz values were hip 5.7, knee 11.3, ankle 8.9, hip_x 3.0 rad/s, i.e. above these thresholds.
+V_TH = {"Hip_y": 3.9, "Knee_y": 7.6, "Ankle_y": 7.4, "Hip_x": 2.7, "Subtalar_x": 5.5}
 JOINT_REFLEX = dict(enabled=True, delay_ms=(30.0, 40.0), v_th=V_TH, k_v=dict(DEFAULT_KV), kappa=1.0, max_frac=0.3,
-                    away_only=True)
+                    away_only=True, signal="highpass", hp_tau_s=0.1)
 
 
 def env_config(robot_cfg, args):
