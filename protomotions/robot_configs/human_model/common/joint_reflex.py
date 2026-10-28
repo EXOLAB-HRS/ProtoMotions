@@ -71,6 +71,13 @@ class JointReflexConfig:
     l_th: Dict[str, Pair] = field(default_factory=dict)                            # rad (default 0.2)
     k_l: Dict[str, Pair] = field(default_factory=dict)                             # N m/rad (default 0 = tonic off)
     away_only: bool = True           # fire only while the deviation from q_ref grows (stretch away from the target)
+    # Stretch signal (2026-10-28): "pd" = qdot - d(q_ref)/dt (original); "highpass" = qdot - lowpass(qdot) with
+    # time constant hp_tau_s, i.e. a sudden velocity change against the joint's recent motion. Calibration on
+    # vic2_TC_s5_r11 showed the policy's PD targets lead the joint by large offsets in normal walking (|e_v| p99 7-21
+    # rad/s, same as right after a 0.35 m/s push), so "pd" cannot tell a perturbation from walking; the high-passed
+    # velocity separates them better (walking p99 1.6-7.5, push max 3-11 rad/s at 30 Hz). away_only applies to "pd" only.
+    signal: str = "pd"
+    hp_tau_s: float = 0.1
     kappa: float = 1.0               # descending gain modulation by the VIC co-activation level u_+
     gain_scale: float = 1.0          # g0; 0 = sensor only
     max_frac: float = 0.3            # |tau_r| <= max_frac * effort_limit of the joint
@@ -127,6 +134,8 @@ class JointReflex:
         self._env = torch.arange(num_envs, device=dev)
         self.q_ref = torch.zeros(num_envs, J, device=dev)
         self.qd_ref = torch.zeros(num_envs, J, device=dev)
+        self.qd_lp = torch.zeros(num_envs, J, device=dev)              # lowpassed qdot ("highpass" signal)
+        self.lp_fresh = torch.ones(num_envs, dtype=torch.bool, device=dev)
         self.u = torch.zeros(num_envs, J, device=dev)
         self.fresh = torch.ones(num_envs, dtype=torch.bool, device=dev)
         self.tau = torch.zeros(num_envs, J, device=dev)            # last substep
@@ -164,6 +173,7 @@ class JointReflex:
         self.history[:, env_ids] = 0.0
         self.tau[env_ids] = 0.0
         self.fresh[env_ids] = True
+        self.lp_fresh[env_ids] = True
         self._sample_delays(env_ids)
 
     def attach_vic(self, component):
@@ -219,7 +229,14 @@ class JointReflex:
         """One physics substep from the selected joints' q, qdot [N, J]; returns tau_r [N, J]."""
         c = self.config
         e = q - self.q_ref
-        e_v = qd - self.qd_ref
+        if c.signal == "highpass":
+            self.qd_lp = torch.where(self.lp_fresh[:, None], qd, self.qd_lp)
+            self.lp_fresh[:] = False
+            e_v = qd - self.qd_lp
+            self.qd_lp = self.qd_lp + (self.physics_dt / c.hp_tau_s) * (qd - self.qd_lp)
+            e = e_v                                                    # stretch direction = direction of the jump
+        else:
+            e_v = qd - self.qd_ref
         self.head = (self.head + 1) % self.depth
         self.history[self.head] = torch.stack((e, e_v), -1)
         slot = (self.head - self.delay_steps) % self.depth
@@ -298,7 +315,7 @@ class JointReflex:
         return res
 
     def save_state(self) -> dict:
-        return {k: getattr(self, k).clone() for k in ("history", "delay_steps", "q_ref", "qd_ref", "u", "fresh", "tau")} \
+        return {k: getattr(self, k).clone() for k in ("history", "delay_steps", "q_ref", "qd_ref", "qd_lp", "lp_fresh", "u", "fresh", "tau")} \
             | {"head": self.head}
 
     def load_state(self, state: dict):
@@ -314,7 +331,8 @@ def build_joint_reflex(config: Optional[JointReflexConfig], env) -> Optional[Joi
     calib = os.environ.get("HC_JOINT_REFLEX_CALIBRATE")
     if calib:
         base = config if (config is not None and config.enabled) else JointReflexConfig()
-        config = JointReflexConfig(**{**base.__dict__, "enabled": True, "gain_scale": 0.0, "calibrate": True})
+        config = JointReflexConfig(**{**base.__dict__, "enabled": True, "gain_scale": 0.0, "calibrate": True,
+                                      "signal": os.environ.get("HC_JOINT_REFLEX_SIGNAL", getattr(base, "signal", "pd"))})
     if config is None or not config.enabled:
         return None
     rc = env.robot_config

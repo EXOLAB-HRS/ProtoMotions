@@ -199,3 +199,27 @@ def test_substep_writes_reflex_buffer(monkeypatch):
     ptr = buf.data_ptr()
     r.substep(sim)
     assert sim.vic_ff_reflex.data_ptr() == ptr          # in place: a static input of the captured CUDA graph
+
+
+def test_highpass_signal_silent_on_smooth_motion_fires_on_jump():
+    """signal="highpass": a smooth 1 Hz swing (1.5 rad/s peak; high-pass gain 0.53 at 1 Hz) stays below v_th; a sudden 3 rad/s velocity jump fires."""
+    import math
+    import torch
+    from protomotions.robot_configs.human_model.common.joint_reflex import JointReflex, JointReflexConfig
+    cfg = JointReflexConfig(enabled=True, joints=("L_Knee_y",), delay_ms=(0.0, 0.0), v_th={"Knee_y": 1.0},
+                            k_v={"Knee_y": 2.0}, signal="highpass", hp_tau_s=0.1, max_frac=1.0)
+    r = JointReflex(cfg, ["L_Knee_y"], {"L_Knee_y": 100.0}, physics_hz=240, control_dt=1 / 30, num_envs=1, device="cpu")
+    r.reset(torch.tensor([0]))
+    peak = 0.0
+    for k in range(480):                                     # 2 s smooth motion
+        t = k / 240
+        qd = torch.tensor([[1.5 * math.cos(2 * math.pi * t)]])
+        tau = r.compute(torch.zeros(1, 1), qd)
+        if k > 48:
+            peak = max(peak, float(tau.abs().max()))
+    assert peak == 0.0, peak
+    fired = 0.0
+    for k in range(24):                                      # sudden +3 rad/s jump on top
+        qd = torch.tensor([[1.5 + 3.0]])
+        fired = max(fired, float(tau.abs().max()) if k == 0 else float(r.compute(torch.zeros(1, 1), qd).abs().max()))
+    assert fired > 0.0
