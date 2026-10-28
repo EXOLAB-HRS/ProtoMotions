@@ -90,6 +90,7 @@ from protomotions.components.terrains.terrain import Terrain
 from protomotions.envs.obs.scene_obs import SceneObs
 from protomotions.envs.obs.terrain_obs import TerrainObs
 from protomotions.envs.obs.state_history_buffer import StateHistoryBuffer
+from protomotions.envs.obs.sensory_delay import SensoryDelayBuffer
 from protomotions.envs.base_env.config import EnvConfig
 from protomotions.envs.control.manager import ControlManager
 
@@ -291,6 +292,15 @@ class BaseEnv:
         # Initialize observations
         self._initialize_observations()
 
+        # Afferent delay of the actor's body-state observations (off unless the recipe enables it; getattr keeps
+        # resolved configs pickled before the field existed loadable).
+        self.sensory_delay = None
+        delay_cfg = getattr(self.config, "sensory_delay", None)
+        if delay_cfg is not None and delay_cfg.enabled:
+            self.sensory_delay = SensoryDelayBuffer(delay_cfg, self.num_envs, self.dt, self.device)
+            self.sensory_delay.reset(
+                torch.arange(self.num_envs, device=self.device, dtype=torch.long), self._observation_buffer)
+
     def _validate_motion_lib_compatibility(self):
         """Validate that the motion file is compatible with the robot config."""
         ki = self.robot_config.kinematic_info
@@ -348,6 +358,8 @@ class BaseEnv:
             name: tensor.clone() for name, tensor in self._observation_buffer.items()
         }
         obs.update(dynamic_obs)
+        if self.sensory_delay is not None:
+            obs.update(self.sensory_delay.read())
 
         return obs
 
@@ -775,6 +787,9 @@ class BaseEnv:
         self._current_context = self._build_global_context()
 
         self.compute_observations(context=self._current_context)
+        if self.sensory_delay is not None:
+            self.sensory_delay.push(self._observation_buffer)
+            self.extras.update(self.sensory_delay.log_values())
         self.compute_reward(context=self._current_context)
         self.reset_buf[:], self.terminate_buf[:] = self.check_resets_and_terminations(
             context=self._current_context
@@ -1155,6 +1170,8 @@ class BaseEnv:
         # Invalidate and rebuild context since state changed
         self._current_context = None
         self.compute_observations(env_ids, context=self.context)
+        if self.sensory_delay is not None:
+            self.sensory_delay.reset(env_ids, self._observation_buffer)
 
         return self.get_obs(), {}
 
@@ -1496,6 +1513,8 @@ class BaseEnv:
             )
         if self.scene_lib.num_objects_per_scene > 0:
             snapshot["object_state"] = self.simulator.get_object_root_state()
+        if self.sensory_delay is not None:
+            snapshot["sensory_delay"] = self.sensory_delay.save_state()
         return snapshot
 
     def restore_state(self, snapshot: dict) -> None:
@@ -1521,6 +1540,8 @@ class BaseEnv:
         self.respawn_root_offset.copy_(snapshot["respawn_root_offset"])
         self._current_noisy_obs = snapshot.get("_current_noisy_obs")
         self._current_context = None
+        if "sensory_delay" in snapshot and self.sensory_delay is not None:
+            self.sensory_delay.load_state(snapshot["sensory_delay"])
 
         # IsaacGym needs an extra step after state restore to sync internal state
         if "isaacgym" in self.simulator.config._target_.lower():
