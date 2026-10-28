@@ -523,6 +523,12 @@ class VicSteering(CadenceGaitPercentSteering):
             self._mean_k[st] = torch.where(m.any(0), ((self._lk + delta) * m).sum(0) / cnt, self._mean_k[st])
         self._log()
 
+    def coactivation_level(self):
+        """Filtered co-activation level per VIC joint for the plant's joint reflex (0 = relaxed, 1 = maximal)."""
+        if getattr(self.config, "vic_law", "v2") == "v3":
+            return self._delta.clamp(0.0, 1.0)                 # v3 keeps u in [0, 1] in _delta
+        return (self._delta / self._dmax.clamp_min(1e-6)).clamp(-1.0, 1.0)
+
     def _pre_physics_v3(self, extra, q_ref, unit, tau_res, state, jj, fresh, s):
         """vic_tc_v3 gains (module docstring); same feed-forward, reward inputs and logs as v2 otherwise."""
         c = self.config
