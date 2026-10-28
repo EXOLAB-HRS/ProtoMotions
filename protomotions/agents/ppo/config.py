@@ -59,6 +59,11 @@ class PPOActorConfig:
         default=False,
         metadata={"help": "Make action log std learnable (requires_grad=True)."},
     )
+    logstd_slices: List = field(
+        default_factory=list,
+        metadata={"help": "Per-output fixed log std: [(start, end, value), ...] replaces actor_logstd on outputs "
+                          "start..end-1 (vic_tc_v2 co-activation outputs, 2026-10-28). Empty: one value for all outputs."},
+    )
 
 
 @dataclass
