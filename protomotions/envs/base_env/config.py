@@ -26,6 +26,7 @@ from protomotions.envs.obs.scene_obs import SceneObsConfig
 from protomotions.envs.motion_manager.config import MotionManagerConfig
 from protomotions.envs.control.base import ControlComponentConfig
 from protomotions.envs.obs.sensory_delay import SensoryDelayConfig
+from protomotions.robot_configs.human_model.common.joint_reflex import JointReflexConfig
 
 if TYPE_CHECKING:
     from protomotions.envs.mdp_component import MdpComponent
@@ -115,4 +116,10 @@ class EnvConfig:
         default=None,
         metadata={"help": "Afferent delay of the actor's body-state observations (envs/obs/sensory_delay.py). "
                           "None or enabled=False = no delay."}
+    )
+
+    joint_reflex: Optional[JointReflexConfig] = field(
+        default=None,
+        metadata={"help": "Joint-level spinal stretch reflex on the plant side, added every physics substep "
+                          "(robot_configs/human_model/common/joint_reflex.py). None or enabled=False = off."}
     )
