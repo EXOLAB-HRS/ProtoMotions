@@ -54,7 +54,8 @@ state's HMV-ImpRef range (m = v3_guard_margin), log2 distance outside; it never 
 cocontraction cost is either mean_j u_j ("unit") or the co-contraction torque share mean_j k_co,j / (c_j tau_max,j)
 ("torque": the agonist + antagonist torque that would give k_co through the same short-range law, i.e. the extra
 muscle force that costs metabolic energy). Each term is written to the gain log (k_base, k_load, k_co, tau_load).
-Parameters and sources: VIC3_PARAMS below.
+Parameters and sources: VIC3_PARAMS below. v3_load_gate = "stance" (candidate, 2026-10-29) feeds the load filter only in
+stance / standing, so swing k = k_base + k_co (vic3_TC_s5_r1 swing knee load term pinned k to the corridor ceiling).
 """
 from dataclasses import dataclass, field
 import atexit
@@ -233,6 +234,11 @@ class VicSteeringConfig(CadenceGaitPercentSteeringConfig):
     v3_load_tau_down_s: float = 0.15
     v3_load_source: str = "sim"          # "sim": simulator.human_active_torques; "estimate": own PD + ff estimate
     v3_srs_omega: float = 0.0            # rad/s; > 0 attenuates the load term during fast motion
+    # Load term gate (2026-10-29, candidate): "stance" feeds |tau| to the load filter only while the leg is in stance or
+    # standing (swing input 0, so the term rises with the 50 ms filter after foot contact and decays over 150 ms after
+    # toe-off). vic3_TC_s5_r1: swing torques (leg swinging, mostly the PD's own k * err) gave the swing knee 13.6 N m/rad
+    # of load term vs the human 0.5-3.5, pinning k to the corridor ceiling 98 % of steps. "none" = r1 behaviour.
+    v3_load_gate: str = "none"
     v3_u_map: str = "relu"               # "relu": u = relu(tanh(a)); "affine": u = (tanh(a) + 1) / 2
     v3_coact_cost: str = "torque"        # "torque": mean_j k_co / (c tau_max); "unit": mean_j u
 
@@ -328,7 +334,7 @@ class VicSteering(CadenceGaitPercentSteering):
     def _init_v3(self, n, dev):
         c = self.config
         if c.v3_u_map not in ("relu", "affine") or c.v3_coact_cost not in ("torque", "unit") \
-                or c.v3_load_source not in ("sim", "estimate"):
+                or c.v3_load_source not in ("sim", "estimate") or c.v3_load_gate not in ("none", "stance"):
             raise ValueError("bad v3 option")
         ps = [vic3_defaults(j[2:], c.v3_params) for j in c.vic_joints]
         t = lambda v: torch.tensor(v, device=dev, dtype=torch.float)
@@ -564,6 +570,8 @@ class VicSteering(CadenceGaitPercentSteering):
             tau_prev = src[:, self._idx].detach().abs()
         else:
             tau_prev = self._v3_tau_est.abs()
+        if c.v3_load_gate == "stance":
+            tau_prev = tau_prev * (state >= 1)
         lup = 1.0 - math.exp(-dt / c.v3_load_tau_up_s)
         ldn = 1.0 - math.exp(-dt / c.v3_load_tau_down_s)
         self._v3_tau = self._v3_tau + torch.where(tau_prev > self._v3_tau, lup, ldn) * (tau_prev - self._v3_tau)

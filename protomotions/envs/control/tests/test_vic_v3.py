@@ -167,3 +167,21 @@ def test_v3_alpha_zero_keeps_parent_gains():
     n, J = 4, len(JOINTS)
     kp, kd = _step(self, sim, torch.zeros(n, J), torch.zeros(n, J, dtype=torch.long), fresh=True)
     assert torch.allclose(kp, torch.full((n, J), 100.0)) and torch.allclose(kd, torch.full((n, J), 10.0))
+
+
+def test_v3_load_gate_stance():
+    self, sim = _stub(law_kwargs=dict(v3_load_gate="stance"))
+    n, J = 4, len(JOINTS)
+    swing = torch.zeros(n, J, dtype=torch.long)
+    stance = torch.ones(n, J, dtype=torch.long)
+    sim.human_active_torques[:] = 40.0
+    _step(self, sim, torch.full((n, J), -2.0), swing, fresh=True)
+    for _ in range(30):
+        _step(self, sim, torch.full((n, J), -2.0), swing)
+    assert torch.equal(self._v3_terms[1], torch.zeros(n, J))             # swing: no load term
+    for _ in range(60):
+        _step(self, sim, torch.full((n, J), -2.0), stance)
+    assert torch.allclose(self._v3_terms[1, 0], self._v3_c * 40.0, rtol=1e-3)
+    _step(self, sim, torch.full((n, J), -2.0), swing)                    # toe-off: decays with the 150 ms filter
+    k = 1.0 - math.exp(-(1 / 30) / 0.15)
+    assert torch.allclose(self._v3_terms[1, 0], self._v3_c * 40.0 * (1 - k), rtol=1e-3)
