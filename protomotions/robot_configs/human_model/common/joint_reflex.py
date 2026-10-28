@@ -211,7 +211,7 @@ class JointReflex:
         self._substeps = 0
         self._steps += 1
         dump = getattr(self, "_dump_calibration", None)
-        if dump is not None and self._steps % 3000 == 0:      # the simulator may exit without atexit hooks
+        if dump is not None and self._steps % 300 == 0:       # the simulator may exit without atexit hooks (evals are 750-1320 steps)
             dump()
 
     # ------------------------------------------------------------------ plant side
