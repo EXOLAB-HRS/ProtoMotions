@@ -370,6 +370,10 @@ class VicSteering(CadenceGaitPercentSteering):
         self._impact = torch.zeros(n, device=dev)
         self._metab = torch.zeros(n, device=dev)
         self._sway = torch.zeros(n, device=dev)
+        # populate_context reads these under every vic_law; d51c34f set them only in _init_v3, so v2 runs failed at env
+        # init (AttributeError _pulse_err, vic_TC_b9 smoke 2026-10-30). _init_v3 sets them again.
+        self._pulse_err = torch.zeros(n, device=dev)
+        self._eff = torch.zeros(n, max(1, c.vic_efference_steps), 2 * len(c.vic_joints), device=dev)
         self._sim_ready = False
         # HC_VIC_GAIN_LOG=<path.npz> (evaluation, 2026-10-27, off by default): k_p, k_d, delta and leg state of the VIC
         # joints at every control step, written at exit (jitter analysis of the stiffness output).
