@@ -253,8 +253,23 @@ class VicSteeringConfig(CadenceGaitPercentSteeringConfig):
     # below it (no pull to zero sway). Written to ctx.steering.vic_sway (zero unless sway_cost).
     sway_cost: bool = False
     sway_v_h: float = 0.01
-    v3_u_map: str = "relu"               # "relu": u = relu(tanh(a)); "affine": u = (tanh(a) + 1) / 2
-    v3_coact_cost: str = "torque"        # "torque": mean_j k_co / (c tau_max); "unit": mean_j u
+    v3_u_map: str = "relu"               # "relu": u = relu(tanh(a)); "affine": u = (tanh(a) + 1) / 2;
+    #                                      "softplus": u = softplus(8 tanh(a)) / 8 (no flat zero region: u = 0.087 at a = 0)
+    v3_coact_cost: str = "torque"        # "torque": mean_j k_co / (c tau_max); "unit": mean_j u;
+    #   "activation" (2026-10-29): extra effort of co-contraction, mean_j [((|tau| + tau_co) / tau_max)^2 - (tau / tau_max)^2],
+    #   i.e. the same quadratic activation price as vic_effort (weight it like vic_effort so u is not dearer than tau_ff)
+    # Unpredictable joint torque pulses (2026-10-29, candidate, off): per VIC joint a pulse starts with rate
+    # v3_perturb_rate_hz, sign random, size v3_perturb_amp * tau_max * U(0.5, 1), lasting v3_perturb_dur_s, only while the
+    # joint's leg is standing (state 2) or in the first v3_perturb_loading_s of stance. Shorter than the afferent delay +
+    # one control step, so q_ref cannot cancel it in time; stiffness does (unstable / unpredictable loads raise
+    # co-contraction in people: Burdet et al. 2001, Franklin et al. 2003). Not the BS push (small, joint level).
+    v3_perturb_rate_hz: float = 0.0
+    v3_perturb_amp: float = 0.08
+    v3_perturb_dur_s: float = 0.06
+    v3_perturb_loading_s: float = 0.15
+    # Evaluation diagnostic (2026-10-29, default 0): u <- clamp(u + v3_u_add, 0, 1) after the filter, to test whether a
+    # higher co-contraction helps the trained policy at all.
+    v3_u_add: float = 0.0
 
 
 class VicSteering(CadenceGaitPercentSteering):
@@ -348,7 +363,7 @@ class VicSteering(CadenceGaitPercentSteering):
 
     def _init_v3(self, n, dev):
         c = self.config
-        if c.v3_u_map not in ("relu", "affine") or c.v3_coact_cost not in ("torque", "unit") \
+        if c.v3_u_map not in ("relu", "affine", "softplus") or c.v3_coact_cost not in ("torque", "unit", "activation") \
                 or c.v3_load_source not in ("sim", "estimate") or c.v3_load_gate not in ("none", "stance"):
             raise ValueError("bad v3 option")
         ps = [vic3_defaults(j[2:], c.v3_params) for j in c.vic_joints]
@@ -367,6 +382,9 @@ class VicSteering(CadenceGaitPercentSteering):
         self._v3_tau = torch.zeros(n, J, device=dev)           # filtered |tau| of the load term
         self._v3_tau_est = torch.zeros(n, J, device=dev)
         self._v3_noise = torch.zeros(n, J, device=dev)         # coloured unit noise of the motor-noise term
+        self._v3_pert = torch.zeros(n, J, device=dev)          # current perturbation pulse torque
+        self._v3_pert_left = torch.zeros(n, J, device=dev)     # seconds left of the pulse
+        self._v3_stance_t = torch.zeros(n, J, device=dev)      # seconds since this joint's leg touched down
         self._v3_terms = torch.zeros(3, n, J, device=dev)      # k_base, k_load, k_co (last step)
         self._v3_log = []
 
@@ -573,13 +591,20 @@ class VicSteering(CadenceGaitPercentSteering):
         sim = self.env.simulator
         dt = self.env.dt
         # Co-contraction level u in [0, 1], activation-like filter as v2 (delta_tau_up_s / delta_tau_down_s).
-        u = torch.relu(unit) if c.v3_u_map == "relu" else 0.5 * (unit + 1.0)
+        if c.v3_u_map == "relu":
+            u = torch.relu(unit)
+        elif c.v3_u_map == "softplus":
+            u = (torch.nn.functional.softplus(8.0 * unit) / 8.0).clamp(max=1.0)
+        else:
+            u = 0.5 * (unit + 1.0)
         if c.delta_tau_up_s > 0 and c.delta_tau_down_s > 0:
             up = 1.0 - math.exp(-dt / c.delta_tau_up_s)
             down = 1.0 - math.exp(-dt / c.delta_tau_down_s)
             step = torch.where(u > self._delta, up, down) * (u - self._delta)
             self._delta = torch.where(fresh[:, None], u, self._delta + step)
             u = self._delta
+        if c.v3_u_add != 0.0:
+            u = (u + c.v3_u_add).clamp(0.0, 1.0)
         # Load term input: active torque of the previous control step (no algebraic loop).
         src = getattr(sim, "human_active_torques", None) if c.v3_load_source == "sim" else None
         if src is not None and src.shape[0] == len(fresh):
@@ -627,6 +652,20 @@ class VicSteering(CadenceGaitPercentSteering):
             self._v3_noise = torch.where(fresh[:, None], xi, a_n * self._v3_noise + math.sqrt(1 - a_n * a_n) * xi)
             tau_co = kc / self._v3_c
             tau_res = tau_res + c.v3_motor_noise * (tau_abs + tau_co) * self._v3_noise
+        if c.v3_perturb_rate_hz > 0:
+            self._v3_stance_t = torch.where((state >= 1) & ~fresh[:, None], self._v3_stance_t + dt,
+                                            torch.zeros_like(self._v3_stance_t))
+            ok = (state == 2) | ((state == 1) & (self._v3_stance_t <= c.v3_perturb_loading_s))
+            self._v3_pert_left = (self._v3_pert_left - dt).clamp(min=0.0)
+            start = ok & (self._v3_pert_left <= 0) & (torch.rand_like(self._v3_pert) < c.v3_perturb_rate_hz * dt)
+            size = c.v3_perturb_amp * self._tau_max * (0.5 + 0.5 * torch.rand_like(self._v3_pert))
+            sign = torch.where(torch.rand_like(self._v3_pert) < 0.5, -1.0, 1.0)
+            self._v3_pert = torch.where(start, sign * size, self._v3_pert)
+            self._v3_pert_left = torch.where(start, torch.full_like(self._v3_pert_left, c.v3_perturb_dur_s),
+                                             self._v3_pert_left)
+            live = (self._v3_pert_left > 0) & ok & ~fresh[:, None]
+            self._v3_pert = torch.where(live, self._v3_pert, torch.zeros_like(self._v3_pert))
+            tau_res = tau_res + self._v3_pert
         sim.vic_ff_res_target[:, self._idx] = tau_res
         reset_now = self.env.progress_buf <= 1
         if reset_now.any():
@@ -643,6 +682,10 @@ class VicSteering(CadenceGaitPercentSteering):
         else:
             self._cocon = u.mean(-1)
         tau = kp * err - kd * qd + self.beta * prior + sim.vic_ff_res[:, self._idx]
+        if c.v3_coact_cost == "activation":
+            r_net = (tau / self._tau_max).clamp(-2.0, 2.0)
+            r_all = (tau.abs() + kc / self._v3_c) / self._tau_max
+            self._cocon = (r_all.clamp(max=2.0) ** 2 - r_net ** 2).clamp(min=0.0, max=4.0).mean(-1)
         self._v3_tau_est = torch.maximum(torch.minimum(tau, self._tau_max), -self._tau_max).detach()
         self._effort = ((tau / self._tau_max) ** 2).clamp(max=4.0).mean(-1)
         p = (tau * qd)[:, self._sag]

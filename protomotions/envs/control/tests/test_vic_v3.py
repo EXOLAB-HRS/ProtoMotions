@@ -212,3 +212,37 @@ def test_sway_cost_only_when_standing():
     assert torch.allclose(self._sway, torch.full((n,), 2.0))               # (0.03 - 0.01) / 0.01
     _step(self, sim, torch.zeros(n, J), torch.ones(n, J, dtype=torch.long))
     assert torch.equal(self._sway, torch.zeros(n))
+
+
+def test_v3_perturb_only_standing_or_loading():
+    torch.manual_seed(0)
+    n, J = 2000, len(JOINTS)
+    self, sim = _stub(n=n, law_kwargs=dict(v3_perturb_rate_hz=30.0, v3_perturb_amp=0.1))   # p = 1 per step
+    swing = torch.zeros(n, J, dtype=torch.long)
+    _step(self, sim, torch.zeros(n, J), swing)
+    assert torch.equal(sim.vic_ff_res_target[:, :J], torch.zeros(n, J))
+    _step(self, sim, torch.zeros(n, J), torch.full((n, J), 2, dtype=torch.long))           # standing
+    tau = sim.vic_ff_res_target[:, :J].abs()
+    assert (tau >= 7.5 - 1e-4).all() and (tau <= 15.0 + 1e-4).all()                       # 0.1 * 150 * U(0.5, 1)
+    stance = torch.ones(n, J, dtype=torch.long)
+    for _ in range(6):                                                                     # 0.2 s into stance
+        _step(self, sim, torch.zeros(n, J), stance)
+    assert torch.equal(sim.vic_ff_res_target[:, :J], torch.zeros(n, J))
+
+
+def test_v3_activation_cost_prices_cocontraction_like_effort():
+    self, sim = _stub(law_kwargs=dict(v3_coact_cost="activation"))
+    n, J = 4, len(JOINTS)
+    stance = torch.ones(n, J, dtype=torch.long)
+    _step(self, sim, torch.full((n, J), -2.0), stance, fresh=True)
+    assert torch.allclose(self._cocon, torch.zeros(n))                                      # u = 0: no extra cost
+    _step(self, sim, torch.full((n, J), 5.0), stance, fresh=True)
+    assert (self._cocon > 0).all()
+
+
+def test_v3_softplus_map_and_u_add():
+    self, sim = _stub(law_kwargs=dict(v3_u_map="softplus", v3_u_add=0.3))
+    n, J = 4, len(JOINTS)
+    _step(self, sim, torch.full((n, J), -3.0), torch.ones(n, J, dtype=torch.long), fresh=True)
+    u = self._v3_terms[2] / self._v3_kco
+    assert torch.allclose(u, torch.full((n, J), 0.3), atol=0.01)                           # softplus(-8)/8 ~ 0 + 0.3
