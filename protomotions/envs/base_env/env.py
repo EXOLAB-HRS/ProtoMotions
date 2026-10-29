@@ -90,6 +90,8 @@ from protomotions.components.terrains.terrain import Terrain
 from protomotions.envs.obs.scene_obs import SceneObs
 from protomotions.envs.obs.terrain_obs import TerrainObs
 from protomotions.envs.obs.state_history_buffer import StateHistoryBuffer
+from protomotions.envs.obs.sensory_delay import SensoryDelayBuffer
+from protomotions.robot_configs.human_model.common.joint_reflex import build_joint_reflex
 from protomotions.envs.base_env.config import EnvConfig
 from protomotions.envs.control.manager import ControlManager
 
@@ -291,6 +293,24 @@ class BaseEnv:
         # Initialize observations
         self._initialize_observations()
 
+        # Afferent delay of the actor's body-state observations (off unless the recipe enables it; getattr keeps
+        # resolved configs pickled before the field existed loadable).
+        self.sensory_delay = None
+        delay_cfg = getattr(self.config, "sensory_delay", None)
+        if delay_cfg is not None and delay_cfg.enabled:
+            self.sensory_delay = SensoryDelayBuffer(delay_cfg, self.num_envs, self.dt, self.device)
+            self.sensory_delay.reset(
+                torch.arange(self.num_envs, device=self.device, dtype=torch.long), self._observation_buffer)
+
+        # Joint-level stretch reflex on the plant side (robot_configs/human_model/common/joint_reflex.py; off unless the
+        # recipe enables it or HC_JOINT_REFLEX_CALIBRATE is set). The human model adds its torque every physics substep.
+        self.joint_reflex = build_joint_reflex(getattr(self.config, "joint_reflex", None), self)
+        if self.joint_reflex is not None:
+            self.simulator.joint_reflex = self.joint_reflex
+            from protomotions.envs.control.vic_steering import VicSteering
+            vic = [c for c in self.control_manager.components.values() if isinstance(c, VicSteering)]
+            self.joint_reflex.attach_vic(vic[0] if vic else None)
+
     def _validate_motion_lib_compatibility(self):
         """Validate that the motion file is compatible with the robot config."""
         ki = self.robot_config.kinematic_info
@@ -348,6 +368,8 @@ class BaseEnv:
             name: tensor.clone() for name, tensor in self._observation_buffer.items()
         }
         obs.update(dynamic_obs)
+        if self.sensory_delay is not None:
+            obs.update(self.sensory_delay.read())
 
         return obs
 
@@ -678,6 +700,9 @@ class BaseEnv:
             for component in self.control_manager.components.values():
                 if hasattr(component, "pre_physics_extra_action"):
                     component.pre_physics_extra_action(extra, processed_action)
+        if self.joint_reflex is not None:
+            qd = self.simulator._get_simulator_dof_state().convert_to_common(self.simulator.data_conversion).dof_vel
+            self.joint_reflex.control_step(processed_action, qd)
 
         self.simulator.step(processed_action, markers_callback=self.get_markers_state)
 
@@ -775,12 +800,17 @@ class BaseEnv:
         self._current_context = self._build_global_context()
 
         self.compute_observations(context=self._current_context)
+        if self.sensory_delay is not None:
+            self.sensory_delay.push(self._observation_buffer)
+            self.extras.update(self.sensory_delay.log_values())
         self.compute_reward(context=self._current_context)
         self.reset_buf[:], self.terminate_buf[:] = self.check_resets_and_terminations(
             context=self._current_context
         )
 
         self.extras["terminate"] = self.terminate_buf
+        if self.joint_reflex is not None:
+            self.extras.update(self.joint_reflex.log_values())
 
         rbs: RobotState = self.simulator.get_robot_state()
         for k, _ in rbs.get_shape_mapping(flattened=True).items():
@@ -1127,6 +1157,8 @@ class BaseEnv:
 
         # Reset control components after motion_manager has been reset
         self.control_manager.reset(env_ids)
+        if getattr(self, "joint_reflex", None) is not None:
+            self.joint_reflex.reset(env_ids)
 
         self.progress_buf[env_ids] = 0
         self.reset_buf[env_ids] = False
@@ -1155,6 +1187,8 @@ class BaseEnv:
         # Invalidate and rebuild context since state changed
         self._current_context = None
         self.compute_observations(env_ids, context=self.context)
+        if self.sensory_delay is not None:
+            self.sensory_delay.reset(env_ids, self._observation_buffer)
 
         return self.get_obs(), {}
 
@@ -1496,6 +1530,10 @@ class BaseEnv:
             )
         if self.scene_lib.num_objects_per_scene > 0:
             snapshot["object_state"] = self.simulator.get_object_root_state()
+        if self.sensory_delay is not None:
+            snapshot["sensory_delay"] = self.sensory_delay.save_state()
+        if self.joint_reflex is not None:
+            snapshot["joint_reflex"] = self.joint_reflex.save_state()
         return snapshot
 
     def restore_state(self, snapshot: dict) -> None:
@@ -1521,6 +1559,10 @@ class BaseEnv:
         self.respawn_root_offset.copy_(snapshot["respawn_root_offset"])
         self._current_noisy_obs = snapshot.get("_current_noisy_obs")
         self._current_context = None
+        if "sensory_delay" in snapshot and self.sensory_delay is not None:
+            self.sensory_delay.load_state(snapshot["sensory_delay"])
+        if "joint_reflex" in snapshot and self.joint_reflex is not None:
+            self.joint_reflex.load_state(snapshot["joint_reflex"])
 
         # IsaacGym needs an extra step after state restore to sync internal state
         if "isaacgym" in self.simulator.config._target_.lower():

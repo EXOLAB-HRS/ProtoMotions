@@ -608,7 +608,8 @@ class HumanJointModel:
         if getattr(simulator, "vic_ff_prior", None) is not None:
             ff, cap, active = _vic_feedforward(simulator.vic_ff_prior, simulator.vic_ff_res_target,
                                                simulator.vic_ff_res, simulator.vic_ff_coeff,
-                                               requested, negative, positive)
+                                               requested, negative, positive,
+                                               getattr(simulator, "vic_ff_reflex", None))
             passive = passive + ff
         simulator.human_requested_torques = requested
         simulator.human_active_torques = active
@@ -687,7 +688,7 @@ class HumanJointModel:
         active = torch.maximum(torch.minimum(requested, positive), -negative)
         if g.get("ff_prior") is not None:
             ff, cap, active = _vic_feedforward(g["ff_prior"], g["ff_res_t"], g["ff_res"], g["ff_c"],
-                                               requested, negative, positive)
+                                               requested, negative, positive, g.get("ff_reflex"))
             passive = passive + ff
         return dict(requested=requested, total=active + passive, active=active, passive=passive,
                     elastic=elastic, damping=damping, negative=negative, positive=positive, outside=outside,
@@ -704,9 +705,12 @@ class HumanJointModel:
         data = simulator._robot.data
         conv = simulator.data_conversion
         vic_ff = getattr(simulator, "vic_ff_prior", None)
+        reflex = getattr(simulator, "vic_ff_reflex", None)
         key = (simulator._common_p_gains.data_ptr(), simulator._common_d_gains.data_ptr(),
                tuple(data.joint_pos.shape), float(simulator.config.sim.fps), implicit,
                None if vic_ff is None else vic_ff.data_ptr())
+        if reflex is not None:            # joint reflex (candidate, 2026-10-28): its buffer is a graph input
+            key = key + (reflex.data_ptr(),)
         body = self._graph_body_implicit if implicit else self._graph_body
         if getattr(self, "_graph_key", None) != key:
             self._graph_io = dict(
@@ -717,6 +721,8 @@ class HumanJointModel:
             if vic_ff is not None:
                 self._graph_io.update(ff_prior=vic_ff, ff_res_t=simulator.vic_ff_res_target,
                                       ff_res=simulator.vic_ff_res, ff_c=simulator.vic_ff_coeff)
+                if reflex is not None:
+                    self._graph_io["ff_reflex"] = reflex
             if self._packed_strength is None:
                 self._pack_strength_rows()
             stream = torch.cuda.Stream()
@@ -763,6 +769,11 @@ class HumanJointModel:
             command[..., noise["dof_indices"]] += noise["action_noise"]
         mode = simulator.robot_config.control.control_type
         import os
+        reflex = getattr(simulator, "joint_reflex", None)
+        if reflex is not None:
+            # Joint stretch reflex (candidate, 2026-10-28, off unless enabled): delayed sensor -> torque in
+            # simulator.vic_ff_reflex, added to the VIC feed-forward of this substep (implicit-PD path only).
+            reflex.substep(simulator)
         if os.environ.get("HC_HUMAN_IMPLICIT_PD", "0") == "1":
             if self._graph_eligible(simulator, mode) and self._apply_graphed(simulator, command, implicit=True):
                 return
@@ -795,7 +806,7 @@ class HumanJointModel:
         simulator._apply_simulator_torques(total[..., simulator.data_conversion.dof_convert_to_sim])
 
 
-def _vic_feedforward(ff_prior, ff_res_target, ff_res, coeff, requested, negative, positive):
+def _vic_feedforward(ff_prior, ff_res_target, ff_res, coeff, requested, negative, positive, reflex=None):
     """vic_tc_v1 feed-forward torque for one physics substep (candidate, 2026-10-22).
 
     ff_res follows its control-step target through a first-order lowpass (in place, so it also
@@ -804,7 +815,10 @@ def _vic_feedforward(ff_prior, ff_res_target, ff_res, coeff, requested, negative
     feed-forward + PD stays within the active caps. Returns (ff, drive cap, active estimate).
     """
     ff_res.add_(coeff * (ff_res_target - ff_res))
-    ff = torch.maximum(torch.minimum(ff_prior + ff_res, positive), -negative)
+    total = ff_prior + ff_res
+    if reflex is not None:                 # joint stretch reflex torque of this substep (joint_reflex.py)
+        total = total + reflex
+    ff = torch.maximum(torch.minimum(total, positive), -negative)
     cap = torch.where(requested >= 0, positive - ff, negative + ff).clamp_min(0)
     active = torch.maximum(torch.minimum(requested + ff, positive), -negative)
     return ff, cap, active

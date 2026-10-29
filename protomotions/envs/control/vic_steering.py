@@ -23,6 +23,39 @@ applies to standing, stopping and turning.
 Candidate options (2026-10-26, off by default): delta_band (delta_max per joint and leg state from the human range)
 and delta_lowpass_s (lowpass on delta) or delta_tau_up_s / delta_tau_down_s (activation-like asymmetric lowpass);
 recipe vic_TC_r11.
+
+vic_tc_v2 (2026-10-28, user-approved version: stiffness / damping should not jitter like a trajectory but take clearly
+separated, physiologically reasonable levels for swing / stance / standing / disturbance response). Per joint (hip,
+knee, ankle, frontal hip, subtalar), the existing residual becomes a co-activation level inside the human range:
+
+    u_j = tanh(a_j) in [-1, 1],  delta_j = h_j(state) * u_j,  h_j = half log-width of the human range of state
+
+with delta_band_margin = 1 (u = -1 / 0 / +1 gives the low end / geometric centre / high end of the range, never
+outside it; v1 allowed x1.5 beyond), an activation-like filter (delta_tau_up_s / delta_tau_down_s, 50 / 150 ms in the
+v2 recipes; v1 15 / 50 ms) and, with coact_unit_cost, the cocontraction cost on the level, mean_j relu(u_j), so it means
+the same for every joint. The filtered level u_j = delta_j / h_j is written to the gain log as "u".
+
+vic_tc_v3 (2026-10-28, user-approved structure; vic_law = "v3", default "v2" keeps every earlier recipe unchanged).
+v2 made k a lookup of the human reference by leg state (validation circular), the reference (perturbation-measured)
+already contains reflex contributions, and the policy never moved u. v3 builds k from three terms, per joint j:
+
+    k_p,j = k_base,j + c_j * |tau_j|_f * g_j(qdot) + k_co,j(u_j),      k_co,j = u_j * k_co_max,j,  u_j in [0, 1]
+    k_d,j = d_j * sqrt(k_p,j)                                           (damping ratio fixed per joint, B ~ sqrt(k))
+    k_p, k_d clamped to a wide hard corridor [k_lo_f * lo_s, k_hi_f * hi_s] of the HMV-ImpRef range of the leg state s
+
+k_base: relaxed / low-activation intrinsic stiffness (swing-like, not the reference centre). c_j |tau_j|: load-dependent
+intrinsic (short-range) stiffness, automatic, not learned; tau_j = the joint's active torque (PD + feed-forward, capped)
+of the previous control step (simulator.human_active_torques, last substep; no algebraic loop), filtered with an
+activation-like asymmetric lowpass (v3_load_tau_up_s / v3_load_tau_down_s). g_j = omega / (omega + |qdot|) when
+v3_srs_omega > 0 (short-range stiffness yields during fast joint motion), else 1. k_co(u): co-contraction stiffness
+learned through u (relu(tanh(a)) by default, so the parent's a ~ 0 means relaxed), filtered as in v2
+(delta_tau_up_s / delta_tau_down_s). The band cost becomes a dead-zone guard: zero inside [lo / m, hi * m] of the
+state's HMV-ImpRef range (m = v3_guard_margin), log2 distance outside; it never pulls toward the centre. The
+cocontraction cost is either mean_j u_j ("unit") or the co-contraction torque share mean_j k_co,j / (c_j tau_max,j)
+("torque": the agonist + antagonist torque that would give k_co through the same short-range law, i.e. the extra
+muscle force that costs metabolic energy). Each term is written to the gain log (k_base, k_load, k_co, tau_load).
+Parameters and sources: VIC3_PARAMS below. v3_load_gate = "stance" (candidate, 2026-10-29) feeds the load filter only in
+stance / standing, so swing k = k_base + k_co (vic3_TC_s5_r1 swing knee load term pinned k to the corridor ceiling).
 """
 from dataclasses import dataclass, field
 import atexit
@@ -42,6 +75,9 @@ VIC_EFFORT = steering_path("vic_effort")
 # vic_TC_r2 (2026-10-23): foot impact above the human step peak, and a metabolic proxy of the sagittal leg joints.
 VIC_IMPACT = steering_path("vic_impact")
 VIC_METAB = steering_path("vic_metab")
+VIC_SWAY = steering_path("vic_sway")
+VIC_PULSE_ERR = steering_path("vic_pulse_err")
+VIC_EFFERENCE = steering_path("vic_efference")
 
 # Human joint impedance ranges (k N m/rad, b N m s/rad) for swing / stance / standing, model 63.3 kg.
 # Hip and knee in stance and standing: relaxed-static values (no walking stance measurement).
@@ -65,9 +101,86 @@ HUMAN_RANGES_FRONTAL = {
 }
 
 
+# vic_tc_v3 per-joint parameters (candidate, 2026-10-28). k_base N m/rad, c 1/rad (N m/rad per N m of active torque).
+# Ankle_y c = 3.5 (medium confidence): standing intrinsic stiffness vs ankle torque, Sakanaka, Gill, Lakie, Reynolds 2018
+#   (PLOS ONE 13:e0193850; +28 % mgh over +26 N m, ~3.3 /rad per leg), Mirbagheri, Barbeau, Kearney 2000 (+30 % stiffness
+#   for 12 -> 24 N m), Loram & Lakie 2002 (5 -> 6 N m/deg over 5-25 N m, ~2.9 /rad); walking: Lee & Hogan 2015 and
+#   Shorter & Rouse 2018 stance stiffness against the plantarflexion moment at the same phase give ~1.2-4.3 /rad;
+#   Casadio 2005 higher (~7). Isometric slopes are higher than walking ones (Achilles tendon dominates above low load).
+# Knee_y c = 2.5, Hip_y c = 2.0, Hip_x c = 2.5 (low confidence, no walking measurement of the slope): muscle short-range
+#   stiffness k = gamma F / l0 (gamma 23.4, Cui et al. 2008) gives K / tau = gamma r / l0 * eta; eta (series tendon) is
+#   calibrated on the ankle (soleus r 0.05 m, l0 0.044 m -> 26.6 /rad, eta = 3.5 / 26.6 = 0.13) and assumed 0.25 for the
+#   shorter knee / hip tendons: vasti r 0.04, l0 0.09 -> 2.6; gluteus maximus r 0.06, l0 0.15 -> 2.3, iliopsoas 1.8;
+#   gluteus medius r 0.05, l0 0.075 -> 3.9 (taken 2.5). Pfeifer et al. 2012 confirm knee stiffness is a continuous,
+#   near-linear function of torque without co-contraction but give no slope in the text.
+# Subtalar_x c = 3.0 (medium-low): Lee, Krebs, Hogan 2014 +1.1 N m/rad per % MVC (inversion-eversion), MVC 30-40 N m
+#   (assumption) -> 2.8-3.7.
+# k_base: Hip_y 35 (low end of the measured walking swing range), Knee_y 1.5 (walking swing 0.5-3.5), Ankle_y 22
+#   (0.35 N m/rad/kg x 63.3 kg, low end of Lee & Hogan), Hip_x 34 (assumption = sagittal swing), Subtalar_x 8.8 (Ho 2016
+#   relaxed). k_co_max (u = 1) defaults to max over states of the HMV-ImpRef upper end minus k_base. d (k_d / sqrt(k_p))
+#   defaults to the geometric mean over states of b_centre / sqrt(k_centre).
+VIC3_PARAMS = {
+    "Hip_y": dict(k_base=35.0, c=2.0),
+    "Knee_y": dict(k_base=1.5, c=2.5),
+    "Ankle_y": dict(k_base=22.0, c=3.5),
+    "Hip_x": dict(k_base=34.0, c=2.5),
+    "Subtalar_x": dict(k_base=8.8, c=3.0),
+}
+
+
+def vic3_defaults(key: str, overrides: dict = None) -> dict:
+    """Per-joint v3 parameters (k_base, c, k_co_max, d) with the HMV-ImpRef ranges; overrides by joint key."""
+    ranges = dict(HUMAN_RANGES, **HUMAN_RANGES_FRONTAL)
+    if key not in ranges or key not in VIC3_PARAMS:
+        raise ValueError(f"vic_tc_v3 has no parameters for {key}")
+    p = dict(VIC3_PARAMS[key], **((overrides or {}).get(key, {})))
+    r = ranges[key]
+    p.setdefault("k_co_max", max(hi for _, hi in r["k"]) - p["k_base"])
+    if "d" not in p:
+        ratios = [math.sqrt(blo * bhi) / math.sqrt(math.sqrt(lo * hi)) for (lo, hi), (blo, bhi) in zip(r["k"], r["b"])]
+        p["d"] = math.exp(sum(math.log(x) for x in ratios) / len(ratios))
+    p["k"], p["b"] = r["k"], r["b"]
+    return p
+
+
+def vic3_stiffness(k_base: Tensor, c: Tensor, tau_load: Tensor, k_co_max: Tensor, u: Tensor,
+                   qd: Tensor = None, srs_omega: float = 0.0):
+    """v3 stiffness terms before the corridor: (k_base, k_load, k_co), each [N, J]."""
+    g = 1.0 if (srs_omega <= 0 or qd is None) else srs_omega / (srs_omega + qd.abs())
+    k_load = c * tau_load * g
+    k_co = u * k_co_max
+    return k_base.expand_as(k_load), k_load, k_co
+
+
+def vic3_guard(log_k: Tensor, log_lo: Tensor, log_hi: Tensor) -> Tensor:
+    """Dead-zone guard in octaves: 0 inside [lo, hi], log2 distance outside, clamped at 4, mean over joints."""
+    out = torch.relu(log_k - log_hi) + torch.relu(log_lo - log_k)
+    return (out / math.log(2.0)).clamp(max=4.0).mean(-1)
+
+
 def vic_cost(value: Tensor) -> Tensor:
     """Penalty reward: -value (value >= 0)."""
     return -value
+
+
+def compute_vic_efference_obs(vic_efference: Tensor) -> Tensor:
+    """Efference copy of the VIC outputs (u command and tau_ff target / tau_max, last vic_efference_steps steps)."""
+    return vic_efference
+
+
+def fill_missing_fields(cfg):
+    """Configs pickled before a field existed (resolved_configs.pt of earlier runs) lack fields that use a
+    default_factory (no class attribute to fall back on); give them the dataclass default. 2026-10-28."""
+    import dataclasses
+    if not dataclasses.is_dataclass(cfg):
+        return cfg
+    for f in dataclasses.fields(type(cfg)):
+        if f.name not in vars(cfg) and not hasattr(type(cfg), f.name):
+            if f.default_factory is not dataclasses.MISSING:
+                setattr(cfg, f.name, f.default_factory())
+            elif f.default is not dataclasses.MISSING:
+                setattr(cfg, f.name, f.default)
+    return cfg
 
 
 @dataclass
@@ -121,10 +234,65 @@ class VicSteeringConfig(CadenceGaitPercentSteeringConfig):
     # Per-run stiffness range overrides (candidate, 2026-10-28, vic_TC_b7): ((joint key, state 0 swing / 1 stance /
     # 2 standing, k_lo, k_hi), ...) applied over HUMAN_RANGES(_FRONTAL); damping unchanged. Empty keeps every past run.
     k_range_overrides: tuple = ()
+    coact_unit_cost: bool = False        # vic_tc_v2: cocontraction cost on the level u = delta / h (not on delta)
+    # vic_tc_v3 (2026-10-28, candidate; see module docstring). "v2" = everything above, unchanged.
+    vic_law: str = "v2"
+    v3_params: dict = field(default_factory=dict)   # per joint key overrides of VIC3_PARAMS (k_base, c, k_co_max, d)
+    v3_hard_lo: float = 0.3              # hard corridor: [v3_hard_lo * lo_s, v3_hard_hi * hi_s] of the HMV-ImpRef range
+    v3_hard_hi: float = 2.0
+    v3_guard_margin: float = 1.25        # guard dead zone [lo / m, hi * m]
+    v3_load_tau_up_s: float = 0.05       # activation-like filter of |tau| for the load term
+    v3_load_tau_down_s: float = 0.15
+    v3_load_source: str = "sim"          # "sim": simulator.human_active_torques; "estimate": own PD + ff estimate
+    v3_srs_omega: float = 0.0            # rad/s; > 0 attenuates the load term during fast motion
+    # Load term gate (2026-10-29, candidate): "stance" feeds |tau| to the load filter only while the leg is in stance or
+    # standing (swing input 0, so the term rises with the 50 ms filter after foot contact and decays over 150 ms after
+    # toe-off). vic3_TC_s5_r1: swing torques (leg swinging, mostly the PD's own k * err) gave the swing knee 13.6 N m/rad
+    # of load term vs the human 0.5-3.5, pinning k to the corridor ceiling 98 % of steps. "none" = r1 behaviour.
+    v3_load_gate: str = "none"
+    # Reasons for co-contraction (2026-10-29, candidates, off by default; user: u should rise where a person co-contracts).
+    # Signal-dependent motor noise: torque noise SD = v3_motor_noise * (|tau| + tau_co) per VIC joint, tau_co = k_co / c
+    # (agonist + antagonist torque that gives k_co, so co-contraction itself adds noise as in muscle), coloured by a
+    # first-order filter (v3_motor_noise_tau_s, muscle twitch ~ 40 ms), added to the feed-forward target each control step.
+    # Force variability grows with force (Jones, Hamilton, Wolpert 2002); stiffness lowers the effect of the noise on the
+    # joint (Selen, Franklin, Wolpert 2009), with the sensory delay that is the reason to pre-stiffen.
+    v3_motor_noise: float = 0.0
+    v3_motor_noise_tau_s: float = 0.04
+    # Quiet-standing sway cost: in the standing state (both feet down, slow command and body) relu(|v_root,xy| - v_h) / v_h,
+    # clamped at 4; v_h = human quiet-stance centre-of-pressure mean speed scale (~10 mm/s, Prieto et al. 1996), dead zone
+    # below it (no pull to zero sway). Written to ctx.steering.vic_sway (zero unless sway_cost).
+    sway_cost: bool = False
+    sway_v_h: float = 0.01
+    v3_u_map: str = "relu"               # "relu": u = relu(tanh(a)); "affine": u = (tanh(a) + 1) / 2;
+    #                                      "softplus": u = softplus(8 tanh(a)) / 8 (no flat zero region: u = 0.087 at a = 0)
+    v3_coact_cost: str = "torque"        # "torque": mean_j k_co / (c tau_max); "unit": mean_j u;
+    #   "activation" (2026-10-29): extra effort of co-contraction, mean_j [((|tau| + tau_co) / tau_max)^2 - (tau / tau_max)^2],
+    #   i.e. the same quadratic activation price as vic_effort (weight it like vic_effort so u is not dearer than tau_ff)
+    # Unpredictable joint torque pulses (2026-10-29, candidate, off): per VIC joint a pulse starts with rate
+    # v3_perturb_rate_hz, sign random, size v3_perturb_amp * tau_max * U(0.5, 1), lasting v3_perturb_dur_s, only while the
+    # joint's leg is standing (state 2) or in the first v3_perturb_loading_s of stance. Shorter than the afferent delay +
+    # one control step, so q_ref cannot cancel it in time; stiffness does (unstable / unpredictable loads raise
+    # co-contraction in people: Burdet et al. 2001, Franklin et al. 2003). Not the BS push (small, joint level).
+    v3_perturb_rate_hz: float = 0.0
+    v3_perturb_amp: float = 0.08
+    v3_perturb_dur_s: float = 0.06
+    v3_perturb_loading_s: float = 0.15
+    # Evaluation diagnostic (2026-10-29, default 0): u <- clamp(u + v3_u_add, 0, 1) after the filter, to test whether a
+    # higher co-contraction helps the trained policy at all.
+    v3_u_add: float = 0.0
+    # Kinematic error under a pulse (2026-10-29, candidate, off): while a perturbation pulse is live on a joint,
+    # cost mean_j ((qdot_j - qdot_j at pulse onset) / 1 rad/s)^2, clamped at 4 (ctx.steering.vic_pulse_err). People raise
+    # co-contraction in proportion to the kinematic error an unpredictable load causes (Franklin et al. 2008); without
+    # it, the early-stance pulses only cost through falls and the gait prior.
+    pulse_err_cost: bool = False
+    # Efference copy of the VIC outputs (2026-10-29, candidate, 0 = off): keep the last N steps of the u command and of
+    # tau_ff target / tau_max (2 x J per step) in ctx.steering.vic_efference for an actor observation.
+    vic_efference_steps: int = 0
 
 
 class VicSteering(CadenceGaitPercentSteering):
     def __init__(self, config, env):
+        fill_missing_fields(config)
         super().__init__(config, env)
         c = config
         sim = env.simulator
@@ -201,13 +369,49 @@ class VicSteering(CadenceGaitPercentSteering):
         self._bw = c.body_mass * 9.81
         self._impact = torch.zeros(n, device=dev)
         self._metab = torch.zeros(n, device=dev)
+        self._sway = torch.zeros(n, device=dev)
         self._sim_ready = False
         # HC_VIC_GAIN_LOG=<path.npz> (evaluation, 2026-10-27, off by default): k_p, k_d, delta and leg state of the VIC
         # joints at every control step, written at exit (jitter analysis of the stiffness output).
         self._gain_log_path = os.environ.get("HC_VIC_GAIN_LOG")
         self._gain_log = []
+        self._u_log = []                                       # vic_tc_v2: filtered co-activation level u [T, N, J]
         if self._gain_log_path:
             atexit.register(self._dump_gain_log)
+        if c.vic_law == "v3":
+            self._init_v3(n, dev)
+        elif c.vic_law != "v2":
+            raise ValueError(f"vic_law must be v2 or v3, got {c.vic_law}")
+
+    def _init_v3(self, n, dev):
+        c = self.config
+        if c.v3_u_map not in ("relu", "affine", "softplus") or c.v3_coact_cost not in ("torque", "unit", "activation") \
+                or c.v3_load_source not in ("sim", "estimate") or c.v3_load_gate not in ("none", "stance"):
+            raise ValueError("bad v3 option")
+        ps = [vic3_defaults(j[2:], c.v3_params) for j in c.vic_joints]
+        t = lambda v: torch.tensor(v, device=dev, dtype=torch.float)
+        self._v3_kb = t([p["k_base"] for p in ps])
+        self._v3_c = t([p["c"] for p in ps])
+        self._v3_kco = t([p["k_co_max"] for p in ps])
+        self._v3_d = t([p["d"] for p in ps])
+        lg = lambda f: torch.log(t([[f(p, s) for s in range(3)] for p in ps]))        # [J, 3]
+        m = c.v3_guard_margin
+        self._v3_hard = torch.stack([lg(lambda p, s: c.v3_hard_lo * p["k"][s][0]), lg(lambda p, s: c.v3_hard_hi * p["k"][s][1]),
+                                     lg(lambda p, s: c.v3_hard_lo * p["b"][s][0]), lg(lambda p, s: c.v3_hard_hi * p["b"][s][1]),
+                                     lg(lambda p, s: p["k"][s][0] / m), lg(lambda p, s: p["k"][s][1] * m)], 0)   # [6, J, 3]
+        J = len(c.vic_joints)
+        self._v3_bounds = torch.zeros(6, n, J, device=dev)     # smoothed per env (gain_smooth_s glide on state changes)
+        self._v3_tau = torch.zeros(n, J, device=dev)           # filtered |tau| of the load term
+        self._v3_tau_est = torch.zeros(n, J, device=dev)
+        self._v3_noise = torch.zeros(n, J, device=dev)         # coloured unit noise of the motor-noise term
+        self._v3_pert = torch.zeros(n, J, device=dev)          # current perturbation pulse torque
+        self._v3_pert_left = torch.zeros(n, J, device=dev)     # seconds left of the pulse
+        self._v3_stance_t = torch.zeros(n, J, device=dev)      # seconds since this joint's leg touched down
+        self._v3_qd0 = torch.zeros(n, J, device=dev)           # joint speed at pulse onset
+        self._pulse_err = torch.zeros(n, device=dev)
+        self._eff = torch.zeros(n, max(1, self.config.vic_efference_steps), 2 * J, device=dev)
+        self._v3_terms = torch.zeros(3, n, J, device=dev)      # k_base, k_load, k_co (last step)
+        self._v3_log = []
 
     # ------------------------------------------------------------------ simulator buffers
     def _setup_sim(self):
@@ -247,8 +451,12 @@ class VicSteering(CadenceGaitPercentSteering):
             return
         import numpy as np
         a = torch.stack(self._gain_log, 0).float().numpy()          # [T, 4, N, J]
+        extra = {"u": torch.stack(self._u_log[:len(a)], 0).float().numpy()} if self._u_log else {}
+        if getattr(self, "_v3_log", None):
+            v = torch.stack(self._v3_log[:len(a)], 0).float().numpy()             # [T, 4, N, J]
+            extra.update(k_base=v[:, 0], k_load=v[:, 1], k_co=v[:, 2], tau_load=v[:, 3])
         np.savez_compressed(self._gain_log_path, kp=a[:, 0], kd=a[:, 1], delta=a[:, 2], state=a[:, 3].astype("int8"),
-                            joints=np.array(self.config.vic_joints), dt=float(self.env.dt))
+                            joints=np.array(self.config.vic_joints), dt=float(self.env.dt), **extra)
 
     # ------------------------------------------------------------------ schedule
     def _advance_schedule(self):
@@ -289,6 +497,9 @@ class VicSteering(CadenceGaitPercentSteering):
                    cocontraction=round(self._cocon.mean().item(), 4), effort=round(self._effort.mean().item(), 4),
                    impact=round(self._impact.mean().item(), 4), metab=round(self._metab.mean().item(), 4),
                    mean_kp_swing_stance_stand=mk, joints=list(c.vic_joints))
+        if c.vic_law == "v3":
+            t = self._v3_terms.mean(1).cpu().numpy().round(2)
+            rec.update(v3_mean_k_base=t[0].tolist(), v3_mean_k_load=t[1].tolist(), v3_mean_k_co=t[2].tolist())
         print("[vic] " + json.dumps(rec), flush=True)
         if self._state_file:
             try:
@@ -341,6 +552,8 @@ class VicSteering(CadenceGaitPercentSteering):
         self._lb = torch.where(self._fresh[:, None], lb_t, self._lb + s * (lb_t - self._lb))
         fresh = self._fresh.clone()
         self._fresh[:] = False
+        if c.vic_law == "v3":
+            return self._pre_physics_v3(extra, q_ref, unit, tau_res, state, jj, fresh, s)
         if c.delta_band:
             dm_t = self._dmax_h[jj, state]
             self._dmax = torch.where(fresh[:, None], dm_t, self._dmax + s * (dm_t - self._dmax))
@@ -361,6 +574,8 @@ class VicSteering(CadenceGaitPercentSteering):
         kd = torch.exp(self._lb + c.damp_delta_gain * delta)
         if self._gain_log_path:
             self._gain_log.append(torch.stack([kp, kd, delta, state.float()], 0).half().cpu())
+            if c.coact_unit_cost:
+                self._u_log.append((delta / self._dmax.clamp_min(1e-6)).half().cpu())
             if len(self._gain_log) % 250 == 0:      # the simulator may exit without running atexit hooks
                 self._dump_gain_log()
         sim._common_p_gains[:, self._idx] = kp
@@ -378,7 +593,7 @@ class VicSteering(CadenceGaitPercentSteering):
         # Reward inputs.
         dev_ = (self._lk + delta) - lk_t
         self._band = (torch.relu(dev_.abs() - self._half[jj, state]) / math.log(2.0)).clamp(max=4.0).mean(-1)
-        self._cocon = torch.relu(delta).mean(-1)
+        self._cocon = (torch.relu(delta / self._dmax.clamp_min(1e-6)) if c.coact_unit_cost else torch.relu(delta)).mean(-1)
         tau = kp * err - kd * qd + self.beta * prior + sim.vic_ff_res[:, self._idx]
         self._effort = ((tau / self._tau_max) ** 2).clamp(max=4.0).mean(-1)
         p = (tau * qd)[:, self._sag]
@@ -387,6 +602,132 @@ class VicSteering(CadenceGaitPercentSteering):
             m = state == st
             cnt = m.float().sum(0).clamp_min(1)
             self._mean_k[st] = torch.where(m.any(0), ((self._lk + delta) * m).sum(0) / cnt, self._mean_k[st])
+        self._log()
+
+    def coactivation_level(self):
+        """Filtered co-activation level per VIC joint for the plant's joint reflex (0 = relaxed, 1 = maximal)."""
+        if getattr(self.config, "vic_law", "v2") == "v3":
+            return self._delta.clamp(0.0, 1.0)                 # v3 keeps u in [0, 1] in _delta
+        return (self._delta / self._dmax.clamp_min(1e-6)).clamp(-1.0, 1.0)
+
+    def _pre_physics_v3(self, extra, q_ref, unit, tau_res, state, jj, fresh, s):
+        """vic_tc_v3 gains (module docstring); same feed-forward, reward inputs and logs as v2 otherwise."""
+        c = self.config
+        sim = self.env.simulator
+        dt = self.env.dt
+        # Co-contraction level u in [0, 1], activation-like filter as v2 (delta_tau_up_s / delta_tau_down_s).
+        u_cmd = unit
+        if c.v3_u_map == "relu":
+            u = torch.relu(unit)
+        elif c.v3_u_map == "softplus":
+            u = (torch.nn.functional.softplus(8.0 * unit) / 8.0).clamp(max=1.0)
+        else:
+            u = 0.5 * (unit + 1.0)
+        if c.delta_tau_up_s > 0 and c.delta_tau_down_s > 0:
+            up = 1.0 - math.exp(-dt / c.delta_tau_up_s)
+            down = 1.0 - math.exp(-dt / c.delta_tau_down_s)
+            step = torch.where(u > self._delta, up, down) * (u - self._delta)
+            self._delta = torch.where(fresh[:, None], u, self._delta + step)
+            u = self._delta
+        if c.v3_u_add != 0.0:
+            u = (u + c.v3_u_add).clamp(0.0, 1.0)
+        # Load term input: active torque of the previous control step (no algebraic loop).
+        src = getattr(sim, "human_active_torques", None) if c.v3_load_source == "sim" else None
+        if src is not None and src.shape[0] == len(fresh):
+            tau_prev = src[:, self._idx].detach().abs()
+        else:
+            tau_prev = self._v3_tau_est.abs()
+        tau_abs = tau_prev                                   # ungated |tau| (motor-noise scale)
+        if c.v3_load_gate == "stance":
+            tau_prev = tau_prev * (state >= 1)
+        lup = 1.0 - math.exp(-dt / c.v3_load_tau_up_s)
+        ldn = 1.0 - math.exp(-dt / c.v3_load_tau_down_s)
+        self._v3_tau = self._v3_tau + torch.where(tau_prev > self._v3_tau, lup, ldn) * (tau_prev - self._v3_tau)
+        self._v3_tau = torch.where(fresh[:, None], torch.zeros_like(self._v3_tau), self._v3_tau)   # stale after reset
+        dof = sim._get_simulator_dof_state().convert_to_common(sim.data_conversion)
+        q, qd = dof.dof_pos[:, self._idx], dof.dof_vel[:, self._idx]
+        kb, kl, kc = vic3_stiffness(self._v3_kb, self._v3_c, self._v3_tau, self._v3_kco, u, qd, c.v3_srs_omega)
+        # Corridor and guard bounds of the leg state, gliding over gain_smooth_s like the v2 reference.
+        tgt = self._v3_hard[:, jj, state]                                       # [6, N, J]
+        self._v3_bounds = torch.where(fresh[None, :, None], tgt, self._v3_bounds + s * (tgt - self._v3_bounds))
+        lo_k, hi_k, lo_b, hi_b, g_lo, g_hi = self._v3_bounds
+        lk3 = torch.log(kb + kl + kc).clamp(lo_k, hi_k)
+        lb3 = (torch.log(self._v3_d) + 0.5 * lk3).clamp(lo_b, hi_b)
+        a = self.alpha
+        lk = (1 - a) * torch.log(self._k_old) + a * lk3
+        lb = (1 - a) * torch.log(self._b_old) + a * lb3
+        kp, kd = torch.exp(lk), torch.exp(lb)
+        self._lk, self._lb = lk, lb
+        self._v3_terms = torch.stack([kb, kl, kc], 0)
+        delta = lk - torch.log(self._v3_kb)                  # gain log "delta": log(k_p / k_base)
+        if self._gain_log_path:
+            self._gain_log.append(torch.stack([kp, kd, delta, state.float()], 0).half().cpu())
+            self._u_log.append(u.half().cpu())
+            self._v3_log.append(torch.stack([kb, kl, kc, self._v3_tau], 0).half().cpu())
+            if len(self._gain_log) % 250 == 0:
+                self._dump_gain_log()
+        sim._common_p_gains[:, self._idx] = kp
+        sim._common_d_gains[:, self._idx] = kd
+        self._write_gains()
+        err = q_ref[:, self._idx] - q
+        prior = (self._k_old - kp) * err - (self._b_old - kd) * qd
+        sim.vic_ff_prior[:, self._idx] = self.beta * prior
+        if c.v3_motor_noise > 0:
+            a_n = math.exp(-dt / c.v3_motor_noise_tau_s)
+            xi = torch.randn_like(self._v3_noise)
+            self._v3_noise = torch.where(fresh[:, None], xi, a_n * self._v3_noise + math.sqrt(1 - a_n * a_n) * xi)
+            tau_co = kc / self._v3_c
+            tau_res = tau_res + c.v3_motor_noise * (tau_abs + tau_co) * self._v3_noise
+        if c.v3_perturb_rate_hz > 0:
+            self._v3_stance_t = torch.where((state >= 1) & ~fresh[:, None], self._v3_stance_t + dt,
+                                            torch.zeros_like(self._v3_stance_t))
+            ok = (state == 2) | ((state == 1) & (self._v3_stance_t <= c.v3_perturb_loading_s))
+            self._v3_pert_left = (self._v3_pert_left - dt).clamp(min=0.0)
+            start = ok & (self._v3_pert_left <= 0) & (torch.rand_like(self._v3_pert) < c.v3_perturb_rate_hz * dt)
+            size = c.v3_perturb_amp * self._tau_max * (0.5 + 0.5 * torch.rand_like(self._v3_pert))
+            sign = torch.where(torch.rand_like(self._v3_pert) < 0.5, -1.0, 1.0)
+            self._v3_pert = torch.where(start, sign * size, self._v3_pert)
+            self._v3_pert_left = torch.where(start, torch.full_like(self._v3_pert_left, c.v3_perturb_dur_s),
+                                             self._v3_pert_left)
+            live = (self._v3_pert_left > 0) & ok & ~fresh[:, None]
+            self._v3_pert = torch.where(live, self._v3_pert, torch.zeros_like(self._v3_pert))
+            tau_res = tau_res + self._v3_pert
+            if c.pulse_err_cost:
+                self._v3_qd0 = torch.where(start, qd, self._v3_qd0)
+                e = (live * (qd - self._v3_qd0)) ** 2
+                self._pulse_err = e.mean(-1).clamp(max=4.0)
+        if c.vic_efference_steps > 0:
+            now = torch.cat([u_cmd, tau_res / self._tau_max], -1)
+            self._eff = torch.cat([now[:, None], self._eff[:, :-1]], 1)
+            self._eff = torch.where(fresh[:, None, None], now[:, None].expand_as(self._eff), self._eff)
+        sim.vic_ff_res_target[:, self._idx] = tau_res
+        reset_now = self.env.progress_buf <= 1
+        if reset_now.any():
+            sim.vic_ff_res[reset_now] = 0.0
+        if c.sway_cost:
+            standing = (state == 2).all(-1)
+            v = sim.get_robot_state().rigid_body_vel[:, 0, :2].norm(dim=-1)
+            self._sway = torch.where(standing, (torch.relu(v - c.sway_v_h) / c.sway_v_h).clamp(max=4.0),
+                                     torch.zeros_like(v))
+        # Reward inputs: dead-zone guard (never toward the centre), co-contraction cost, effort, metabolic proxy.
+        self._band = vic3_guard(lk, g_lo, g_hi)
+        if c.v3_coact_cost == "torque":
+            self._cocon = (kc / (self._v3_c * self._tau_max)).mean(-1)
+        else:
+            self._cocon = u.mean(-1)
+        tau = kp * err - kd * qd + self.beta * prior + sim.vic_ff_res[:, self._idx]
+        if c.v3_coact_cost == "activation":
+            r_net = (tau / self._tau_max).clamp(-2.0, 2.0)
+            r_all = (tau.abs() + kc / self._v3_c) / self._tau_max
+            self._cocon = (r_all.clamp(max=2.0) ** 2 - r_net ** 2).clamp(min=0.0, max=4.0).mean(-1)
+        self._v3_tau_est = torch.maximum(torch.minimum(tau, self._tau_max), -self._tau_max).detach()
+        self._effort = ((tau / self._tau_max) ** 2).clamp(max=4.0).mean(-1)
+        p = (tau * qd)[:, self._sag]
+        self._metab = (p.clamp(min=0).sum(-1) / 0.25 + (-p).clamp(min=0).sum(-1) / 1.20) / self._bw
+        for st in range(3):
+            m = state == st
+            cnt = m.float().sum(0).clamp_min(1)
+            self._mean_k[st] = torch.where(m.any(0), (lk * m).sum(0) / cnt, self._mean_k[st])
         self._log()
 
     def _update_impact(self):
@@ -407,3 +748,6 @@ class VicSteering(CadenceGaitPercentSteering):
         ctx.steering.vic_band_cost = self._band
         ctx.steering.vic_cocontraction = self._cocon
         ctx.steering.vic_effort = self._effort
+        ctx.steering.vic_sway = self._sway
+        ctx.steering.vic_pulse_err = self._pulse_err
+        ctx.steering.vic_efference = self._eff.flatten(1)

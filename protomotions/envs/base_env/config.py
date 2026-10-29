@@ -25,6 +25,8 @@ from dataclasses import dataclass, field
 from protomotions.envs.obs.scene_obs import SceneObsConfig
 from protomotions.envs.motion_manager.config import MotionManagerConfig
 from protomotions.envs.control.base import ControlComponentConfig
+from protomotions.envs.obs.sensory_delay import SensoryDelayConfig
+from protomotions.robot_configs.human_model.common.joint_reflex import JointReflexConfig
 
 if TYPE_CHECKING:
     from protomotions.envs.mdp_component import MdpComponent
@@ -108,4 +110,16 @@ class EnvConfig:
     action_config: Optional[Dict[str, Any]] = field(
         default=None,
         metadata={"help": "Single action processing config dict with 'fn' key. Use make_pd_action_config() helper."}
+    )
+
+    sensory_delay: Optional[SensoryDelayConfig] = field(
+        default=None,
+        metadata={"help": "Afferent delay of the actor's body-state observations (envs/obs/sensory_delay.py). "
+                          "None or enabled=False = no delay."}
+    )
+
+    joint_reflex: Optional[JointReflexConfig] = field(
+        default=None,
+        metadata={"help": "Joint-level spinal stretch reflex on the plant side, added every physics substep "
+                          "(robot_configs/human_model/common/joint_reflex.py). None or enabled=False = off."}
     )

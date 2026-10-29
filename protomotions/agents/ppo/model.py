@@ -52,10 +52,10 @@ class PPOActor(TensorDictModuleBase):
     def __init__(self, config: PPOActorConfig):
         super().__init__()
         self.config = config
-        self.logstd = nn.Parameter(
-            torch.ones(self.config.num_out) * self.config.actor_logstd,
-            requires_grad=self.config.learnable_std,
-        )
+        logstd = torch.ones(self.config.num_out) * self.config.actor_logstd
+        for start, end, value in getattr(self.config, "logstd_slices", None) or []:
+            logstd[int(start):int(end)] = float(value)
+        self.logstd = nn.Parameter(logstd, requires_grad=self.config.learnable_std)
         MuClass = get_class(self.config.mu_model._target_)
         self.mu: TensorDictModuleBase = MuClass(config=self.config.mu_model)
 
