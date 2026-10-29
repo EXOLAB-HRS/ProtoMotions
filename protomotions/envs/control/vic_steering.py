@@ -76,6 +76,8 @@ VIC_EFFORT = steering_path("vic_effort")
 VIC_IMPACT = steering_path("vic_impact")
 VIC_METAB = steering_path("vic_metab")
 VIC_SWAY = steering_path("vic_sway")
+VIC_PULSE_ERR = steering_path("vic_pulse_err")
+VIC_EFFERENCE = steering_path("vic_efference")
 
 # Human joint impedance ranges (k N m/rad, b N m s/rad) for swing / stance / standing, model 63.3 kg.
 # Hip and knee in stance and standing: relaxed-static values (no walking stance measurement).
@@ -159,6 +161,11 @@ def vic3_guard(log_k: Tensor, log_lo: Tensor, log_hi: Tensor) -> Tensor:
 def vic_cost(value: Tensor) -> Tensor:
     """Penalty reward: -value (value >= 0)."""
     return -value
+
+
+def compute_vic_efference_obs(vic_efference: Tensor) -> Tensor:
+    """Efference copy of the VIC outputs (u command and tau_ff target / tau_max, last vic_efference_steps steps)."""
+    return vic_efference
 
 
 def fill_missing_fields(cfg):
@@ -270,6 +277,14 @@ class VicSteeringConfig(CadenceGaitPercentSteeringConfig):
     # Evaluation diagnostic (2026-10-29, default 0): u <- clamp(u + v3_u_add, 0, 1) after the filter, to test whether a
     # higher co-contraction helps the trained policy at all.
     v3_u_add: float = 0.0
+    # Kinematic error under a pulse (2026-10-29, candidate, off): while a perturbation pulse is live on a joint,
+    # cost mean_j ((qdot_j - qdot_j at pulse onset) / 1 rad/s)^2, clamped at 4 (ctx.steering.vic_pulse_err). People raise
+    # co-contraction in proportion to the kinematic error an unpredictable load causes (Franklin et al. 2008); without
+    # it, the early-stance pulses only cost through falls and the gait prior.
+    pulse_err_cost: bool = False
+    # Efference copy of the VIC outputs (2026-10-29, candidate, 0 = off): keep the last N steps of the u command and of
+    # tau_ff target / tau_max (2 x J per step) in ctx.steering.vic_efference for an actor observation.
+    vic_efference_steps: int = 0
 
 
 class VicSteering(CadenceGaitPercentSteering):
@@ -385,6 +400,9 @@ class VicSteering(CadenceGaitPercentSteering):
         self._v3_pert = torch.zeros(n, J, device=dev)          # current perturbation pulse torque
         self._v3_pert_left = torch.zeros(n, J, device=dev)     # seconds left of the pulse
         self._v3_stance_t = torch.zeros(n, J, device=dev)      # seconds since this joint's leg touched down
+        self._v3_qd0 = torch.zeros(n, J, device=dev)           # joint speed at pulse onset
+        self._pulse_err = torch.zeros(n, device=dev)
+        self._eff = torch.zeros(n, max(1, self.config.vic_efference_steps), 2 * J, device=dev)
         self._v3_terms = torch.zeros(3, n, J, device=dev)      # k_base, k_load, k_co (last step)
         self._v3_log = []
 
@@ -591,6 +609,7 @@ class VicSteering(CadenceGaitPercentSteering):
         sim = self.env.simulator
         dt = self.env.dt
         # Co-contraction level u in [0, 1], activation-like filter as v2 (delta_tau_up_s / delta_tau_down_s).
+        u_cmd = unit
         if c.v3_u_map == "relu":
             u = torch.relu(unit)
         elif c.v3_u_map == "softplus":
@@ -666,6 +685,14 @@ class VicSteering(CadenceGaitPercentSteering):
             live = (self._v3_pert_left > 0) & ok & ~fresh[:, None]
             self._v3_pert = torch.where(live, self._v3_pert, torch.zeros_like(self._v3_pert))
             tau_res = tau_res + self._v3_pert
+            if c.pulse_err_cost:
+                self._v3_qd0 = torch.where(start, qd, self._v3_qd0)
+                e = (live * (qd - self._v3_qd0)) ** 2
+                self._pulse_err = e.mean(-1).clamp(max=4.0)
+        if c.vic_efference_steps > 0:
+            now = torch.cat([u_cmd, tau_res / self._tau_max], -1)
+            self._eff = torch.cat([now[:, None], self._eff[:, :-1]], 1)
+            self._eff = torch.where(fresh[:, None, None], now[:, None].expand_as(self._eff), self._eff)
         sim.vic_ff_res_target[:, self._idx] = tau_res
         reset_now = self.env.progress_buf <= 1
         if reset_now.any():
@@ -715,3 +742,5 @@ class VicSteering(CadenceGaitPercentSteering):
         ctx.steering.vic_cocontraction = self._cocon
         ctx.steering.vic_effort = self._effort
         ctx.steering.vic_sway = self._sway
+        ctx.steering.vic_pulse_err = self._pulse_err
+        ctx.steering.vic_efference = self._eff.flatten(1)

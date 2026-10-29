@@ -246,3 +246,19 @@ def test_v3_softplus_map_and_u_add():
     _step(self, sim, torch.full((n, J), -3.0), torch.ones(n, J, dtype=torch.long), fresh=True)
     u = self._v3_terms[2] / self._v3_kco
     assert torch.allclose(u, torch.full((n, J), 0.3), atol=0.01)                           # softplus(-8)/8 ~ 0 + 0.3
+
+
+def test_v3_pulse_err_and_efference():
+    torch.manual_seed(0)
+    n, J = 64, len(JOINTS)
+    self, sim = _stub(n=n, law_kwargs=dict(v3_perturb_rate_hz=30.0, pulse_err_cost=True, vic_efference_steps=3))
+    standing = torch.full((n, J), 2, dtype=torch.long)
+    _step(self, sim, torch.zeros(n, J), standing)
+    assert torch.equal(self._pulse_err, torch.zeros(n))                    # onset: qd - qd0 = 0
+    sim.qd[:, :J] = 0.5
+    _step(self, sim, torch.zeros(n, J), standing)
+    assert torch.allclose(self._pulse_err, torch.full((n,), 0.25))         # still live, (0.5 - 0)^2
+    _step(self, sim, torch.full((n, J), 0.7), standing)
+    assert self._eff.shape == (n, 3, 2 * J)
+    assert torch.allclose(self._eff[:, 0, :J], torch.tanh(torch.tensor(0.7)).expand(n, J))
+    assert torch.allclose(self._eff[:, 1, :J], torch.zeros(n, J))
