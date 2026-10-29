@@ -75,6 +75,7 @@ VIC_EFFORT = steering_path("vic_effort")
 # vic_TC_r2 (2026-10-23): foot impact above the human step peak, and a metabolic proxy of the sagittal leg joints.
 VIC_IMPACT = steering_path("vic_impact")
 VIC_METAB = steering_path("vic_metab")
+VIC_SWAY = steering_path("vic_sway")
 
 # Human joint impedance ranges (k N m/rad, b N m s/rad) for swing / stance / standing, model 63.3 kg.
 # Hip and knee in stance and standing: relaxed-static values (no walking stance measurement).
@@ -239,6 +240,19 @@ class VicSteeringConfig(CadenceGaitPercentSteeringConfig):
     # toe-off). vic3_TC_s5_r1: swing torques (leg swinging, mostly the PD's own k * err) gave the swing knee 13.6 N m/rad
     # of load term vs the human 0.5-3.5, pinning k to the corridor ceiling 98 % of steps. "none" = r1 behaviour.
     v3_load_gate: str = "none"
+    # Reasons for co-contraction (2026-10-29, candidates, off by default; user: u should rise where a person co-contracts).
+    # Signal-dependent motor noise: torque noise SD = v3_motor_noise * (|tau| + tau_co) per VIC joint, tau_co = k_co / c
+    # (agonist + antagonist torque that gives k_co, so co-contraction itself adds noise as in muscle), coloured by a
+    # first-order filter (v3_motor_noise_tau_s, muscle twitch ~ 40 ms), added to the feed-forward target each control step.
+    # Force variability grows with force (Jones, Hamilton, Wolpert 2002); stiffness lowers the effect of the noise on the
+    # joint (Selen, Franklin, Wolpert 2009), with the sensory delay that is the reason to pre-stiffen.
+    v3_motor_noise: float = 0.0
+    v3_motor_noise_tau_s: float = 0.04
+    # Quiet-standing sway cost: in the standing state (both feet down, slow command and body) relu(|v_root,xy| - v_h) / v_h,
+    # clamped at 4; v_h = human quiet-stance centre-of-pressure mean speed scale (~10 mm/s, Prieto et al. 1996), dead zone
+    # below it (no pull to zero sway). Written to ctx.steering.vic_sway (zero unless sway_cost).
+    sway_cost: bool = False
+    sway_v_h: float = 0.01
     v3_u_map: str = "relu"               # "relu": u = relu(tanh(a)); "affine": u = (tanh(a) + 1) / 2
     v3_coact_cost: str = "torque"        # "torque": mean_j k_co / (c tau_max); "unit": mean_j u
 
@@ -318,6 +332,7 @@ class VicSteering(CadenceGaitPercentSteering):
         self._bw = c.body_mass * 9.81
         self._impact = torch.zeros(n, device=dev)
         self._metab = torch.zeros(n, device=dev)
+        self._sway = torch.zeros(n, device=dev)
         self._sim_ready = False
         # HC_VIC_GAIN_LOG=<path.npz> (evaluation, 2026-10-27, off by default): k_p, k_d, delta and leg state of the VIC
         # joints at every control step, written at exit (jitter analysis of the stiffness output).
@@ -351,6 +366,7 @@ class VicSteering(CadenceGaitPercentSteering):
         self._v3_bounds = torch.zeros(6, n, J, device=dev)     # smoothed per env (gain_smooth_s glide on state changes)
         self._v3_tau = torch.zeros(n, J, device=dev)           # filtered |tau| of the load term
         self._v3_tau_est = torch.zeros(n, J, device=dev)
+        self._v3_noise = torch.zeros(n, J, device=dev)         # coloured unit noise of the motor-noise term
         self._v3_terms = torch.zeros(3, n, J, device=dev)      # k_base, k_load, k_co (last step)
         self._v3_log = []
 
@@ -570,6 +586,7 @@ class VicSteering(CadenceGaitPercentSteering):
             tau_prev = src[:, self._idx].detach().abs()
         else:
             tau_prev = self._v3_tau_est.abs()
+        tau_abs = tau_prev                                   # ungated |tau| (motor-noise scale)
         if c.v3_load_gate == "stance":
             tau_prev = tau_prev * (state >= 1)
         lup = 1.0 - math.exp(-dt / c.v3_load_tau_up_s)
@@ -604,10 +621,21 @@ class VicSteering(CadenceGaitPercentSteering):
         err = q_ref[:, self._idx] - q
         prior = (self._k_old - kp) * err - (self._b_old - kd) * qd
         sim.vic_ff_prior[:, self._idx] = self.beta * prior
+        if c.v3_motor_noise > 0:
+            a_n = math.exp(-dt / c.v3_motor_noise_tau_s)
+            xi = torch.randn_like(self._v3_noise)
+            self._v3_noise = torch.where(fresh[:, None], xi, a_n * self._v3_noise + math.sqrt(1 - a_n * a_n) * xi)
+            tau_co = kc / self._v3_c
+            tau_res = tau_res + c.v3_motor_noise * (tau_abs + tau_co) * self._v3_noise
         sim.vic_ff_res_target[:, self._idx] = tau_res
         reset_now = self.env.progress_buf <= 1
         if reset_now.any():
             sim.vic_ff_res[reset_now] = 0.0
+        if c.sway_cost:
+            standing = (state == 2).all(-1)
+            v = sim.get_robot_state().rigid_body_vel[:, 0, :2].norm(dim=-1)
+            self._sway = torch.where(standing, (torch.relu(v - c.sway_v_h) / c.sway_v_h).clamp(max=4.0),
+                                     torch.zeros_like(v))
         # Reward inputs: dead-zone guard (never toward the centre), co-contraction cost, effort, metabolic proxy.
         self._band = vic3_guard(lk, g_lo, g_hi)
         if c.v3_coact_cost == "torque":
@@ -643,3 +671,4 @@ class VicSteering(CadenceGaitPercentSteering):
         ctx.steering.vic_band_cost = self._band
         ctx.steering.vic_cocontraction = self._cocon
         ctx.steering.vic_effort = self._effort
+        ctx.steering.vic_sway = self._sway

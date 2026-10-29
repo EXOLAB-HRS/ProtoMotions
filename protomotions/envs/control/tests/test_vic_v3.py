@@ -185,3 +185,30 @@ def test_v3_load_gate_stance():
     _step(self, sim, torch.full((n, J), -2.0), swing)                    # toe-off: decays with the 150 ms filter
     k = 1.0 - math.exp(-(1 / 30) / 0.15)
     assert torch.allclose(self._v3_terms[1, 0], self._v3_c * 40.0 * (1 - k), rtol=1e-3)
+
+
+def test_v3_motor_noise_scales_with_torque_and_cocontraction():
+    torch.manual_seed(0)
+    self, sim = _stub(n=4000, law_kwargs=dict(v3_motor_noise=0.1))
+    n, J = 4000, len(JOINTS)
+    stance = torch.ones(n, J, dtype=torch.long)
+    sim.human_active_torques[:] = 40.0
+    _step(self, sim, torch.full((n, J), -2.0), stance, fresh=True)
+    sd = sim.vic_ff_res_target[:, :J].std(0)
+    assert torch.allclose(sd, torch.full((J,), 4.0), rtol=0.08)           # 0.1 * 40 N m, u = 0
+    _step(self, sim, torch.full((n, J), 5.0), stance, fresh=True)          # u = 1: + k_co_max / c
+    sd2 = sim.vic_ff_res_target[:, :J].std(0)
+    assert (sd2 > sd * 1.2).all()
+
+
+def test_sway_cost_only_when_standing():
+    self, sim = _stub(law_kwargs=dict(sway_cost=True))
+    n, J = 4, len(JOINTS)
+    vel = torch.zeros(n, 1, 6)
+    vel[:, 0, 0] = 0.03
+    sim.get_robot_state = lambda: SimpleNamespace(rigid_body_vel=vel)
+    self._sway = torch.zeros(n)
+    _step(self, sim, torch.zeros(n, J), torch.full((n, J), 2, dtype=torch.long), fresh=True)
+    assert torch.allclose(self._sway, torch.full((n,), 2.0))               # (0.03 - 0.01) / 0.01
+    _step(self, sim, torch.zeros(n, J), torch.ones(n, J, dtype=torch.long))
+    assert torch.equal(self._sway, torch.zeros(n))
