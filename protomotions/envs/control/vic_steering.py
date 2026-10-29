@@ -118,6 +118,9 @@ class VicSteeringConfig(CadenceGaitPercentSteeringConfig):
     # vs deactivation (~10-20 ms vs ~30-60 ms, Zajac 1989; Thelen 2003). Gains change once per control step.
     delta_tau_up_s: float = 0.0
     delta_tau_down_s: float = 0.0
+    # Per-run stiffness range overrides (candidate, 2026-10-28, vic_TC_b7): ((joint key, state 0 swing / 1 stance /
+    # 2 standing, k_lo, k_hi), ...) applied over HUMAN_RANGES(_FRONTAL); damping unchanged. Empty keeps every past run.
+    k_range_overrides: tuple = ()
 
 
 class VicSteering(CadenceGaitPercentSteering):
@@ -140,6 +143,10 @@ class VicSteering(CadenceGaitPercentSteering):
         lb_h = torch.zeros(J, 3, device=dev)
         half = torch.zeros(J, 3, device=dev)       # log half-width of the tolerated band
         ranges = dict(HUMAN_RANGES, **(HUMAN_RANGES_FRONTAL if c.frontal_human_ref else {}))
+        for key, s, lo, hi in c.k_range_overrides:
+            k = list(ranges[key]["k"])
+            k[int(s)] = (float(lo), float(hi))
+            ranges[key] = dict(ranges[key], k=tuple(k))
         for i, j in enumerate(c.vic_joints):
             key = j[2:]
             if key in ranges:
