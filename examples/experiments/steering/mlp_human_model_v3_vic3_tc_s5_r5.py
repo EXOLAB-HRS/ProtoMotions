@@ -1,5 +1,5 @@
 """vic3_TC_s5_r5 (vic_tc_v3 candidate, 2026-10-29; user: run the tracking fix tonight) = vic3_TC_s5_r4 + efference copy:
-the actor also sees its own last 3 actions (79 each: 59 PD targets, 10 u, 10 tau_ff; raw, undelayed; 237 inputs).
+the actor also sees its own last 3 PD-target actions (59 each, raw, undelayed; 177 inputs; the state history keeps the 59 PD actions, not u or tau_ff).
 Why: since the afferent delay (r13 on) every run tracks speed / lateral at 0.13-0.17 / 0.11-0.15 m/s (r11 without delay
 0.082 / 0.066); 20M more training (r13b) did not help, and the command preview (1.0 s, 0.5 s acceleration) was already
 on. With delayed state alone the policy cannot tell what its last commands are doing yet. A person predicts the current
