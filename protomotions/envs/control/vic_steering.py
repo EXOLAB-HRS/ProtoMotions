@@ -585,8 +585,10 @@ class VicSteering(CadenceGaitPercentSteering):
             v = torch.stack(self._v3_log[:len(a)], 0).float().numpy()             # [T, 4, N, J]
             extra.update(k_base=v[:, 0], k_load=v[:, 1], k_co=v[:, 2], tau_load=v[:, 3])
         if getattr(self, "_v4_log", None):
-            v = torch.stack(self._v4_log[:len(a)], 0).float().numpy()             # [T, 5, N, J]
+            v = torch.stack(self._v4_log[:len(a)], 0).float().numpy()             # [T, 10, N, J]
             extra.update(k_pass=v[:, 0], k_act=v[:, 1], w_stance=v[:, 2], w_stand=v[:, 3], tau_co=v[:, 4])
+            if v.shape[1] >= 10:    # 2026-10-30 (videos): reference centre and dead zone of k_tot, human range of b_tot
+                extra.update(k_ref=v[:, 5], k_lo=v[:, 6], k_hi=v[:, 7], b_lo=v[:, 8], b_hi=v[:, 9])
         np.savez_compressed(self._gain_log_path, kp=a[:, 0], kd=a[:, 1], delta=a[:, 2], state=a[:, 3].astype("int8"),
                             joints=np.array(self.config.vic_joints), dt=float(self.env.dt), **extra)
 
@@ -962,7 +964,8 @@ class VicSteering(CadenceGaitPercentSteering):
         if self._gain_log_path:
             self._gain_log.append(torch.stack([k_eff, b_eff, delta, state.float()], 0).half().cpu())
             self._u_log.append(self._v4_u.half().cpu())
-            self._v4_log.append(torch.stack([k_pass, kp, w[..., 1], w[..., 2], tau_co], 0).half().cpu())
+            self._v4_log.append(torch.stack([k_pass, kp, w[..., 1], w[..., 2], tau_co, k_c, torch.exp(lk_c - h),
+                                             torch.exp(lk_c + h), torch.exp(lb_lo), torch.exp(lb_hi)], 0).half().cpu())
             if len(self._gain_log) % 250 == 0:
                 self._dump_gain_log()
         for st in range(3):
