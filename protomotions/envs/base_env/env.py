@@ -862,6 +862,9 @@ class BaseEnv:
         max_length_reached = check_max_length_term(
             self.progress_buf, self.max_episode_length
         )
+        limit = getattr(self, "_first_episode_limit", None)
+        if limit is not None:   # desync_first_timeouts (same rule as check_max_length_term, per env limit)
+            max_length_reached = max_length_reached | (self.progress_buf >= limit - 1)
         reset_buf = max_length_reached.clone()
         terminated = torch.zeros_like(self.reset_buf, dtype=torch.bool)
 
@@ -1078,6 +1081,14 @@ class BaseEnv:
             env_ids, new_states, new_object_states
         )
 
+    def desync_first_timeouts(self):
+        """First-episode timeout per env uniform in [1, max_episode_length] (agent.desync_initial_timeouts, 2026-10-30).
+
+        progress_buf stays 0 at reset (steering / cadence timers and grace periods use it), only the timeout of the
+        current episode is drawn, so the envs no longer time out together after the initial all-env reset."""
+        n, L = self.num_envs, int(self.max_episode_length)
+        self._first_episode_limit = torch.randint(1, L + 1, (n,), device=self.device, dtype=torch.long)
+
     def reset(
         self,
         env_ids=None,
@@ -1161,6 +1172,8 @@ class BaseEnv:
             self.joint_reflex.reset(env_ids)
 
         self.progress_buf[env_ids] = 0
+        if getattr(self, "_first_episode_limit", None) is not None:
+            self._first_episode_limit[env_ids] = self.max_episode_length   # only the first episode is shortened
         self.reset_buf[env_ids] = False
         self.terminate_buf[env_ids] = False
         self.prev_contact_force_magnitudes[env_ids] = 0.0

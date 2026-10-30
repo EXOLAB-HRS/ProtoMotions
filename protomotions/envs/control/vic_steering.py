@@ -56,6 +56,30 @@ cocontraction cost is either mean_j u_j ("unit") or the co-contraction torque sh
 muscle force that costs metabolic energy). Each term is written to the gain log (k_base, k_load, k_co, tau_load).
 Parameters and sources: VIC3_PARAMS below. v3_load_gate = "stance" (candidate, 2026-10-29) feeds the load filter only in
 stance / standing, so swing k = k_base + k_co (vic3_TC_s5_r1 swing knee load term pinned k to the corridor ceiling).
+
+vic_tc_v4 (2026-10-30, user-approved version: impedance prior; vic_law = "v4", default "v2" unchanged). The total joint
+stiffness, plant passive tissue + VIC, follows the human impedance reference through a reward, like AMP for motion:
+
+    k_tot,j = k_pass,j(q) + k_act,j,      ln k_tot,j = ln k_c,j(phi) + H_j(phi) * a_j,   H = h(phi) + ln(v4_band_margin)
+    k_act,j = max(k_tot,j - k_pass,j, v4_k_floor_frac * k_c,j)       (PD stiffness written to the simulator)
+    ln b_tot,j = ln b_c,j(phi) + alpha_j (ln k_tot,j - ln k_c,j(phi)), clamped to [b_lo / 2, 2 b_hi](phi)   (D1)
+    r_imp = exp(-mean_j (max(0, |ln k_eff,j - ln k_c,j(phi)| - h_j(phi)) / v4_imp_scale)^2),  k_eff = k_act + k_pass
+
+k_pass: diagonal of the plant's passive tissue tangent stiffness (HumanJointModel exponential passive moments + linear
+springs, human_model_v3 profile; the same forces the plant already applies), so the VIC no longer double-counts it
+(v1-v3 put the whole human value into the PD gain on top of the plant's passive moments). b_pass = plant damping (0 for
+the leg joints). The joint spinal reflex (human_model_v3.2) is threshold-gated and silent in steady walking, so it is
+not added to k_eff; HMV-ImpRef values come from brief perturbations and may contain short-latency reflex, which the VIC
+then covers (noted in share/training_configs/vic_TC_server; the impedance probe measures plant + reflex + VIC).
+phi is continuous, no state switch: per leg the load fraction lambda = vertical GRF / body weight (lowpass
+v4_load_tau_s; contact flags if the simulator has no contact sensors) gives w_stance = clip((lambda - lo) / (hi - lo));
+w_stand = w_stance,L * w_stance,R * slow(command) * slow(body); weights (swing, stance, stand) =
+((1 - w_stand)(1 - w_stance), (1 - w_stand) w_stance, w_stand) blend the HMV-ImpRef log centres and half-widths. Ankle
+late stance (stance progress t / T_prev > v4_late_p) blends the stance range toward Shorter & Rouse 2018 late stance
+(VIC4_ANKLE_LATE_K). The action a (tanh, activation-like filter delta_tau_up_s / delta_tau_down_s as v2) moves k inside
+twice the human range (hard limit), the reward pulls only outside the range (dead zone, never toward the centre).
+Co-contraction for J2M: tau_co = max(0, k_act - c |tau|) / c (stiffness beyond the load-dependent short-range stiffness
+of the joint's own torque, c = VIC3_PARAMS), u = tau_co / tau_max in [0, 1]; the cocontraction cost is mean_j u.
 """
 from dataclasses import dataclass, field
 import atexit
@@ -78,6 +102,7 @@ VIC_METAB = steering_path("vic_metab")
 VIC_SWAY = steering_path("vic_sway")
 VIC_PULSE_ERR = steering_path("vic_pulse_err")
 VIC_EFFERENCE = steering_path("vic_efference")
+VIC_IMP_PRIOR = steering_path("vic_imp_prior")
 
 # Human joint impedance ranges (k N m/rad, b N m s/rad) for swing / stance / standing, model 63.3 kg.
 # Hip and knee in stance and standing: relaxed-static values (no walking stance measurement).
@@ -156,6 +181,61 @@ def vic3_guard(log_k: Tensor, log_lo: Tensor, log_hi: Tensor) -> Tensor:
     """Dead-zone guard in octaves: 0 inside [lo, hi], log2 distance outside, clamped at 4, mean over joints."""
     out = torch.relu(log_k - log_hi) + torch.relu(log_lo - log_k)
     return (out / math.log(2.0)).clamp(max=4.0).mean(-1)
+
+
+# vic_tc_v4 damping exponent alpha_j in b ~ k^alpha (D1, TO BE DONE 2026-10-29): ankle b is nearly independent of k in
+# people (HMV-ImpRef 0.6-1.5 N m s/rad over k 22-406; assumption-level fit), knee / hip keep the v1-v3 shape b ~ sqrt(k).
+VIC4_ALPHA = {"Hip_y": 0.5, "Knee_y": 0.5, "Ankle_y": 0.15, "Hip_x": 0.5, "Subtalar_x": 0.5}
+# Ankle late stance stiffness, Shorter & Rouse 2018 (HMV-ImpRef csv source [5], 63.3 kg): design data for the phase
+# shape inside stance; the late-stance window (progress > v4_late_p) is an assumption.
+VIC4_ANKLE_LATE_K = (133.0, 234.0)
+
+
+def vic4_leg_weights(load: Tensor, slow: Tensor, lo: float, hi: float) -> Tensor:
+    """Continuous leg-state weights [N, 2, 3] (swing, stance, stand) from per-leg load fractions [N, 2] and a standing
+    slowness factor [N] in [0, 1]."""
+    w_st = ((load - lo) / max(hi - lo, 1e-6)).clamp(0.0, 1.0)
+    g = (w_st[:, 0] * w_st[:, 1] * slow)[:, None]
+    return torch.stack([(1 - g) * (1 - w_st), (1 - g) * w_st, g.expand_as(w_st)], -1)
+
+
+def vic4_blend(w: Tensor, table: Tensor) -> Tensor:
+    """Blend a per-joint, per-state table [J, 3] (log values) with weights [N, J, 3] -> [N, J]."""
+    return (w * table).sum(-1)
+
+
+def vic4_passive_diag(model, q_all: Tensor, idx: Tensor):
+    """Diagonal passive tissue stiffness and damping of the plant (HumanJointModel.passive_impedance, diagonal only,
+    without building the full matrix) at the VIC joints: ([N, J], [J])."""
+    z = q_all @ model.a.T + model.offset
+    thr = math.log(model.exp_cap)
+    wgt = model.energy_scale * torch.exp(z.clamp(max=thr)) * (z < thr)
+    k = wgt @ (model.a[:, idx] ** 2)
+    disp = q_all[:, idx] - model.rest[idx]
+    kl = torch.where(disp < 0, model.k_negative[idx], model.k_positive[idx])
+    k = k + kl * ((kl * disp).abs() < model.spring_cap)
+    return k, model.damping[idx]
+
+
+def vic4_damping(lk: Tensor, lk_c: Tensor, lb_c: Tensor, alpha: Tensor, lb_lo: Tensor, lb_hi: Tensor) -> Tensor:
+    """D1 damping law in log space: ln b = ln b_c + alpha (ln k - ln k_c), clamped to [ln b_lo - ln 2, ln b_hi + ln 2]."""
+    return (lb_c + alpha * (lk - lk_c)).clamp(lb_lo - math.log(2.0), lb_hi + math.log(2.0))
+
+
+def vic4_coactivation(k_act: Tensor, c: Tensor, tau_abs: Tensor, tau_max: Tensor):
+    """Co-contraction torque tau_co = max(0, k_act - c |tau|) / c and level u = tau_co / tau_max in [0, 1]."""
+    tau_co = torch.relu(k_act - c * tau_abs) / c
+    return tau_co, (tau_co / tau_max).clamp(0.0, 1.0)
+
+
+def vic4_dead_zone(lk: Tensor, lk_c: Tensor, h: Tensor) -> Tensor:
+    """Log distance outside the human range [N, J] (0 inside, never toward the centre)."""
+    return torch.relu((lk - lk_c).abs() - h)
+
+
+def vic_gain(value: Tensor) -> Tensor:
+    """Positive reward: value (in [0, 1])."""
+    return value
 
 
 def vic_cost(value: Tensor) -> Tensor:
@@ -288,6 +368,21 @@ class VicSteeringConfig(CadenceGaitPercentSteeringConfig):
     # Efference copy of the VIC outputs (2026-10-29, candidate, 0 = off): keep the last N steps of the u command and of
     # tau_ff target / tau_max (2 x J per step) in ctx.steering.vic_efference for an actor observation.
     vic_efference_steps: int = 0
+    # vic_tc_v4 (2026-10-30, user-approved version; module docstring). Used only with vic_law = "v4".
+    v4_band_margin: float = 2.0          # hard limit: human range widened by this factor on each side
+    v4_load_lo: float = 0.05             # load fraction (body weights) below which a leg is swing
+    v4_load_hi: float = 0.20             # ... above which it is fully stance
+    v4_load_tau_s: float = 0.03          # lowpass of the load fraction
+    v4_late_anchor: bool = True          # ankle late-stance reference (VIC4_ANKLE_LATE_K)
+    v4_late_p: tuple = (0.5, 0.65)       # stance progress ramp of the late-stance blend (assumption)
+    v4_stance_T0_s: float = 0.65         # initial previous-stance duration (assumption, ~1.2 m/s walking)
+    v4_k_floor_frac: float = 0.02        # PD stiffness floor, fraction of the reference centre
+    v4_imp_scale: float = 0.5            # r_imp scale in ln units outside the range (0.5 -> factor 1.65)
+    v4_passive: bool = True              # subtract the plant passive stiffness / damping from the PD gains
+    v4_alpha: dict = field(default_factory=dict)   # per joint key overrides of VIC4_ALPHA
+    # Scratch strategy A stage A1 (2026-10-30, candidate, default off): ignore the policy's stiffness outputs (a = 0), so
+    # k_tot follows the human reference centre k_c(phi): a walking teacher on human impedance. Stage A2 sets it False.
+    v4_freeze_a: bool = False
 
 
 class VicSteering(CadenceGaitPercentSteering):
@@ -370,9 +465,8 @@ class VicSteering(CadenceGaitPercentSteering):
         self._impact = torch.zeros(n, device=dev)
         self._metab = torch.zeros(n, device=dev)
         self._sway = torch.zeros(n, device=dev)
-        # populate_context reads these under every vic_law; d51c34f set them only in _init_v3, so v2 runs failed at env
-        # init (AttributeError _pulse_err, vic_TC_b9 smoke 2026-10-30). _init_v3 sets them again.
-        self._pulse_err = torch.zeros(n, device=dev)
+        self._pulse_err = torch.zeros(n, device=dev)            # vic_tc_v3 pulse_err_cost; zeros for v2 (populate_context)
+        self._imp = torch.zeros(n, device=dev)                  # vic_tc_v4 impedance prior reward; zeros otherwise
         self._eff = torch.zeros(n, max(1, c.vic_efference_steps), 2 * len(c.vic_joints), device=dev)
         self._sim_ready = False
         # HC_VIC_GAIN_LOG=<path.npz> (evaluation, 2026-10-27, off by default): k_p, k_d, delta and leg state of the VIC
@@ -384,8 +478,49 @@ class VicSteering(CadenceGaitPercentSteering):
             atexit.register(self._dump_gain_log)
         if c.vic_law == "v3":
             self._init_v3(n, dev)
+        elif c.vic_law == "v4":
+            self._init_v4(n, dev, ranges)
         elif c.vic_law != "v2":
-            raise ValueError(f"vic_law must be v2 or v3, got {c.vic_law}")
+            raise ValueError(f"vic_law must be v2, v3 or v4, got {c.vic_law}")
+
+    def _init_v4(self, n, dev, ranges):
+        c = self.config
+        J = len(c.vic_joints)
+        t = lambda v: torch.tensor(v, device=dev, dtype=torch.float)
+        lb_lo, lb_hi = torch.zeros(J, 3, device=dev), torch.zeros(J, 3, device=dev)
+        for i, j in enumerate(c.vic_joints):
+            key = j[2:]
+            for s in range(3):
+                if key in ranges:
+                    blo, bhi = ranges[key]["b"][s]
+                else:
+                    b0 = float(self._b_old[i])
+                    blo, bhi = b0 / c.frontal_band, b0 * c.frontal_band
+                lb_lo[i, s], lb_hi[i, s] = math.log(blo), math.log(bhi)
+        self._v4_lk = self._lk_h.clone()                        # log centre [J, 3]
+        self._v4_h = self._half - math.log(c.band_widen)        # log half-width of the human range [J, 3]
+        for i, j in enumerate(c.vic_joints):
+            if j[2:] not in ranges:
+                self._v4_h[i] = math.log(c.frontal_band)
+        self._v4_lb, self._v4_lb_lo, self._v4_lb_hi = 0.5 * (lb_lo + lb_hi), lb_lo, lb_hi
+        alpha = dict(VIC4_ALPHA, **c.v4_alpha)
+        self._v4_alpha = t([alpha.get(j[2:], 0.5) for j in c.vic_joints])
+        self._v4_c = t([vic3_defaults(j[2:])["c"] if j[2:] in VIC3_PARAMS else 3.0 for j in c.vic_joints])
+        self._v4_ankle = t([1.0 if j[2:] == "Ankle_y" else 0.0 for j in c.vic_joints])
+        lo, hi = VIC4_ANKLE_LATE_K
+        self._v4_late = (0.5 * (math.log(lo) + math.log(hi)), 0.5 * (math.log(hi) - math.log(lo)))
+        self._v4_load = torch.zeros(n, 2, device=dev)
+        self._v4_tst = torch.zeros(n, 2, device=dev)
+        self._v4_T = torch.full((n, 2), float(c.v4_stance_T0_s), device=dev)
+        self._v4_a = torch.zeros(n, J, device=dev)              # filtered action (activation-like)
+        self._v4_u = torch.zeros(n, J, device=dev)              # co-contraction level for J2M / reflex
+        self._v4_log = []
+        self._pulse_err = torch.zeros(n, device=dev)
+        self._eff = torch.zeros(n, max(1, c.vic_efference_steps), 2 * J, device=dev)
+        model = getattr(self.env.simulator, "_human_joint_model", None)
+        self._v4_model = model if c.v4_passive else None
+        if c.v4_passive and model is None:
+            print("[vic] v4: no plant passive model (_human_joint_model); k_pass = 0", flush=True)
 
     def _init_v3(self, n, dev):
         c = self.config
@@ -459,6 +594,11 @@ class VicSteering(CadenceGaitPercentSteering):
         if getattr(self, "_v3_log", None):
             v = torch.stack(self._v3_log[:len(a)], 0).float().numpy()             # [T, 4, N, J]
             extra.update(k_base=v[:, 0], k_load=v[:, 1], k_co=v[:, 2], tau_load=v[:, 3])
+        if getattr(self, "_v4_log", None):
+            v = torch.stack(self._v4_log[:len(a)], 0).float().numpy()             # [T, 10, N, J]
+            extra.update(k_pass=v[:, 0], k_act=v[:, 1], w_stance=v[:, 2], w_stand=v[:, 3], tau_co=v[:, 4])
+            if v.shape[1] >= 10:    # 2026-10-30 (videos): reference centre and dead zone of k_tot, human range of b_tot
+                extra.update(k_ref=v[:, 5], k_lo=v[:, 6], k_hi=v[:, 7], b_lo=v[:, 8], b_hi=v[:, 9])
         np.savez_compressed(self._gain_log_path, kp=a[:, 0], kd=a[:, 1], delta=a[:, 2], state=a[:, 3].astype("int8"),
                             joints=np.array(self.config.vic_joints), dt=float(self.env.dt), **extra)
 
@@ -558,6 +698,8 @@ class VicSteering(CadenceGaitPercentSteering):
         self._fresh[:] = False
         if c.vic_law == "v3":
             return self._pre_physics_v3(extra, q_ref, unit, tau_res, state, jj, fresh, s)
+        if c.vic_law == "v4":
+            return self._pre_physics_v4(q_ref, unit, tau_res, contact, root_v, fresh)
         if c.delta_band:
             dm_t = self._dmax_h[jj, state]
             self._dmax = torch.where(fresh[:, None], dm_t, self._dmax + s * (dm_t - self._dmax))
@@ -612,6 +754,8 @@ class VicSteering(CadenceGaitPercentSteering):
         """Filtered co-activation level per VIC joint for the plant's joint reflex (0 = relaxed, 1 = maximal)."""
         if getattr(self.config, "vic_law", "v2") == "v3":
             return self._delta.clamp(0.0, 1.0)                 # v3 keeps u in [0, 1] in _delta
+        if getattr(self.config, "vic_law", "v2") == "v4":
+            return self._v4_u                                  # tau_co / tau_max
         return (self._delta / self._dmax.clamp_min(1e-6)).clamp(-1.0, 1.0)
 
     def _pre_physics_v3(self, extra, q_ref, unit, tau_res, state, jj, fresh, s):
@@ -734,6 +878,114 @@ class VicSteering(CadenceGaitPercentSteering):
             self._mean_k[st] = torch.where(m.any(0), (lk * m).sum(0) / cnt, self._mean_k[st])
         self._log()
 
+    def _v4_leg_load(self, contact):
+        """Per-leg vertical contact force / body weight [N, 2] (latest physics substep); contact flags as fallback."""
+        sm = getattr(self.env.simulator, "_contact_sensor_map", None)
+        if sm:
+            try:
+                f = torch.stack([sum(sm[b].data.net_forces_w_history[:, 0, 0, 2] for b in bodies)
+                                 for bodies in self.config.grf_bodies], -1)
+                return f.clamp(min=0.0) / self._bw
+            except (KeyError, AttributeError, IndexError):
+                pass
+        return contact.float()
+
+    def _pre_physics_v4(self, q_ref, unit, tau_res, contact, root_v, fresh):
+        """vic_tc_v4 gains (module docstring); feed-forward, effort and metabolic inputs as v2."""
+        c = self.config
+        sim = self.env.simulator
+        dt = self.env.dt
+        J = len(c.vic_joints)
+        f2 = fresh[:, None]
+        if c.v4_freeze_a:
+            unit = torch.zeros_like(unit)
+        # Continuous leg-state weights.
+        load = self._v4_leg_load(contact)
+        g = 1.0 - math.exp(-dt / max(c.v4_load_tau_s, 1e-6))
+        self._v4_load = torch.where(f2, load, self._v4_load + g * (load - self._v4_load))
+        slow = ((2 * c.stand_speed - self._tar_speed) / c.stand_speed).clamp(0.0, 1.0) \
+            * ((2 * c.stand_root_speed - root_v) / c.stand_root_speed).clamp(0.0, 1.0)
+        wl = vic4_leg_weights(self._v4_load, slow, c.v4_load_lo, c.v4_load_hi)        # [N, 2, 3]
+        w = wl[:, self._leg]                                                            # [N, J, 3]
+        lk_tab = self._v4_lk.expand(len(fresh), J, 3).clone()
+        h_tab = self._v4_h.expand(len(fresh), J, 3).clone()
+        if c.v4_late_anchor:
+            on = wl[:, :, 1] > 0.5
+            ended = ~on & (self._v4_tst > 0.2)
+            self._v4_T = torch.where(ended, 0.7 * self._v4_T + 0.3 * self._v4_tst, self._v4_T)
+            self._v4_tst = torch.where(on & ~f2, self._v4_tst + dt, torch.zeros_like(self._v4_tst))
+            p0, p1 = c.v4_late_p
+            late = ((self._v4_tst / self._v4_T.clamp_min(0.2) - p0) / max(p1 - p0, 1e-6)).clamp(0.0, 1.0)
+            ell = late[:, self._leg] * self._v4_ankle                                   # [N, J]
+            lk_tab[..., 1] = (1 - ell) * lk_tab[..., 1] + ell * self._v4_late[0]
+            h_tab[..., 1] = (1 - ell) * h_tab[..., 1] + ell * self._v4_late[1]
+        lk_c, h = (w * lk_tab).sum(-1), (w * h_tab).sum(-1)
+        lb_c = vic4_blend(w, self._v4_lb)
+        lb_lo, lb_hi = vic4_blend(w, self._v4_lb_lo), vic4_blend(w, self._v4_lb_hi)
+        # Action: activation-like filter on a (as v2), then the total stiffness inside twice the human range.
+        if c.delta_tau_up_s > 0 and c.delta_tau_down_s > 0:
+            up = 1.0 - math.exp(-dt / c.delta_tau_up_s)
+            down = 1.0 - math.exp(-dt / c.delta_tau_down_s)
+            step = torch.where(unit > self._v4_a, up, down) * (unit - self._v4_a)
+            self._v4_a = torch.where(f2, unit, self._v4_a + step)
+        else:
+            self._v4_a = unit
+        delta = (h + math.log(c.v4_band_margin)) * self._v4_a
+        lk_tot = lk_c + delta
+        lb_tot = vic4_damping(lk_tot, lk_c, lb_c, self._v4_alpha, lb_lo, lb_hi)
+        dof = sim._get_simulator_dof_state().convert_to_common(sim.data_conversion)
+        q, qd = dof.dof_pos[:, self._idx], dof.dof_vel[:, self._idx]
+        if self._v4_model is not None:
+            k_pass, b_pass = vic4_passive_diag(self._v4_model, dof.dof_pos, self._idx)
+            b_pass = b_pass.expand_as(k_pass)
+        else:
+            k_pass, b_pass = torch.zeros_like(q), torch.zeros_like(q)
+        k_c = torch.exp(lk_c)
+        k_act = torch.maximum(torch.exp(lk_tot) - k_pass, c.v4_k_floor_frac * k_c)
+        b_act = torch.maximum(torch.exp(lb_tot) - b_pass, 0.01 * torch.exp(lb_c))
+        a = self.alpha
+        lk = (1 - a) * torch.log(self._k_old) + a * torch.log(k_act)
+        lb = (1 - a) * torch.log(self._b_old) + a * torch.log(b_act)
+        kp, kd = torch.exp(lk), torch.exp(lb)
+        self._lk, self._lb = lk, lb
+        sim._common_p_gains[:, self._idx] = kp
+        sim._common_d_gains[:, self._idx] = kd
+        self._write_gains()
+        err = q_ref[:, self._idx] - q
+        prior = (self._k_old - kp) * err - (self._b_old - kd) * qd
+        sim.vic_ff_prior[:, self._idx] = self.beta * prior
+        sim.vic_ff_res_target[:, self._idx] = tau_res
+        reset_now = self.env.progress_buf <= 1
+        if reset_now.any():
+            sim.vic_ff_res[reset_now] = 0.0
+        # Co-contraction (J2M), impedance prior and costs; k_eff = what the joint really has (PD + passive).
+        src = getattr(sim, "human_active_torques", None)
+        tau_abs = src[:, self._idx].detach().abs() if src is not None and src.shape[0] == len(fresh) \
+            else torch.zeros_like(q)
+        tau_co, self._v4_u = vic4_coactivation(kp, self._v4_c, tau_abs, self._tau_max)
+        k_eff, b_eff = kp + k_pass, kd + b_pass
+        out = vic4_dead_zone(torch.log(k_eff), lk_c, h)
+        self._band = (out / math.log(2.0)).clamp(max=4.0).mean(-1)
+        self._imp = torch.exp(-((out / c.v4_imp_scale) ** 2).mean(-1))
+        self._cocon = self._v4_u.mean(-1)
+        tau = kp * err - kd * qd + self.beta * prior + sim.vic_ff_res[:, self._idx]
+        self._effort = ((tau / self._tau_max) ** 2).clamp(max=4.0).mean(-1)
+        pw = (tau * qd)[:, self._sag]
+        self._metab = (pw.clamp(min=0).sum(-1) / 0.25 + (-pw).clamp(min=0).sum(-1) / 1.20) / self._bw
+        state = w.argmax(-1)                                     # for logs only (dominant weight)
+        if self._gain_log_path:
+            self._gain_log.append(torch.stack([k_eff, b_eff, delta, state.float()], 0).half().cpu())
+            self._u_log.append(self._v4_u.half().cpu())
+            self._v4_log.append(torch.stack([k_pass, kp, w[..., 1], w[..., 2], tau_co, k_c, torch.exp(lk_c - h),
+                                             torch.exp(lk_c + h), torch.exp(lb_lo), torch.exp(lb_hi)], 0).half().cpu())
+            if len(self._gain_log) % 250 == 0:
+                self._dump_gain_log()
+        for st in range(3):
+            m = state == st
+            cnt = m.float().sum(0).clamp_min(1)
+            self._mean_k[st] = torch.where(m.any(0), (torch.log(k_eff) * m).sum(0) / cnt, self._mean_k[st])
+        self._log()
+
     def _update_impact(self):
         """Per leg, peak vertical contact force over the physics substeps of the last control step (body weights);
         cost = mean over legs of max(0, peak - grf_ref_bw), clamped at 3."""
@@ -755,3 +1007,4 @@ class VicSteering(CadenceGaitPercentSteering):
         ctx.steering.vic_sway = self._sway
         ctx.steering.vic_pulse_err = self._pulse_err
         ctx.steering.vic_efference = self._eff.flatten(1)
+        ctx.steering.vic_imp_prior = self._imp

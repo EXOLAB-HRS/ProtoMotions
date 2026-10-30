@@ -115,6 +115,13 @@ class BaseAgentConfig:
         default=None, metadata={"help": "Stop early at this step. None=disabled."}
     )
 
+    # 2026-10-30 (user decision, Human Controller): fit() resets all envs at once, so later timeouts happen in lockstep
+    # (max_episode_length / num_steps ~ 9.4-epoch oscillation of the curves). True (default for new runs) gives each env
+    # a uniform random first-episode limit in [1, max_episode_length]; later episodes use the full length. Training only.
+    desync_initial_timeouts: bool = field(
+        default=True, metadata={"help": "Random first-episode timeout per env at the start of fit() (False = old)."}
+    )
+
     # Checkpoint saving configuration
     save_epoch_checkpoint_every: Optional[int] = field(
         default=1000, metadata={"help": "Save epoch_xxx.ckpt every N epochs."}

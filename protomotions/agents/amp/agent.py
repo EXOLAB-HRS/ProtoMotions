@@ -178,7 +178,9 @@ class AMP(PPO):
         for i in range(1, len(values)):
             assert numel == values[i].shape[0]
 
-        if buf_total_count > buf_size:
+        full = (self.amp_replay_buffer._is_full if getattr(self.config.amp_parameters, "discriminator_replay_fix", False)
+                else buf_total_count > buf_size)   # old upstream condition, never true (see config)
+        if full:
             keep_probs = (
                 torch.ones(numel, device=self.device)
                 * self.config.amp_parameters.discriminator_replay_keep_prob
