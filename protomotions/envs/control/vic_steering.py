@@ -377,6 +377,9 @@ class VicSteeringConfig(CadenceGaitPercentSteeringConfig):
     v4_imp_scale: float = 0.5            # r_imp scale in ln units outside the range (0.5 -> factor 1.65)
     v4_passive: bool = True              # subtract the plant passive stiffness / damping from the PD gains
     v4_alpha: dict = field(default_factory=dict)   # per joint key overrides of VIC4_ALPHA
+    # Scratch strategy A stage A1 (2026-10-30, candidate, default off): ignore the policy's stiffness outputs (a = 0), so
+    # k_tot follows the human reference centre k_c(phi): a walking teacher on human impedance. Stage A2 sets it False.
+    v4_freeze_a: bool = False
 
 
 class VicSteering(CadenceGaitPercentSteering):
@@ -887,6 +890,8 @@ class VicSteering(CadenceGaitPercentSteering):
         dt = self.env.dt
         J = len(c.vic_joints)
         f2 = fresh[:, None]
+        if c.v4_freeze_a:
+            unit = torch.zeros_like(unit)
         # Continuous leg-state weights.
         load = self._v4_leg_load(contact)
         g = 1.0 - math.exp(-dt / max(c.v4_load_tau_s, 1e-6))

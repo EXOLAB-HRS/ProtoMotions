@@ -186,3 +186,16 @@ def test_v4_coactivation_logged_for_j2m():
     ank = JOINTS.index("L_Ankle_y")
     want = (kp[0, ank] - 3.5 * 8.0) / 3.5 / 150.0
     assert self.coactivation_level()[0, ank] == pytest.approx(float(want), rel=1e-4)
+
+
+def test_v4_freeze_a_keeps_reference_centre():
+    """Scratch A1 (v4_freeze_a): any policy stiffness output gives the same gains as a = 0 (human centre)."""
+    J = len(JOINTS)
+    self, sim = _stub(v4_late_anchor=False)
+    sim.load = torch.tensor([[1.0, 1.0]]).expand(4, 2)
+    kp0, kd0 = _step4(self, sim, torch.zeros(4, J), fresh=True)
+    self, sim = _stub(v4_late_anchor=False, v4_freeze_a=True)
+    sim.load = torch.tensor([[1.0, 1.0]]).expand(4, 2)
+    kp1, kd1 = _step4(self, sim, torch.full((4, J), 3.0), fresh=True)
+    assert torch.allclose(kp1, kp0) and torch.allclose(kd1, kd0)
+    assert vs.VicSteeringConfig().v4_freeze_a is False
