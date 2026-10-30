@@ -72,6 +72,13 @@ class AMPParametersConfig:
         default=0.01,
         metadata={"help": "Probability to keep samples in replay buffer.", "min": 0.0, "max": 1.0}
     )
+    # 2026-10-30 (user decision, Human Controller): the upstream condition `len(buffer) > buffer_size` is never true
+    # (ReplayBuffer.__len__ is capped at its size), so keep_prob never applied and the replay held only the newest
+    # ~1.5 epochs. True (default for new runs) applies keep_prob once the buffer is full; False reproduces runs before it.
+    discriminator_replay_fix: bool = field(
+        default=True,
+        metadata={"help": "Apply discriminator_replay_keep_prob once the replay buffer is full (False = old upstream bug)."}
+    )
     discriminator_replay_size: int = field(
         default=200000,
         metadata={"help": "Maximum size of discriminator replay buffer.", "min": 1}

@@ -409,6 +409,8 @@ class BaseAgent:
 
         # Get initial observations from environment
         obs, _ = self.env.reset()
+        if getattr(self.config, "desync_initial_timeouts", False) and hasattr(self.env, "desync_first_timeouts"):
+            self.env.desync_first_timeouts()
         obs = self.add_agent_info_to_obs(obs)
         obs_td = self.obs_dict_to_tensordict(obs)
 
