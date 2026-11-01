@@ -199,3 +199,17 @@ def test_v4_freeze_a_keeps_reference_centre():
     kp1, kd1 = _step4(self, sim, torch.full((4, J), 3.0), fresh=True)
     assert torch.allclose(kp1, kp0) and torch.allclose(kd1, kd0)
     assert vs.VicSteeringConfig().v4_freeze_a is False
+
+
+def test_prior_substep_equals_fixed_pd():
+    """v4_prior_substep (2026-11-01): with beta = 1 the substep prior plus the VIC drive gives the fixed-PD torque at
+    every substep state, and without gaps the held control-step prior passes through unchanged."""
+    from protomotions.robot_configs.human_model.common.dynamics import _vic_prior_substep
+    g = torch.Generator().manual_seed(0)
+    k_old, b_old = torch.rand(4, 10, generator=g) * 150, torch.rand(4, 10, generator=g) * 15
+    kp, kd = k_old * 0.2, b_old * 0.3
+    cmd, q, qd = (torch.randn(4, 10, generator=g) for _ in range(3))
+    held = torch.randn(4, 10, generator=g)
+    assert torch.equal(_vic_prior_substep(held, None, None, cmd, q, qd), held)
+    tau = kp * (cmd - q) - kd * qd + _vic_prior_substep(torch.zeros_like(q), k_old - kp, b_old - kd, cmd, q, qd)
+    assert torch.allclose(tau, k_old * (cmd - q) - b_old * qd, atol=1e-4)

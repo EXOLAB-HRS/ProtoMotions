@@ -380,6 +380,10 @@ class VicSteeringConfig(CadenceGaitPercentSteeringConfig):
     # Scratch strategy A stage A1 (2026-10-30, candidate, default off): ignore the policy's stiffness outputs (a = 0), so
     # k_tot follows the human reference centre k_c(phi): a walking teacher on human impedance. Stage A2 sets it False.
     v4_freeze_a: bool = False
+    # Beta prior per physics substep (2026-11-01, candidate, default off): the steering writes the gain gaps
+    # beta (k_old - k_p), beta (b_old - k_d) and dynamics._vic_prior_substep applies them with each substep's error, so
+    # beta = 1 equals the fixed PD instead of a torque held for the control step (v4 law only).
+    v4_prior_substep: bool = False
 
 
 class VicSteering(CadenceGaitPercentSteering):
@@ -556,6 +560,8 @@ class VicSteering(CadenceGaitPercentSteering):
         ndof = sim._common_p_gains.shape[1]
         z = torch.zeros(n, ndof, device=p.device)
         sim.vic_ff_prior, sim.vic_ff_res_target, sim.vic_ff_res = z.clone(), z.clone(), z.clone()
+        if self.config.v4_prior_substep:
+            sim.vic_prior_kgap, sim.vic_prior_bgap = z.clone(), z.clone()
         dt = 1.0 / sim.config.sim.fps
         sim.vic_ff_coeff = torch.tensor(1.0 - math.exp(-dt / max(self.config.tau_ff_lowpass_s, 1e-6)),
                                         device=p.device)
@@ -948,7 +954,15 @@ class VicSteering(CadenceGaitPercentSteering):
         self._write_gains()
         err = q_ref[:, self._idx] - q
         prior = (self._k_old - kp) * err - (self._b_old - kd) * qd
-        sim.vic_ff_prior[:, self._idx] = self.beta * prior
+        # 2026-11-01 (A2 ff pre-fill, logging only): the torque the final v4 gains (alpha 1) lack against the fixed PD at
+        # this state; a feed-forward that outputs it makes alpha 1 / beta 0 torque-equal to the fixed-PD walker.
+        self._v4_dtau = (self._k_old - k_act) * err - (self._b_old - b_act) * qd
+        if c.v4_prior_substep:
+            sim.vic_prior_kgap[:, self._idx] = self.beta * (self._k_old - kp)
+            sim.vic_prior_bgap[:, self._idx] = self.beta * (self._b_old - kd)
+            sim.vic_ff_prior[:, self._idx] = 0.0
+        else:
+            sim.vic_ff_prior[:, self._idx] = self.beta * prior
         sim.vic_ff_res_target[:, self._idx] = tau_res
         reset_now = self.env.progress_buf <= 1
         if reset_now.any():

@@ -606,7 +606,9 @@ class HumanJointModel:
         passive = elastic + damping
         active = torch.maximum(torch.minimum(requested, positive), -negative)  # estimate, for logging
         if getattr(simulator, "vic_ff_prior", None) is not None:
-            ff, cap, active = _vic_feedforward(simulator.vic_ff_prior, simulator.vic_ff_res_target,
+            prior = _vic_prior_substep(simulator.vic_ff_prior, getattr(simulator, "vic_prior_kgap", None),
+                                       getattr(simulator, "vic_prior_bgap", None), command, q, qd)
+            ff, cap, active = _vic_feedforward(prior, simulator.vic_ff_res_target,
                                                simulator.vic_ff_res, simulator.vic_ff_coeff,
                                                requested, negative, positive,
                                                getattr(simulator, "vic_ff_reflex", None))
@@ -687,7 +689,8 @@ class HumanJointModel:
         passive = elastic + damping
         active = torch.maximum(torch.minimum(requested, positive), -negative)
         if g.get("ff_prior") is not None:
-            ff, cap, active = _vic_feedforward(g["ff_prior"], g["ff_res_t"], g["ff_res"], g["ff_c"],
+            prior = _vic_prior_substep(g["ff_prior"], g.get("prior_kgap"), g.get("prior_bgap"), g["command"], q, qd)
+            ff, cap, active = _vic_feedforward(prior, g["ff_res_t"], g["ff_res"], g["ff_c"],
                                                requested, negative, positive, g.get("ff_reflex"))
             passive = passive + ff
         return dict(requested=requested, total=active + passive, active=active, passive=passive,
@@ -711,6 +714,9 @@ class HumanJointModel:
                None if vic_ff is None else vic_ff.data_ptr())
         if reflex is not None:            # joint reflex (candidate, 2026-10-28): its buffer is a graph input
             key = key + (reflex.data_ptr(),)
+        kgap = getattr(simulator, "vic_prior_kgap", None)
+        if kgap is not None:              # substep beta prior (v4_prior_substep, candidate 2026-11-01): graph inputs
+            key = key + (kgap.data_ptr(), simulator.vic_prior_bgap.data_ptr())
         body = self._graph_body_implicit if implicit else self._graph_body
         if getattr(self, "_graph_key", None) != key:
             self._graph_io = dict(
@@ -723,6 +729,8 @@ class HumanJointModel:
                                       ff_res=simulator.vic_ff_res, ff_c=simulator.vic_ff_coeff)
                 if reflex is not None:
                     self._graph_io["ff_reflex"] = reflex
+                if kgap is not None:
+                    self._graph_io.update(prior_kgap=kgap, prior_bgap=simulator.vic_prior_bgap)
             if self._packed_strength is None:
                 self._pack_strength_rows()
             stream = torch.cuda.Stream()
@@ -804,6 +812,19 @@ class HumanJointModel:
         if callback is not None:
             callback(simulator, state)
         simulator._apply_simulator_torques(total[..., simulator.data_conversion.dof_convert_to_sim])
+
+
+def _vic_prior_substep(ff_prior, kgap, bgap, command, q, qd):
+    """vic_tc v4 beta prior evaluated at this physics substep (v4_prior_substep, candidate 2026-11-01).
+
+    Without it the prior beta [(k_old - k_p) e - (b_old - k_d) qd] is computed once per control step and held for all
+    substeps, so beta = 1 is not equivalent to the fixed PD (the gap acts as a 33 ms delayed feedback). With it the
+    steering writes the gain gaps kgap = beta (k_old - k_p), bgap = beta (b_old - k_d) and the torque uses this
+    substep's error and velocity (explicit, on top of the implicit drive). ff_prior then holds only any other term.
+    """
+    if kgap is None:
+        return ff_prior
+    return ff_prior + kgap * (command - q) - bgap * qd
 
 
 def _vic_feedforward(ff_prior, ff_res_target, ff_res, coeff, requested, negative, positive, reflex=None):
