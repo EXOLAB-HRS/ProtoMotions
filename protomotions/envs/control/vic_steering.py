@@ -592,6 +592,8 @@ class VicSteering(CadenceGaitPercentSteering):
             extra.update(k_pass=v[:, 0], k_act=v[:, 1], w_stance=v[:, 2], w_stand=v[:, 3], tau_co=v[:, 4])
             if v.shape[1] >= 10:    # 2026-10-30 (videos): reference centre and dead zone of k_tot, human range of b_tot
                 extra.update(k_ref=v[:, 5], k_lo=v[:, 6], k_hi=v[:, 7], b_lo=v[:, 8], b_hi=v[:, 9])
+            if v.shape[1] >= 12:    # 2026-11-01 (A2 ffx): feed-forward residual torque tau_res (lowpassed, N m) and PD torque
+                extra.update(tau_ff=v[:, 10], tau_pd=v[:, 11])
         np.savez_compressed(self._gain_log_path, kp=a[:, 0], kd=a[:, 1], delta=a[:, 2], state=a[:, 3].astype("int8"),
                             joints=np.array(self.config.vic_joints), dt=float(self.env.dt), **extra)
 
@@ -970,7 +972,8 @@ class VicSteering(CadenceGaitPercentSteering):
             self._gain_log.append(torch.stack([k_eff, b_eff, delta, state.float()], 0).half().cpu())
             self._u_log.append(self._v4_u.half().cpu())
             self._v4_log.append(torch.stack([k_pass, kp, w[..., 1], w[..., 2], tau_co, k_c, torch.exp(lk_c - h),
-                                             torch.exp(lk_c + h), torch.exp(lb_lo), torch.exp(lb_hi)], 0).half().cpu())
+                                             torch.exp(lk_c + h), torch.exp(lb_lo), torch.exp(lb_hi),
+                                             sim.vic_ff_res[:, self._idx], kp * err - kd * qd], 0).half().cpu())
             if len(self._gain_log) % 250 == 0:
                 self._dump_gain_log()
         for st in range(3):
