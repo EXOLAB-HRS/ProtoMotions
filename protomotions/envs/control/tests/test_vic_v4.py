@@ -213,3 +213,27 @@ def test_prior_substep_equals_fixed_pd():
     assert torch.equal(_vic_prior_substep(held, None, None, cmd, q, qd), held)
     tau = kp * (cmd - q) - kd * qd + _vic_prior_substep(torch.zeros_like(q), k_old - kp, b_old - kd, cmd, q, qd)
     assert torch.allclose(tau, k_old * (cmd - q) - b_old * qd, atol=1e-4)
+
+
+def test_training_metrics_gait_events():
+    """Training metrics (2026-11-01): at a swing -> stance switch the knee at strike and the swing peaks of the swing that
+    just ended are logged in degrees; support shares are in [0, 1]."""
+    self, sim = _stub(n=2)
+    J, n = len(JOINTS), 2
+    ki, ai = [JOINTS.index("L_Knee_y"), JOINTS.index("R_Knee_y")], [JOINTS.index("L_Ankle_y"), JOINTS.index("R_Ankle_y")]
+    z = torch.zeros(n, J)
+    fresh = torch.tensor([True, True])
+    seq = [(True, 5.0, 0.0), (False, 30.0, -5.0), (False, 60.0, 4.0), (False, 40.0, 6.0), (True, 4.0, 0.0)]
+    out = None
+    for k, (st, kd_, ad_) in enumerate(seq):
+        wl = torch.zeros(n, 2, 3)
+        wl[:, :, 1] = 1.0 if st else 0.0
+        q = torch.zeros(n, J)
+        q[:, ki] = math.radians(kd_)
+        q[:, ai] = -math.radians(ad_)
+        self._v4_training_metrics(wl, q, z, z, z + 50.0, z + 5.0, z, fresh if k == 0 else torch.tensor([False, False]))
+        out = self.log_values()
+    assert abs(float(out["vic_gait/knee_strike_deg"]) - 4.0) < 1e-3
+    assert abs(float(out["vic_gait/knee_swing_peak_deg"]) - 60.0) < 1e-3
+    assert abs(float(out["vic_gait/ankle_swing_dorsi_deg"]) - 6.0) < 1e-3
+    assert 0.0 <= float(out["vic_support/prior_share"]) <= 1.0 and 0.0 <= float(out["vic_support/ff_share"]) <= 1.0

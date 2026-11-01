@@ -811,6 +811,9 @@ class BaseEnv:
         self.extras["terminate"] = self.terminate_buf
         if self.joint_reflex is not None:
             self.extras.update(self.joint_reflex.log_values())
+        for comp in self.control_manager.components.values():   # control-component training metrics (2026-11-01)
+            if callable(getattr(comp, "log_values", None)):
+                self.extras.update(comp.log_values())
 
         rbs: RobotState = self.simulator.get_robot_state()
         for k, _ in rbs.get_shape_mapping(flattened=True).items():

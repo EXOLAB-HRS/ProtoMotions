@@ -879,6 +879,55 @@ class VicSteering(CadenceGaitPercentSteering):
             self._mean_k[st] = torch.where(m.any(0), (lk * m).sum(0) / cnt, self._mean_k[st])
         self._log()
 
+    def _v4_training_metrics(self, wl, q, err, qd, kp, kd, prior, fresh):
+        """Training-time gait and hand-over metrics (2026-11-01, logging only; env/vic_gait/*, env/vic_support/*).
+
+        Gait: per leg, at each swing -> stance switch (stance weight > 0.5), the knee flexion at strike and the largest knee
+        flexion and ankle dorsiflexion of the swing that just ended (deg) -- the failure signature of the collapsed A2 runs
+        (human about 3, 60 and +6 deg). Support: share of |beta prior| and |feed-forward| in |PD + prior + feed-forward| on
+        the sagittal hip / knee / ankle, and alpha / beta, so the hand-over from the fixed PD is visible during training.
+        """
+        names = list(self.config.vic_joints)
+        if not hasattr(self, "_gm_knee"):
+            self._gm_knee = torch.tensor([names.index("L_Knee_y"), names.index("R_Knee_y")], device=q.device)
+            self._gm_ank = torch.tensor([names.index("L_Ankle_y"), names.index("R_Ankle_y")], device=q.device)
+            self._gm_sag = torch.tensor([names.index(j) for j in ("L_Hip_y", "L_Knee_y", "L_Ankle_y",
+                                                                  "R_Hip_y", "R_Knee_y", "R_Ankle_y")], device=q.device)
+            self._gm_prev = torch.ones(q.shape[0], 2, dtype=torch.bool, device=q.device)
+            self._gm_kmax = torch.zeros(q.shape[0], 2, device=q.device)
+            self._gm_amax = torch.full((q.shape[0], 2), -1e3, device=q.device)
+        knee, dorsi = torch.rad2deg(q[:, self._gm_knee]), -torch.rad2deg(q[:, self._gm_ank])
+        stance = wl[:, :, 1] > 0.5
+        f = fresh[:, None].expand_as(stance)
+        self._gm_prev = torch.where(f, stance, self._gm_prev)
+        self._gm_kmax = torch.where(f | stance, torch.zeros_like(knee), torch.maximum(self._gm_kmax, knee))
+        self._gm_amax = torch.where(f | stance, torch.full_like(dorsi, -1e3), torch.maximum(self._gm_amax, dorsi))
+        strike = stance & ~self._gm_prev & ~f
+        out = {}
+        if strike.any():
+            out["vic_gait/knee_strike_deg"] = knee[strike].mean().reshape(1)
+            out["vic_gait/knee_swing_peak_deg"] = self._gm_kmax_prev[strike].mean().reshape(1) \
+                if hasattr(self, "_gm_kmax_prev") else knee[strike].mean().reshape(1)
+            out["vic_gait/ankle_swing_dorsi_deg"] = self._gm_amax_prev[strike].mean().reshape(1) \
+                if hasattr(self, "_gm_amax_prev") else dorsi[strike].mean().reshape(1)
+        self._gm_prev = stance
+        self._gm_kmax_prev, self._gm_amax_prev = self._gm_kmax.clone(), self._gm_amax.clone()
+        s = self._gm_sag
+        pd = (kp * err - kd * qd)[:, s].abs()
+        pr = (self.beta * prior)[:, s].abs() if not self.config.v4_prior_substep else \
+            (self.beta * ((self._k_old - kp) * err - (self._b_old - kd) * qd))[:, s].abs()
+        ff = self.env.simulator.vic_ff_res[:, self._idx][:, s].abs()
+        tot = (pd + pr + ff).sum(-1).clamp_min(1e-6)
+        out["vic_support/prior_share"] = (pr.sum(-1) / tot).mean().reshape(1)
+        out["vic_support/ff_share"] = (ff.sum(-1) / tot).mean().reshape(1)
+        out["vic_support/alpha"] = torch.tensor([self.alpha], device=q.device)
+        out["vic_support/beta"] = torch.tensor([self.beta], device=q.device)
+        self._train_metrics = out
+
+    def log_values(self):
+        """Per-step training metrics for env.extras (env/vic_gait/*, env/vic_support/*; v4 law only)."""
+        return getattr(self, "_train_metrics", {})
+
     def _v4_leg_load(self, contact):
         """Per-leg vertical contact force / body weight [N, 2] (latest physics substep); contact flags as fallback."""
         sm = getattr(self.env.simulator, "_contact_sensor_map", None)
@@ -957,6 +1006,7 @@ class VicSteering(CadenceGaitPercentSteering):
         # 2026-11-01 (A2 ff pre-fill, logging only): the torque the final v4 gains (alpha 1) lack against the fixed PD at
         # this state; a feed-forward that outputs it makes alpha 1 / beta 0 torque-equal to the fixed-PD walker.
         self._v4_dtau = (self._k_old - k_act) * err - (self._b_old - b_act) * qd
+        self._v4_training_metrics(wl, q, err, qd, kp, kd, prior, fresh)
         if c.v4_prior_substep:
             sim.vic_prior_kgap[:, self._idx] = self.beta * (self._k_old - kp)
             sim.vic_prior_bgap[:, self._idx] = self.beta * (self._b_old - kd)
