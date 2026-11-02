@@ -73,7 +73,7 @@ def fatigue_compartment_step(state, target, *, fatigue_rate, recovery_rate, dt, 
 
 
 class HumanJointModel:
-    def __init__(self, profile, dof_names, device="cpu", dtype=torch.float32, *, features=(), strength_cohort='equal_sex', strength_reference_size=None, active_strength_scale=None, fatigue_regions=None, fatigue_rest_multiplier=1.0, passive_joint_parameters=None, pose_strength_model=None):
+    def __init__(self, profile, dof_names, device="cpu", dtype=torch.float32, *, features=(), strength_cohort='equal_sex', strength_reference_size=None, active_strength_scale=None, fatigue_regions=None, fatigue_rest_multiplier=1.0, passive_joint_parameters=None, pose_strength_model=None, passive_exponentials=None):
         validate_profile(profile)
         self.features = frozenset(features)
         if (not math.isfinite(fatigue_rest_multiplier) or fatigue_rest_multiplier < 1
@@ -165,7 +165,9 @@ class HumanJointModel:
             slope = .5 * (wrist['reported_vi_female'] + wrist['reported_vi_male'])
             for name in wrist['joint_names']:
                 self.damping[self.names.index(name)] = slope / (2 * math.pi)
-        components = (self.candidate_parameters["passive_fit"]["passive_exponentials"]
+        # human_model_v3.3 (2026-11-02): an explicit, checkpoint-serialized exponential set replaces the profile's.
+        components = (passive_exponentials if passive_exponentials is not None else
+                      self.candidate_parameters["passive_fit"]["passive_exponentials"]
                       if "passive_fit" in self.features else profile["passive_exponentials"])
         self.passive_component_names = [c['name'] for c in components]
         self.a = tensor([[c["coeff_per_rad"].get(n, 0) for n in self.names] for c in components])

@@ -22,8 +22,9 @@ from .human_model_v1.model_config import MODEL as V1
 from .human_model_v2.model_config import MODEL as V2
 from .human_model_v3.model_config import MODEL as V3
 from .human_model_v3_1.model_config import MODEL as V31
+from .human_model_v3_3.model_config import MODEL as V33
 
-_DEFINITIONS = {d['model_id']: d for d in (V1,V2,V3,V31)}
+_DEFINITIONS = {d['model_id']: d for d in (V1,V2,V3,V31,V33)}
 
 _PACKAGE = Path(__file__).resolve().parent
 
@@ -53,6 +54,8 @@ def get_model(name="human_model_v1", *, require_runnable=True):
         data = V3
     elif name in ("human_model_v3.1", "human_model_v3_1"):
         data = V31
+    elif name in ("human_model_v3.3", "human_model_v3_3"):
+        data = V33
     else:
         raise ValueError(f"Unknown human model: {name!r}")
     model = ModelDefinition(data["model_id"], data["profile_id"], data["status"], data["runnable"])
