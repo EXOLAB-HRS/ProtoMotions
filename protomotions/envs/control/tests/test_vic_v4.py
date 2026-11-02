@@ -268,3 +268,17 @@ def test_gait_r_metrics_fukuchi_replay():
     assert float(out["vic_gait/knee_r_v10"]) > 0.999 and float(out["vic_gait/ankle_r_v10"]) > 0.999
     assert "vic_gait/knee_r_v08" not in out and abs(float(out["vic_gait/knee_r_min"]) - float(out["vic_gait/knee_r_v10"])) < 1e-6
     assert float(run(50)["vic_gait/knee_r_v10"]) < 0.5
+
+
+def test_training_metrics_ff_per_joint():
+    """Per-joint feed-forward metrics (2026-11-02): |tau_ff| of the knee columns and its saturation at the cap."""
+    self, sim = _stub(n=2)
+    J = len(JOINTS)
+    ki = [JOINTS.index("L_Knee_y"), JOINTS.index("R_Knee_y")]
+    sim.vic_ff_res[:, ki] = 0.33 * 150.0          # at the cap (tau_res_scale 0.33, tau_max 150 in the stub)
+    z = torch.zeros(2, J)
+    wl = torch.zeros(2, 2, 3)
+    self._v4_training_metrics(wl, z, z, z, z + 50.0, z + 5.0, z, torch.tensor([True, True]))
+    out = self.log_values()
+    assert abs(float(out["vic_support/ff_abs_knee"]) - 49.5) < 1e-3 and float(out["vic_support/ff_sat_knee"]) == 1.0
+    assert float(out["vic_support/ff_abs_hip"]) == 0.0 and float(out["vic_support/ff_sat_ankle"]) == 0.0

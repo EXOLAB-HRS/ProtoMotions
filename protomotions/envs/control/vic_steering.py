@@ -895,6 +895,7 @@ class VicSteering(CadenceGaitPercentSteering):
         (human about 3, 60 and +6 deg). Support: share of |beta prior| and |feed-forward| in |PD + prior + feed-forward| on
         the sagittal hip / knee / ankle, and alpha / beta, so the hand-over from the fixed PD is visible during training.
         """
+        c = self.config
         names = list(self.config.vic_joints)
         if not hasattr(self, "_gm_knee"):
             self._gm_knee = torch.tensor([names.index("L_Knee_y"), names.index("R_Knee_y")], device=q.device)
@@ -928,6 +929,14 @@ class VicSteering(CadenceGaitPercentSteering):
         tot = (pd + pr + ff).sum(-1).clamp_min(1e-6)
         out["vic_support/prior_share"] = (pr.sum(-1) / tot).mean().reshape(1)
         out["vic_support/ff_share"] = (ff.sum(-1) / tot).mean().reshape(1)
+        # 2026-11-02: per joint (sagittal hip / knee / ankle, both legs) mean |tau_ff|, |PD| (N m) and the fraction of
+        # env-legs with tau_ff above 95 % of its cap (tau_res_scale * tau_max), so feed-forward growth and saturation show
+        cap = (c.tau_res_scale * self._tau_max[s]).clamp_min(1e-6)
+        for k, name in enumerate(("hip", "knee", "ankle")):
+            cols = [k, k + 3]
+            out[f"vic_support/ff_abs_{name}"] = ff[:, cols].mean().reshape(1)
+            out[f"vic_support/pd_abs_{name}"] = pd[:, cols].mean().reshape(1)
+            out[f"vic_support/ff_sat_{name}"] = (ff[:, cols] > 0.95 * cap[cols]).float().mean().reshape(1)
         out["vic_support/alpha"] = torch.tensor([self.alpha], device=q.device)
         out["vic_support/beta"] = torch.tensor([self.beta], device=q.device)
         if self.config.gait_r_table:
