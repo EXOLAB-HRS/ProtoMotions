@@ -266,6 +266,8 @@ def test_gait_r_metrics_fukuchi_replay():
 
     out = run(0)
     assert float(out["vic_gait/knee_r_v10"]) > 0.999 and float(out["vic_gait/ankle_r_v10"]) > 0.999
+    assert float(out["vic_gait/knee_rR_v10"]) > 0.999 and float(out["vic_gait/knee_rL_v10"]) > 0.999
+    assert abs(float(out["vic_gait/knee_swing_peakR_v10"]) - float(ref[50:, 0].max())) < 1e-3
     assert "vic_gait/knee_r_v08" not in out and abs(float(out["vic_gait/knee_r_min"]) - float(out["vic_gait/knee_r_v10"])) < 1e-6
     assert float(run(50)["vic_gait/knee_r_v10"]) < 0.5
 

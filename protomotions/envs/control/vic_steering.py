@@ -902,6 +902,9 @@ class VicSteering(CadenceGaitPercentSteering):
         flexion and ankle dorsiflexion of the swing that just ended (deg) -- the failure signature of the collapsed A2 runs
         (human about 3, 60 and +6 deg). Support: share of |beta prior| and |feed-forward| in |PD + prior + feed-forward| on
         the sagittal hip / knee / ankle, and alpha / beta, so the hand-over from the fixed PD is visible during training.
+        2026-11-02 caveat: the stance weight comes from the low-passed load, so early swing still counts as stance and
+        knee_swing_peak_deg misses the real peak (vic4c s5 control: 22 deg logged vs 51-57 deg in the HMV rollout); use
+        the gait-% based knee_swing_peak{L,R}_vXX of _gait_r_metrics instead.
         """
         c = self.config
         names = list(self.config.vic_joints)
@@ -952,14 +955,19 @@ class VicSteering(CadenceGaitPercentSteering):
         self._train_metrics = out
 
     def _gait_r_metrics(self, knee, dorsi):
-        """Stride-averaged knee / ankle curves vs the Fukuchi table (config gait_r_*; env/vic_gait/*_r_vXX)."""
+        """Stride-averaged knee / ankle curves vs the Fukuchi table (config gait_r_*; env/vic_gait/*_r_vXX).
+
+        2026-11-02: also per leg (the HMV-Walk judge uses the right leg; both-leg means hid a left / right asymmetry):
+        knee_rL_vXX / knee_rR_vXX, ankle_rL / ankle_rR, and from the same per-leg curves the swing peak (max knee over
+        gait % 50-100) and the knee at strike (gait % 0), which replace the load-based swing peak (its low-passed load
+        missed early swing, 22 vs 51-57 deg in the HMV rollout)."""
         c, dev = self.config, knee.device
         if not hasattr(self, "_gr_sum"):
             t = torch.load(c.gait_r_table, map_location=dev, weights_only=False)
             si = [int((t["speeds"] - v).abs().argmin()) for v in c.gait_r_speeds]
             self._gr_ref = t["mean"][si].to(dev).float()                       # [S, 101, 2] knee, ankle (deg)
-            self._gr_sum = torch.zeros(len(si), 101, 2, device=dev)
-            self._gr_cnt = torch.zeros(len(si), 101, device=dev)
+            self._gr_sum = torch.zeros(len(si), 101, 2, 2, device=dev)          # [S, pct, leg, joint]
+            self._gr_cnt = torch.zeros(len(si), 101, 2, device=dev)
             self._gr_steps, self._gr_last = 0, {}
         now = self.env.progress_buf.float()[:, None]
         pct = (now - self._leg_onset) / self._leg_stride.clamp_min(1.)
@@ -969,25 +977,46 @@ class VicSteering(CadenceGaitPercentSteering):
         val = torch.stack([knee, dorsi], -1)                                   # [N, 2 legs, 2 joints]
         for i, v in enumerate(c.gait_r_speeds):
             m = ok & ((self._tar_speed - v).abs() < 0.1)[:, None]
-            if m.any():
-                self._gr_sum[i].index_add_(0, p[m], val[m])
-                self._gr_cnt[i].index_add_(0, p[m], torch.ones_like(p[m], dtype=torch.float))
+            for leg in (0, 1):
+                ml = m[:, leg]
+                if ml.any():
+                    self._gr_sum[i, :, leg].index_add_(0, p[ml, leg], val[ml, leg])
+                    self._gr_cnt[i, :, leg].index_add_(0, p[ml, leg], torch.ones_like(p[ml, leg], dtype=torch.float))
         self._gr_steps += 1
         if self._gr_steps >= c.gait_r_window:
+
+            def corr(x, y):
+                a, b = x - x.mean(0), y - y.mean(0)
+                return (a * b).sum(0) / ((a * a).sum(0) * (b * b).sum(0)).sqrt().clamp_min(1e-9)
+
             for i, v in enumerate(c.gait_r_speeds):
-                ok = self._gr_cnt[i] >= c.gait_r_min_count     # gait % 100 is rarely sampled (next onset resets it)
-                if ok.sum() < 90:
-                    continue
-                cur = self._gr_sum[i][ok] / self._gr_cnt[i][ok][:, None]
-                ref = self._gr_ref[i][ok]
-                a, b = cur - cur.mean(0), ref - ref.mean(0)
-                r = (a * b).sum(0) / ((a * a).sum(0) * (b * b).sum(0)).sqrt().clamp_min(1e-9)
                 tag = f"v{int(round(v * 10)):02d}"
-                self._gr_last[f"vic_gait/knee_r_{tag}"] = r[0].reshape(1)
-                self._gr_last[f"vic_gait/ankle_r_{tag}"] = r[1].reshape(1)
+                both = self._gr_cnt[i].sum(-1)
+                okb = both >= c.gait_r_min_count     # gait % 100 is rarely sampled (next onset resets it)
+                if okb.sum() >= 90:
+                    cur = self._gr_sum[i][okb].sum(1) / both[okb][:, None]
+                    r = corr(cur, self._gr_ref[i][okb])
+                    self._gr_last[f"vic_gait/knee_r_{tag}"] = r[0].reshape(1)
+                    self._gr_last[f"vic_gait/ankle_r_{tag}"] = r[1].reshape(1)
+                for leg, side in ((0, "L"), (1, "R")):
+                    okl = self._gr_cnt[i, :, leg] >= c.gait_r_min_count
+                    if okl.sum() < 90:
+                        continue
+                    cur = self._gr_sum[i, :, leg][okl] / self._gr_cnt[i, :, leg][okl][:, None]
+                    r = corr(cur, self._gr_ref[i][okl])
+                    self._gr_last[f"vic_gait/knee_r{side}_{tag}"] = r[0].reshape(1)
+                    self._gr_last[f"vic_gait/ankle_r{side}_{tag}"] = r[1].reshape(1)
+                    pk = torch.arange(101, device=dev)[okl]
+                    kn = cur[:, 0]
+                    self._gr_last[f"vic_gait/knee_swing_peak{side}_{tag}"] = kn[pk >= 50].max().reshape(1)
+                    self._gr_last[f"vic_gait/knee_strike{side}_{tag}"] = kn[pk <= 1].mean().reshape(1) \
+                        if (pk <= 1).any() else kn[:1]
             ks = [x for k, x in self._gr_last.items() if k.startswith("vic_gait/knee_r_v")]
             if ks:
                 self._gr_last["vic_gait/knee_r_min"] = torch.cat(ks).min().reshape(1)
+            kr = [x for k, x in self._gr_last.items() if k.startswith("vic_gait/knee_rR_v")]
+            if kr:
+                self._gr_last["vic_gait/knee_rR_min"] = torch.cat(kr).min().reshape(1)
             self._gr_sum.zero_(); self._gr_cnt.zero_(); self._gr_steps = 0
         return self._gr_last
 
