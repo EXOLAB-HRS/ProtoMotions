@@ -388,6 +388,11 @@ class VicSteeringConfig(CadenceGaitPercentSteeringConfig):
     # speed and gait %, the HMV-Walk knee r reference). Envs commanded within 0.1 m/s of each gait_r_speeds value at the
     # natural cadence fill a stride-averaged curve per speed; every gait_r_window control steps the Pearson r against the
     # table is logged as env/vic_gait/{knee,ankle}_r_vXX and the accumulators restart.
+    # r_imp without the swing knee (2026-11-02, user-approved reward change, default off): the plant's passive knee
+    # stiffness along human swing angles (6-24 N m/rad, Silder 2007 exponentials) is above the human swing reference
+    # (0.5-3.5), so the knee term was a penalty no action could remove (W3 already leaves the swing knee out). The knee
+    # terms are weighted by 1 - swing weight of their leg in the joint mean.
+    v4_imp_skip_swing_knee: bool = False
     gait_r_table: str = ""
     gait_r_speeds: tuple = (0.8, 1.0, 1.4)
     gait_r_window: int = 600
@@ -671,10 +676,13 @@ class VicSteering(CadenceGaitPercentSteering):
         if len(env_ids):
             self._fresh[env_ids] = True
 
-    def pre_physics_extra_action(self, extra: Tensor, q_ref: Tensor):
+    def pre_physics_extra_action(self, extra: Tensor, q_ref: Tensor, teacher_q_ref: Tensor = None):
         """Called by the env each control step before physics, with the raw extra outputs and the
-        processed PD targets (common dof order)."""
+        processed PD targets (common dof order). teacher_q_ref (2026-11-02, feed-forward distillation, v4 only): the
+        PD targets the frozen fixed-PD teacher would set in the same state; _pre_physics_v4 then stores the torque the
+        teacher would apply minus this step's PD torque as the feed-forward target (self.distill_target)."""
         c = self.config
+        self._distill_q_ref = teacher_q_ref
         if not self._sim_ready:
             self._setup_sim()
         self._advance_schedule()
@@ -1062,6 +1070,10 @@ class VicSteering(CadenceGaitPercentSteering):
         self._write_gains()
         err = q_ref[:, self._idx] - q
         prior = (self._k_old - kp) * err - (self._b_old - kd) * qd
+        tq = getattr(self, "_distill_q_ref", None)
+        if tq is not None:      # feed-forward distillation target (control rate): teacher torque - this step's PD torque
+            tau_t = self._k_old * (tq[:, self._idx] - q) - self._b_old * qd
+            self.distill_target = tau_t - (kp * err - kd * qd + self.beta * prior)
         # 2026-11-01 (A2 ff pre-fill, logging only): the torque the final v4 gains (alpha 1) lack against the fixed PD at
         # this state; a feed-forward that outputs it makes alpha 1 / beta 0 torque-equal to the fixed-PD walker.
         self._v4_dtau = (self._k_old - k_act) * err - (self._b_old - b_act) * qd
@@ -1084,7 +1096,13 @@ class VicSteering(CadenceGaitPercentSteering):
         k_eff, b_eff = kp + k_pass, kd + b_pass
         out = vic4_dead_zone(torch.log(k_eff), lk_c, h)
         self._band = (out / math.log(2.0)).clamp(max=4.0).mean(-1)
-        self._imp = torch.exp(-((out / c.v4_imp_scale) ** 2).mean(-1))
+        if c.v4_imp_skip_swing_knee:
+            m = torch.ones_like(out)
+            kn = [i for i, j in enumerate(c.vic_joints) if j.endswith("Knee_y")]
+            m[:, kn] = 1.0 - w[:, kn, 0]
+            self._imp = torch.exp(-(m * (out / c.v4_imp_scale) ** 2).sum(-1) / m.sum(-1).clamp_min(1e-6))
+        else:
+            self._imp = torch.exp(-((out / c.v4_imp_scale) ** 2).mean(-1))
         self._cocon = self._v4_u.mean(-1)
         tau = kp * err - kd * qd + self.beta * prior + sim.vic_ff_res[:, self._idx]
         self._effort = ((tau / self._tau_max) ** 2).clamp(max=4.0).mean(-1)

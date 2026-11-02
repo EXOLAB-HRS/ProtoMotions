@@ -697,9 +697,15 @@ class BaseEnv:
         processed_action = action_dict["processed_action"]
         self._current_processed_action[:] = processed_action
         if extra is not None:
+            # Feed-forward distillation (2026-11-02): the agent may leave the frozen teacher's PD-target actions here.
+            t_act = getattr(self, "distill_teacher_action", None)
+            t_q = self._process_action(t_act, self.context)["processed_action"] if t_act is not None else None
             for component in self.control_manager.components.values():
                 if hasattr(component, "pre_physics_extra_action"):
-                    component.pre_physics_extra_action(extra, processed_action)
+                    if t_q is None:
+                        component.pre_physics_extra_action(extra, processed_action)
+                    else:
+                        component.pre_physics_extra_action(extra, processed_action, teacher_q_ref=t_q)
         if self.joint_reflex is not None:
             qd = self.simulator._get_simulator_dof_state().convert_to_common(self.simulator.data_conversion).dof_vel
             self.joint_reflex.control_step(processed_action, qd)

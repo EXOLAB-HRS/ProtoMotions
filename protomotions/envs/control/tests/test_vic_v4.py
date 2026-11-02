@@ -282,3 +282,34 @@ def test_training_metrics_ff_per_joint():
     out = self.log_values()
     assert abs(float(out["vic_support/ff_abs_knee"]) - 49.5) < 1e-3 and float(out["vic_support/ff_sat_knee"]) == 1.0
     assert float(out["vic_support/ff_abs_hip"]) == 0.0 and float(out["vic_support/ff_sat_ankle"]) == 0.0
+
+
+def test_distill_target_is_teacher_minus_student_torque():
+    """Feed-forward distillation (2026-11-02): with the teacher's PD targets given, the target is the fixed-PD torque
+    the teacher would apply in this state minus this step's PD torque (beta 0); adding it to the PD torque gives the
+    teacher torque."""
+    J = len(JOINTS)
+    self, sim = _stub(v4_late_anchor=False)
+    sim.load = torch.tensor([[1.0, 0.0]]).expand(4, 2)
+    tq = torch.full((4, J + 2), 0.3)
+    self._distill_q_ref = tq
+    _step4(self, sim, torch.zeros(4, J), fresh=True)
+    q, qd = sim.q[:, :J], sim.qd[:, :J]
+    kp, kd = sim._common_p_gains[:, :J], sim._common_d_gains[:, :J]
+    tau_s = kp * (0.0 - q) - kd * qd                                         # student q_ref = 0 in _step4
+    assert torch.allclose(tau_s + self.distill_target, self._k_old * (0.3 - q) - self._b_old * qd, atol=1e-4)
+
+
+def test_imp_skip_swing_knee():
+    """v4_imp_skip_swing_knee (2026-11-02): a knee whose passive stiffness alone is far above its swing range lowers
+    r_imp in swing unless the option is on; the other joints stay inside their ranges."""
+    J = len(JOINTS)
+    ki = [JOINTS.index("L_Knee_y"), JOINTS.index("R_Knee_y")]
+    for skip in (False, True):
+        self, sim = _stub(v4_late_anchor=False, v4_imp_skip_swing_knee=skip)
+        m = sim._human_joint_model
+        m.k_negative[ki] = 60.0
+        m.k_positive[ki] = 60.0
+        sim.load = torch.zeros(4, 2)                                         # both legs in swing
+        _step4(self, sim, torch.zeros(4, J), fresh=True)
+        assert (float(self._imp[0]) == pytest.approx(1.0, abs=1e-4)) == skip

@@ -253,6 +253,10 @@ class PPO(BaseAgent):
             "advantages"
         )  # Computed in pre_process_dataset
 
+        fd = self.config.ff_distill
+        if fd.weight > 0:     # feed-forward distillation target per VIC joint (2026-11-02)
+            self.experience_buffer.register_key("ff_target", shape=(fd.ff_rows[1] - fd.ff_rows[0],))
+
         if self.config.normalize_rewards:
             self.experience_buffer.register_key(
                 "unnormalized_value",
@@ -266,6 +270,46 @@ class PPO(BaseAgent):
     # -----------------------------
     # Environment Interaction Helpers
     # -----------------------------
+    # -----------------------------
+    # Feed-forward distillation (2026-11-02, candidate; config ff_distill, off by default)
+    # -----------------------------
+    def _ffd_setup(self):
+        """Frozen copy of the actor loaded from ff_distill.teacher_checkpoint (missing output rows zero-padded), and the
+        steering component that computes the target."""
+        import copy
+        fd = self.config.ff_distill
+        teacher = copy.deepcopy(self.model._actor)
+        state = torch.load(fd.teacher_checkpoint, map_location=self.device, weights_only=False)["model"]
+        own = teacher.state_dict()
+        sd = {}
+        for k, v in own.items():
+            src = state.get("_actor." + k)
+            if src is None:
+                raise KeyError(f"ff_distill teacher has no _actor.{k}")
+            if src.shape != v.shape:     # teacher with fewer action rows (59 PD targets): pad with zeros
+                pad = v.clone().zero_()
+                pad[tuple(slice(0, n) for n in src.shape)] = src
+                src = pad
+            sd[k] = src
+        teacher.load_state_dict(sd)
+        teacher.eval()
+        for prm in teacher.parameters():
+            prm.requires_grad_(False)
+        self._ffd_teacher = teacher
+        self._ffd_comp = next(c for c in self.env.control_manager.components.values() if hasattr(c, "pre_physics_extra_action"))
+        self._ffd_scale = None
+        log.info(f"ff_distill: teacher {fd.teacher_checkpoint}, weight {fd.weight}, rows {fd.ff_rows}")
+
+    def collect_rollout_step(self, obs_td: TensorDict, step):
+        output_td = super().collect_rollout_step(obs_td, step)
+        if self.config.ff_distill.weight > 0:
+            if not hasattr(self, "_ffd_teacher"):
+                self._ffd_setup()
+            with torch.no_grad():
+                t = self._ffd_teacher(obs_td.clone(recurse=False))
+            self.env.distill_teacher_action = t["mean_action"][..., : self.config.ff_distill.pd_rows]
+        return output_td
+
     def record_rollout_step(
         self,
         next_obs_td: TensorDict,
@@ -281,6 +325,11 @@ class PPO(BaseAgent):
         super().record_rollout_step(
             next_obs_td, actions, rewards, dones, terminated, done_indices, extras, step
         )
+        if self.config.ff_distill.weight > 0 and getattr(self._ffd_comp, "distill_target", None) is not None:
+            if self._ffd_scale is None:
+                c = self._ffd_comp
+                self._ffd_scale = (c.config.tau_res_scale * c._tau_max).detach().clone()
+            self.experience_buffer.update_data("ff_target", step, self._ffd_comp.distill_target / self._ffd_scale)
 
         # Use model forward to get next value
         next_output_td = self.model._critic(next_obs_td)
@@ -492,6 +541,17 @@ class PPO(BaseAgent):
         """
         extra_loss = torch.tensor(0.0, device=self.device)
         log_dict = {}
+
+        # --- feed-forward distillation (2026-11-02) ---
+        fd = self.config.ff_distill
+        if fd.weight > 0 and "ff_target" in batch_td.keys():
+            r0, r1 = fd.ff_rows
+            pred = torch.tanh(batch_td["mean_action"][:, r0:r1])        # tau_ff / cap, as the steering applies it
+            tgt = batch_td["ff_target"].clamp(-1.0, 1.0)
+            ffd = ((pred - tgt) ** 2).mean()
+            extra_loss = extra_loss + fd.weight * ffd
+            log_dict["actor/ff_distill_mse"] = ffd.detach()
+            log_dict["actor/ff_distill_r2"] = (1 - ((pred - tgt) ** 2).sum() / ((tgt - tgt.mean(0)) ** 2).sum().clamp_min(1e-9)).detach()
 
         # --- L2C2 ---
         if self.config.l2c2.enabled:

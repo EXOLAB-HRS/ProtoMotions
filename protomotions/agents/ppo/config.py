@@ -133,6 +133,18 @@ class L2C2Config:
 
 
 @dataclass
+class FFDistillConfig:
+    """Feed-forward distillation (2026-11-02, candidate, off by default): a frozen fixed-PD teacher actor runs on the
+    same observations each control step; the env stores (teacher PD torque - this step's PD torque) per VIC joint and the
+    actor's feed-forward outputs are pulled toward it, in units of the feed-forward cap, by weight * mean squared error."""
+
+    weight: float = field(default=0.0, metadata={"help": "Loss weight; 0 = off."})
+    teacher_checkpoint: str = field(default="", metadata={"help": "Checkpoint whose actor is the frozen teacher (its output rows are zero-padded to the student's)."})
+    ff_rows: tuple = field(default=(69, 79), metadata={"help": "Student action rows of the feed-forward outputs (start, end)."})
+    pd_rows: int = field(default=59, metadata={"help": "Number of PD-target action rows the teacher sets."})
+
+
+@dataclass
 class PPOAgentConfig(BaseAgentConfig):
     """Main configuration class for PPO Agent."""
 
@@ -155,6 +167,11 @@ class PPOAgentConfig(BaseAgentConfig):
     entropy_coef: float = field(
         default=0.005,
         metadata={"help": "Entropy bonus coefficient for learnable std exploration."},
+    )
+
+    # Feed-forward distillation from a frozen teacher (2026-11-02)
+    ff_distill: FFDistillConfig = field(
+        default_factory=FFDistillConfig, metadata={"help": "Feed-forward distillation settings."}
     )
 
     # L2C2 regularization
