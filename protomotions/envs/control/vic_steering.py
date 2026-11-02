@@ -958,10 +958,12 @@ class VicSteering(CadenceGaitPercentSteering):
         self._gr_steps += 1
         if self._gr_steps >= c.gait_r_window:
             for i, v in enumerate(c.gait_r_speeds):
-                if self._gr_cnt[i].min() < c.gait_r_min_count:
+                ok = self._gr_cnt[i] >= c.gait_r_min_count     # gait % 100 is rarely sampled (next onset resets it)
+                if ok.sum() < 90:
                     continue
-                cur = self._gr_sum[i] / self._gr_cnt[i][:, None]
-                a, b = cur - cur.mean(0), self._gr_ref[i] - self._gr_ref[i].mean(0)
+                cur = self._gr_sum[i][ok] / self._gr_cnt[i][ok][:, None]
+                ref = self._gr_ref[i][ok]
+                a, b = cur - cur.mean(0), ref - ref.mean(0)
                 r = (a * b).sum(0) / ((a * a).sum(0) * (b * b).sum(0)).sqrt().clamp_min(1e-9)
                 tag = f"v{int(round(v * 10)):02d}"
                 self._gr_last[f"vic_gait/knee_r_{tag}"] = r[0].reshape(1)
