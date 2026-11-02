@@ -237,3 +237,34 @@ def test_training_metrics_gait_events():
     assert abs(float(out["vic_gait/knee_swing_peak_deg"]) - 60.0) < 1e-3
     assert abs(float(out["vic_gait/ankle_swing_dorsi_deg"]) - 6.0) < 1e-3
     assert 0.0 <= float(out["vic_support/prior_share"]) <= 1.0 and 0.0 <= float(out["vic_support/ff_share"]) <= 1.0
+
+
+def test_gait_r_metrics_fukuchi_replay():
+    """Gait-curve r (2026-11-02): replaying the Fukuchi 1.0 m/s mean curve gives knee / ankle r ~ 1 at v10; a
+    half-stride phase shift gives a much lower knee r."""
+    from pathlib import Path
+    table = Path(__file__).resolve().parents[5] / "share/human_ref/fukuchi2018_knee_ankle_by_speed.pt"
+    if not table.exists():
+        import pytest
+        pytest.skip(f"{table} missing")
+    t = torch.load(table, weights_only=False)
+    ref = t["mean"][int((t["speeds"] - 1.0).abs().argmin())]           # [101, 2]
+
+    def run(shift):
+        self, _ = _stub(n=2, gait_r_table=str(table), gait_r_window=101, gait_r_min_count=1)
+        self._leg_onset = torch.zeros(2, 2)
+        self._leg_stride = torch.full((2, 2), 100.0)
+        self._leg_strides = torch.full((2, 2), 3, dtype=torch.long)
+        self.target_ratio = lambda: torch.ones(2)
+        self.config.max_stride_s = 1e9
+        out = {}
+        for p in range(101):
+            self.env.progress_buf = torch.full((2,), p)
+            k = ref[(p + shift) % 101]
+            out = self._gait_r_metrics(k[0].expand(2, 2).clone(), k[1].expand(2, 2).clone())
+        return out
+
+    out = run(0)
+    assert float(out["vic_gait/knee_r_v10"]) > 0.999 and float(out["vic_gait/ankle_r_v10"]) > 0.999
+    assert "vic_gait/knee_r_v08" not in out and abs(float(out["vic_gait/knee_r_min"]) - float(out["vic_gait/knee_r_v10"])) < 1e-6
+    assert float(run(50)["vic_gait/knee_r_v10"]) < 0.5

@@ -384,6 +384,14 @@ class VicSteeringConfig(CadenceGaitPercentSteeringConfig):
     # beta (k_old - k_p), beta (b_old - k_d) and dynamics._vic_prior_substep applies them with each substep's error, so
     # beta = 1 equals the fixed PD instead of a torque held for the control step (v4 law only).
     v4_prior_substep: bool = False
+    # Training-time gait-curve correlation (2026-11-02, logging only, empty = off): Fukuchi table (knee / ankle mean by
+    # speed and gait %, the HMV-Walk knee r reference). Envs commanded within 0.1 m/s of each gait_r_speeds value at the
+    # natural cadence fill a stride-averaged curve per speed; every gait_r_window control steps the Pearson r against the
+    # table is logged as env/vic_gait/{knee,ankle}_r_vXX and the accumulators restart.
+    gait_r_table: str = ""
+    gait_r_speeds: tuple = (0.8, 1.0, 1.4)
+    gait_r_window: int = 600
+    gait_r_min_count: int = 20
 
 
 class VicSteering(CadenceGaitPercentSteering):
@@ -922,7 +930,47 @@ class VicSteering(CadenceGaitPercentSteering):
         out["vic_support/ff_share"] = (ff.sum(-1) / tot).mean().reshape(1)
         out["vic_support/alpha"] = torch.tensor([self.alpha], device=q.device)
         out["vic_support/beta"] = torch.tensor([self.beta], device=q.device)
+        if self.config.gait_r_table:
+            out.update(self._gait_r_metrics(knee, dorsi))
         self._train_metrics = out
+
+    def _gait_r_metrics(self, knee, dorsi):
+        """Stride-averaged knee / ankle curves vs the Fukuchi table (config gait_r_*; env/vic_gait/*_r_vXX)."""
+        c, dev = self.config, knee.device
+        if not hasattr(self, "_gr_sum"):
+            t = torch.load(c.gait_r_table, map_location=dev, weights_only=False)
+            si = [int((t["speeds"] - v).abs().argmin()) for v in c.gait_r_speeds]
+            self._gr_ref = t["mean"][si].to(dev).float()                       # [S, 101, 2] knee, ankle (deg)
+            self._gr_sum = torch.zeros(len(si), 101, 2, device=dev)
+            self._gr_cnt = torch.zeros(len(si), 101, device=dev)
+            self._gr_steps, self._gr_last = 0, {}
+        now = self.env.progress_buf.float()[:, None]
+        pct = (now - self._leg_onset) / self._leg_stride.clamp_min(1.)
+        ok = (self._leg_strides >= 2) & (pct <= 1.0) & (self._leg_stride * self.env.dt <= c.max_stride_s)
+        ok &= ((self.target_ratio() - 1).abs() < 0.05)[:, None]
+        p = (pct.clamp(0, 1) * 100).round().long()
+        val = torch.stack([knee, dorsi], -1)                                   # [N, 2 legs, 2 joints]
+        for i, v in enumerate(c.gait_r_speeds):
+            m = ok & ((self._tar_speed - v).abs() < 0.1)[:, None]
+            if m.any():
+                self._gr_sum[i].index_add_(0, p[m], val[m])
+                self._gr_cnt[i].index_add_(0, p[m], torch.ones_like(p[m], dtype=torch.float))
+        self._gr_steps += 1
+        if self._gr_steps >= c.gait_r_window:
+            for i, v in enumerate(c.gait_r_speeds):
+                if self._gr_cnt[i].min() < c.gait_r_min_count:
+                    continue
+                cur = self._gr_sum[i] / self._gr_cnt[i][:, None]
+                a, b = cur - cur.mean(0), self._gr_ref[i] - self._gr_ref[i].mean(0)
+                r = (a * b).sum(0) / ((a * a).sum(0) * (b * b).sum(0)).sqrt().clamp_min(1e-9)
+                tag = f"v{int(round(v * 10)):02d}"
+                self._gr_last[f"vic_gait/knee_r_{tag}"] = r[0].reshape(1)
+                self._gr_last[f"vic_gait/ankle_r_{tag}"] = r[1].reshape(1)
+            ks = [x for k, x in self._gr_last.items() if "knee_r" in k]
+            if ks:
+                self._gr_last["vic_gait/knee_r_min"] = torch.cat(ks).min().reshape(1)
+            self._gr_sum.zero_(); self._gr_cnt.zero_(); self._gr_steps = 0
+        return self._gr_last
 
     def log_values(self):
         """Per-step training metrics for env.extras (env/vic_gait/*, env/vic_support/*; v4 law only)."""
