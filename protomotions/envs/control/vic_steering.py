@@ -968,7 +968,7 @@ class VicSteering(CadenceGaitPercentSteering):
                 tag = f"v{int(round(v * 10)):02d}"
                 self._gr_last[f"vic_gait/knee_r_{tag}"] = r[0].reshape(1)
                 self._gr_last[f"vic_gait/ankle_r_{tag}"] = r[1].reshape(1)
-            ks = [x for k, x in self._gr_last.items() if "knee_r" in k]
+            ks = [x for k, x in self._gr_last.items() if k.startswith("vic_gait/knee_r_v")]
             if ks:
                 self._gr_last["vic_gait/knee_r_min"] = torch.cat(ks).min().reshape(1)
             self._gr_sum.zero_(); self._gr_cnt.zero_(); self._gr_steps = 0
