@@ -12,7 +12,10 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""vic4_TC_s5_from-ffdv33r2e453_ankstrike_r1 (stage 2, local, 2026-11-03; user: "전부 다 적용해서 진행하자"): from
+"""WITHDRAWN 2026-11-03 16:40 (server check: the -1 deg target is a Fukuchi absolute angle; with the standing pose
+removed the ankle already matches people). Kept for the stopped run; use ..._from_ffdv33r2e453_unfreeze_r1.
+
+vic4_TC_s5_from-ffdv33r2e453_ankstrike_r1 (stage 2, local, 2026-11-03; user: "전부 다 적용해서 진행하자"): from
 vic4c_TC_s5_from-ffdistillv33r1_r2 epoch_453 (plant v3.3, first W2 v5 + W3 pass of the series), the server's stage-2 law
 vic4_TC_s5_from-s5_ffdistill_r1 (stiffness outputs unfrozen, alpha 1 / beta 0, feed-forward distillation from the frozen
 se-v1-s5, swing knee out of r_imp) plus one reward term:
