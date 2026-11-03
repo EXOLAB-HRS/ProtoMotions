@@ -106,6 +106,7 @@ def _stub(n=4, k_pass=0.0, **kw):
     self._tau_max = torch.full((J,), 150.0)
     self._tar_speed = torch.full((n,), 1.0)
     self.alpha, self.beta = 1.0, 0.0
+    self._beta_hold_m = torch.zeros(J)   # beta_hold_joints off (set in __init__ since 7627295)
     self._gain_log_path = None
     self._write_gains = lambda: None
     self._log = lambda: None
