@@ -283,6 +283,11 @@ class VicSteeringConfig(CadenceGaitPercentSteeringConfig):
     beta_decay: bool = True
     alpha_init: float = 0.0
     beta_init: float = 1.0
+    # 2026-11-03 candidate (vic_TC day run B): joints in beta_hold_joints keep beta_hold instead of the global beta (e.g.
+    # the sagittal knees at 0.2: beta <= 0.1 collapsed the 1.4 m/s knee, beta 0.2 kept it; hip / ankle go to beta 0).
+    # Default () = every joint uses the global beta (earlier runs unchanged).
+    beta_hold_joints: tuple = ()
+    beta_hold: float = 0.0
     schedule: bool = True
     fall_ratio_tol: float = 1.5
     fall_abs_tol: float = 0.0005
@@ -451,6 +456,8 @@ class VicSteering(CadenceGaitPercentSteering):
         self._delta = torch.zeros(n, J, device=dev)            # lowpassed delta (delta_lowpass_s)
         self.alpha = float(c.alpha_init)
         self.beta = float(c.beta_init)
+        self._beta_hold_m = torch.tensor([1.0 if j in tuple(c.beta_hold_joints) else 0.0 for j in c.vic_joints], device=dev)
+        assert set(c.beta_hold_joints) <= set(c.vic_joints), c.beta_hold_joints
         self._steps = 0
         self._fall_base = None
         self._fall_sum = 0.0
@@ -492,6 +499,10 @@ class VicSteering(CadenceGaitPercentSteering):
             self._init_v4(n, dev, ranges)
         elif c.vic_law != "v2":
             raise ValueError(f"vic_law must be v2, v3 or v4, got {c.vic_law}")
+
+    def _bv(self):
+        """Per-joint beta [J]: the global beta, beta_hold on beta_hold_joints (2026-11-03)."""
+        return self.beta * (1.0 - self._beta_hold_m) + float(self.config.beta_hold) * self._beta_hold_m
 
     def _init_v4(self, n, dev, ranges):
         c = self.config
@@ -748,7 +759,7 @@ class VicSteering(CadenceGaitPercentSteering):
         q, qd = dof.dof_pos[:, self._idx], dof.dof_vel[:, self._idx]
         err = q_ref[:, self._idx] - q
         prior = (self._k_old - kp) * err - (self._b_old - kd) * qd
-        sim.vic_ff_prior[:, self._idx] = self.beta * prior
+        sim.vic_ff_prior[:, self._idx] = self._bv() * prior
         sim.vic_ff_res_target[:, self._idx] = tau_res
         reset_now = self.env.progress_buf <= 1
         if reset_now.any():
@@ -757,7 +768,7 @@ class VicSteering(CadenceGaitPercentSteering):
         dev_ = (self._lk + delta) - lk_t
         self._band = (torch.relu(dev_.abs() - self._half[jj, state]) / math.log(2.0)).clamp(max=4.0).mean(-1)
         self._cocon = (torch.relu(delta / self._dmax.clamp_min(1e-6)) if c.coact_unit_cost else torch.relu(delta)).mean(-1)
-        tau = kp * err - kd * qd + self.beta * prior + sim.vic_ff_res[:, self._idx]
+        tau = kp * err - kd * qd + self._bv() * prior + sim.vic_ff_res[:, self._idx]
         self._effort = ((tau / self._tau_max) ** 2).clamp(max=4.0).mean(-1)
         p = (tau * qd)[:, self._sag]
         self._metab = (p.clamp(min=0).sum(-1) / 0.25 + (-p).clamp(min=0).sum(-1) / 1.20) / self._bw
@@ -836,7 +847,7 @@ class VicSteering(CadenceGaitPercentSteering):
         self._write_gains()
         err = q_ref[:, self._idx] - q
         prior = (self._k_old - kp) * err - (self._b_old - kd) * qd
-        sim.vic_ff_prior[:, self._idx] = self.beta * prior
+        sim.vic_ff_prior[:, self._idx] = self._bv() * prior
         if c.v3_motor_noise > 0:
             a_n = math.exp(-dt / c.v3_motor_noise_tau_s)
             xi = torch.randn_like(self._v3_noise)
@@ -880,7 +891,7 @@ class VicSteering(CadenceGaitPercentSteering):
             self._cocon = (kc / (self._v3_c * self._tau_max)).mean(-1)
         else:
             self._cocon = u.mean(-1)
-        tau = kp * err - kd * qd + self.beta * prior + sim.vic_ff_res[:, self._idx]
+        tau = kp * err - kd * qd + self._bv() * prior + sim.vic_ff_res[:, self._idx]
         if c.v3_coact_cost == "activation":
             r_net = (tau / self._tau_max).clamp(-2.0, 2.0)
             r_all = (tau.abs() + kc / self._v3_c) / self._tau_max
@@ -934,8 +945,8 @@ class VicSteering(CadenceGaitPercentSteering):
         self._gm_kmax_prev, self._gm_amax_prev = self._gm_kmax.clone(), self._gm_amax.clone()
         s = self._gm_sag
         pd = (kp * err - kd * qd)[:, s].abs()
-        pr = (self.beta * prior)[:, s].abs() if not self.config.v4_prior_substep else \
-            (self.beta * ((self._k_old - kp) * err - (self._b_old - kd) * qd))[:, s].abs()
+        pr = (self._bv() * prior)[:, s].abs() if not self.config.v4_prior_substep else \
+            (self._bv() * ((self._k_old - kp) * err - (self._b_old - kd) * qd))[:, s].abs()
         ff = self.env.simulator.vic_ff_res[:, self._idx][:, s].abs()
         tot = (pd + pr + ff).sum(-1).clamp_min(1e-6)
         out["vic_support/prior_share"] = (pr.sum(-1) / tot).mean().reshape(1)
@@ -1102,17 +1113,17 @@ class VicSteering(CadenceGaitPercentSteering):
         tq = getattr(self, "_distill_q_ref", None)
         if tq is not None:      # feed-forward distillation target (control rate): teacher torque - this step's PD torque
             tau_t = self._k_old * (tq[:, self._idx] - q) - self._b_old * qd
-            self.distill_target = tau_t - (kp * err - kd * qd + self.beta * prior)
+            self.distill_target = tau_t - (kp * err - kd * qd + self._bv() * prior)
         # 2026-11-01 (A2 ff pre-fill, logging only): the torque the final v4 gains (alpha 1) lack against the fixed PD at
         # this state; a feed-forward that outputs it makes alpha 1 / beta 0 torque-equal to the fixed-PD walker.
         self._v4_dtau = (self._k_old - k_act) * err - (self._b_old - b_act) * qd
         self._v4_training_metrics(wl, q, err, qd, kp, kd, prior, fresh)
         if c.v4_prior_substep:
-            sim.vic_prior_kgap[:, self._idx] = self.beta * (self._k_old - kp)
-            sim.vic_prior_bgap[:, self._idx] = self.beta * (self._b_old - kd)
+            sim.vic_prior_kgap[:, self._idx] = self._bv() * (self._k_old - kp)
+            sim.vic_prior_bgap[:, self._idx] = self._bv() * (self._b_old - kd)
             sim.vic_ff_prior[:, self._idx] = 0.0
         else:
-            sim.vic_ff_prior[:, self._idx] = self.beta * prior
+            sim.vic_ff_prior[:, self._idx] = self._bv() * prior
         sim.vic_ff_res_target[:, self._idx] = tau_res
         reset_now = self.env.progress_buf <= 1
         if reset_now.any():
@@ -1133,7 +1144,7 @@ class VicSteering(CadenceGaitPercentSteering):
         else:
             self._imp = torch.exp(-((out / c.v4_imp_scale) ** 2).mean(-1))
         self._cocon = self._v4_u.mean(-1)
-        tau = kp * err - kd * qd + self.beta * prior + sim.vic_ff_res[:, self._idx]
+        tau = kp * err - kd * qd + self._bv() * prior + sim.vic_ff_res[:, self._idx]
         self._effort = ((tau / self._tau_max) ** 2).clamp(max=4.0).mean(-1)
         pw = (tau * qd)[:, self._sag]
         self._metab = (pw.clamp(min=0).sum(-1) / 0.25 + (-pw).clamp(min=0).sum(-1) / 1.20) / self._bw
