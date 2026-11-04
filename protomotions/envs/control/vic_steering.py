@@ -408,6 +408,7 @@ class VicSteeringConfig(CadenceGaitPercentSteeringConfig):
     v4_kc_speed_ref: float = 1.0
     v4_kc_speed_clip: tuple = (0.6, 1.6)
     v4_kc_speed_tau_s: float = 0.3
+    v4_kc_speed_damp: bool = False       # also move the damping centre by alpha_j x the stiffness shift (2026-11-04)
     gait_r_table: str = ""
     gait_r_speeds: tuple = (0.8, 1.0, 1.4)
     gait_r_window: int = 600
@@ -1096,9 +1097,15 @@ class VicSteering(CadenceGaitPercentSteering):
             tv = self._tar_speed.to(lk_c.dtype)
             self._v4_vs = torch.where(fresh, tv, self._v4_vs + gv * (tv - self._v4_vs))
             lv = torch.log(self._v4_vs.clamp(*c.v4_kc_speed_clip) / c.v4_kc_speed_ref)
-            lk_c = lk_c + w[..., 1] * self._v4_gam * lv[:, None]
+            kshift = w[..., 1] * self._v4_gam * lv[:, None]
+            lk_c = lk_c + kshift
         lb_c = vic4_blend(w, self._v4_lb)
         lb_lo, lb_hi = vic4_blend(w, self._v4_lb_lo), vic4_blend(w, self._v4_lb_hi)
+        if c.v4_kc_speed_gamma and c.v4_kc_speed_damp:
+            # 2026-11-04: the damping centre and its clamp move by alpha_j * the stiffness-centre shift, the law's own
+            # k-b coupling, so the speed scaling does not lower the damping ratio (zeta ~ b / sqrt(k)).
+            bshift = self._v4_alpha * kshift
+            lb_c, lb_lo, lb_hi = lb_c + bshift, lb_lo + bshift, lb_hi + bshift
         # Action: activation-like filter on a (as v2), then the total stiffness inside twice the human range.
         if c.delta_tau_up_s > 0 and c.delta_tau_down_s > 0:
             up = 1.0 - math.exp(-dt / c.delta_tau_up_s)

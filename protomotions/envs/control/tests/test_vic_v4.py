@@ -349,3 +349,22 @@ def test_kc_speed_centre_moves_in_stance_only():
     _step4(self, sim, torch.zeros(4, J), fresh=True)       # tar_speed 1.0 = v_ref
     assert torch.allclose(self._lk, out["off"], atol=1e-5)
     assert vs.VicSteeringConfig().v4_kc_speed_gamma == {}
+
+
+def test_kc_speed_damp_moves_damping_by_alpha():
+    """v4_kc_speed_damp (2026-11-04): with the speed centre on, ln b moves by alpha_j x the ln k shift (default off: b fixed)."""
+    J = len(JOINTS)
+    gam = {"Knee_y": 0.87, "Ankle_y": 0.52}
+    lb = {}
+    for tag, kw in (("off", {}), ("k", {"v4_kc_speed_gamma": gam}), ("kb", {"v4_kc_speed_gamma": gam, "v4_kc_speed_damp": True})):
+        self, sim = _stub(v4_late_anchor=False, v4_band_margin=1.0, **kw)
+        sim.load = torch.tensor([[1.0, 1.0]]).expand(4, 2)
+        self._tar_speed = torch.full((4,), 1.4)
+        _step4(self, sim, torch.zeros(4, J), fresh=True)
+        lb[tag] = self._lb.clone()
+    assert torch.allclose(lb["k"], lb["off"], atol=1e-5)
+    for i, j in enumerate(JOINTS):
+        g = next((v for k, v in gam.items() if j.endswith(k)), 0.0)
+        d = float((lb["kb"][:, i] - lb["off"][:, i]).mean())
+        assert abs(d - float(self._v4_alpha[i]) * g * math.log(1.4)) < 1e-4, (j, d)
+    assert vs.VicSteeringConfig().v4_kc_speed_damp is False
