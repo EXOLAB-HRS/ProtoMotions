@@ -398,6 +398,16 @@ class VicSteeringConfig(CadenceGaitPercentSteeringConfig):
     # (0.5-3.5), so the knee term was a penalty no action could remove (W3 already leaves the swing knee out). The knee
     # terms are weighted by 1 - swing weight of their leg in the joint mean.
     v4_imp_skip_swing_knee: bool = False
+    # Speed-dependent stance reference centre (2026-11-04, user-approved "속도별 강성 기준", default off = {}): in stance,
+    # ln k_c += w_stance * gamma_j * ln(v_s / v4_kc_speed_ref), v_s = commanded speed lowpassed (v4_kc_speed_tau_s) and
+    # clipped to v4_kc_speed_clip. gamma by joint suffix (e.g. {"Hip_y": 0.64, "Knee_y": 0.87, "Ankle_y": 0.52}): power-law
+    # exponent of stance quasi-stiffness vs speed, WBDS (Fukuchi 2018) sagittal moments vs angles 0.6-1.6 m/s (hip angle from
+    # Lencioni 2019); only the ratio is used, quasi-stiffness is not impedance. Range half width h and swing / standing
+    # centres unchanged; the hard limit (v4_band_margin) moves with the centre.
+    v4_kc_speed_gamma: dict = field(default_factory=dict)
+    v4_kc_speed_ref: float = 1.0
+    v4_kc_speed_clip: tuple = (0.6, 1.6)
+    v4_kc_speed_tau_s: float = 0.3
     gait_r_table: str = ""
     gait_r_speeds: tuple = (0.8, 1.0, 1.4)
     gait_r_window: int = 600
@@ -1077,6 +1087,16 @@ class VicSteering(CadenceGaitPercentSteering):
             lk_tab[..., 1] = (1 - ell) * lk_tab[..., 1] + ell * self._v4_late[0]
             h_tab[..., 1] = (1 - ell) * h_tab[..., 1] + ell * self._v4_late[1]
         lk_c, h = (w * lk_tab).sum(-1), (w * h_tab).sum(-1)
+        if c.v4_kc_speed_gamma:
+            if getattr(self, "_v4_gam", None) is None:
+                self._v4_gam = torch.tensor([float(next((g for k, g in c.v4_kc_speed_gamma.items() if j.endswith(k)), 0.0))
+                                             for j in c.vic_joints], device=lk_c.device, dtype=lk_c.dtype)
+                self._v4_vs = self._tar_speed.clone().to(lk_c.dtype)
+            gv = 1.0 - math.exp(-dt / max(c.v4_kc_speed_tau_s, 1e-6))
+            tv = self._tar_speed.to(lk_c.dtype)
+            self._v4_vs = torch.where(fresh, tv, self._v4_vs + gv * (tv - self._v4_vs))
+            lv = torch.log(self._v4_vs.clamp(*c.v4_kc_speed_clip) / c.v4_kc_speed_ref)
+            lk_c = lk_c + w[..., 1] * self._v4_gam * lv[:, None]
         lb_c = vic4_blend(w, self._v4_lb)
         lb_lo, lb_hi = vic4_blend(w, self._v4_lb_lo), vic4_blend(w, self._v4_lb_hi)
         # Action: activation-like filter on a (as v2), then the total stiffness inside twice the human range.

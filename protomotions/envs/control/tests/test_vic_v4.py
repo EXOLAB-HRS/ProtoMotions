@@ -106,7 +106,7 @@ def _stub(n=4, k_pass=0.0, **kw):
     self._tau_max = torch.full((J,), 150.0)
     self._tar_speed = torch.full((n,), 1.0)
     self.alpha, self.beta = 1.0, 0.0
-    self._beta_hold_m = torch.zeros(J)   # beta_hold_joints off (set in __init__ since 7627295)
+    self._beta_hold_m = torch.zeros(J)       # beta_hold (2026-11-03) is off in these tests
     self._gain_log_path = None
     self._write_gains = lambda: None
     self._log = lambda: None
@@ -316,3 +316,36 @@ def test_imp_skip_swing_knee():
         sim.load = torch.zeros(4, 2)                                         # both legs in swing
         _step4(self, sim, torch.zeros(4, J), fresh=True)
         assert (float(self._imp[0]) == pytest.approx(1.0, abs=1e-4)) == skip
+
+
+def test_kc_speed_centre_moves_in_stance_only():
+    """v4_kc_speed_gamma (2026-11-04): at a = 0 the stance centre scales as (v / v_ref)^gamma for the listed joints, other
+    joints and the swing centre stay; v = v_ref leaves everything unchanged; default is off."""
+    J = len(JOINTS)
+    gam = {"Knee_y": 0.87, "Ankle_y": 0.52}
+    out = {}
+    for tag, kw, load in (("off", {}, 1.0), ("on", {"v4_kc_speed_gamma": gam}, 1.0), ("swing", {"v4_kc_speed_gamma": gam}, 0.0)):
+        self, sim = _stub(v4_late_anchor=False, v4_band_margin=1.0, **kw)
+        sim.load = torch.tensor([[load, load]]).expand(4, 2)
+        self._tar_speed = torch.full((4,), 1.4)
+        _step4(self, sim, torch.zeros(4, J), fresh=True)
+        out[tag] = self._lk.clone()
+    self, sim = _stub(v4_late_anchor=False, v4_band_margin=1.0)
+    sim.load = torch.tensor([[0.0, 0.0]]).expand(4, 2)
+    self._tar_speed = torch.full((4,), 1.4)
+    _step4(self, sim, torch.zeros(4, J), fresh=True)
+    swing_off = self._lk.clone()
+    for i, j in enumerate(JOINTS):
+        g = next((v for k, v in gam.items() if j.endswith(k)), 0.0)
+        d = float((out["on"][:, i] - out["off"][:, i]).mean())
+        k_tot_shift = math.log(1.4) * g
+        if g == 0.0:
+            assert abs(d) < 1e-5, (j, d)
+        else:   # ln k_act moves by at least the centre shift (k_pass = 0 here, so exactly)
+            assert abs(d - k_tot_shift) < 1e-4, (j, d, k_tot_shift)
+    assert torch.allclose(out["swing"], swing_off, atol=1e-5)
+    self, sim = _stub(v4_late_anchor=False, v4_band_margin=1.0, v4_kc_speed_gamma=gam)
+    sim.load = torch.tensor([[1.0, 1.0]]).expand(4, 2)
+    _step4(self, sim, torch.zeros(4, J), fresh=True)       # tar_speed 1.0 = v_ref
+    assert torch.allclose(self._lk, out["off"], atol=1e-5)
+    assert vs.VicSteeringConfig().v4_kc_speed_gamma == {}

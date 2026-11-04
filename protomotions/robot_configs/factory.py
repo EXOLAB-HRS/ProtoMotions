@@ -69,6 +69,9 @@ def robot_config(robot_name: str, **updates) -> RobotConfig:
     elif robot_name in ("human_model_v3.3", "human_model_v3_3"):
         from protomotions.robot_configs.human_model.human_model_v3_3.model_config import robot_config as v33_config
         config = v33_config()
+    elif robot_name in ("human_model_v3.4", "human_model_v3_4"):
+        from protomotions.robot_configs.human_model.human_model_v3_4.model_config import robot_config as v34_config
+        config = v34_config()
     elif robot_name == "soma23":
         from protomotions.robot_configs.soma23 import Soma23RobotConfig
 
