@@ -507,6 +507,7 @@ class VicSteering(CadenceGaitPercentSteering):
         self._gain_log_path = os.environ.get("HC_VIC_GAIN_LOG")
         self._gain_log = []
         self._u_log = []                                       # vic_tc_v2: filtered co-activation level u [T, N, J]
+        self._qref_log = []                                    # v4: leg q_ref before / after v4_qref_lowpass_hz [T, 2, N, J]
         if self._gain_log_path:
             atexit.register(self._dump_gain_log)
         if c.vic_law == "v3":
@@ -641,6 +642,9 @@ class VicSteering(CadenceGaitPercentSteering):
                 extra.update(k_ref=v[:, 5], k_lo=v[:, 6], k_hi=v[:, 7], b_lo=v[:, 8], b_hi=v[:, 9])
             if v.shape[1] >= 12:    # 2026-11-01 (A2 ffx): feed-forward residual torque tau_res (lowpassed, N m) and PD torque
                 extra.update(tau_ff=v[:, 10], tau_pd=v[:, 11])
+        if self._qref_log:
+            q = torch.stack(self._qref_log[:len(a)], 0).numpy()                    # [T, 2, N, J]
+            extra.update(qref_raw=q[:, 0], qref=q[:, 1])
         np.savez_compressed(self._gain_log_path, kp=a[:, 0], kd=a[:, 1], delta=a[:, 2], state=a[:, 3].astype("int8"),
                             joints=np.array(self.config.vic_joints), dt=float(self.env.dt), **extra)
 
@@ -1073,11 +1077,14 @@ class VicSteering(CadenceGaitPercentSteering):
         f2 = fresh[:, None]
         if c.v4_freeze_a:
             unit = torch.zeros_like(unit)
+        raw_log = q_ref[:, self._idx].float().clone() if self._gain_log_path else None
         if c.v4_qref_lowpass_hz > 0:     # in place: q_ref is the processed action the env passes to simulator.step
             raw = q_ref[:, self._idx]
             g = 1.0 - math.exp(-2.0 * math.pi * c.v4_qref_lowpass_hz * dt)
             self._qref_lp = torch.where(f2, raw, self._qref_lp + g * (raw - self._qref_lp))
             q_ref[:, self._idx] = self._qref_lp
+        if raw_log is not None:      # 2026-11-05 (1-b evaluation): q_ref step-change RMS, filter cancelling check
+            self._qref_log.append(torch.stack([raw_log, q_ref[:, self._idx].float()], 0).cpu())
         # Continuous leg-state weights.
         load = self._v4_leg_load(contact)
         g = 1.0 - math.exp(-dt / max(c.v4_load_tau_s, 1e-6))
