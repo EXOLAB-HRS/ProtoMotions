@@ -387,3 +387,24 @@ def test_qref_lowpass_filters_leg_targets_in_place():
     q2 = torch.full((n, J + 2), 5.0)
     self._pre_physics_v4(q2, torch.zeros(n, J), torch.zeros(n, J), None, torch.full((n,), 1.0), torch.full((n,), True))
     assert torch.all(q2 == 5.0)
+
+
+def test_preact_raises_swing_stiffness_late_in_swing_only():
+    """v4_preact_joints (2026-11-05 candidate): off by default; on, the knee swing centre moves to the stance centre over
+    the last part of the swing (progress v4_preact_p of the running swing duration), early swing unchanged."""
+    J = len(JOINTS)
+    assert vs.VicSteeringConfig().v4_preact_joints == ()
+    kn = [i for i, j in enumerate(JOINTS) if j.endswith("Knee_y")]
+    def run(**kw):
+        self, sim = _stub(v4_late_anchor=False, **kw)
+        sim.load = torch.zeros(4, 2)                                                  # both legs in swing
+        out = []
+        for i in range(13):
+            kp, _ = _step4(self, sim, torch.zeros(4, J), fresh=(i == 0))
+            out.append(kp[0, kn].clone())
+        return out, self
+    base, _ = run()
+    pre, self = run(v4_preact_joints=("Knee_y",), v4_preact_p=(0.5, 1.0), v4_swing_T0_s=0.4)
+    assert torch.allclose(pre[3], base[3])                                           # 0.1 s of 0.4: before the ramp
+    assert torch.all(pre[12] > 5 * base[12])                                         # 0.4 s: at the stance centre
+    assert torch.allclose(pre[12], self._v4_lk[kn, 1].exp(), rtol=1e-3)

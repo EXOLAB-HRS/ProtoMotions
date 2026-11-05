@@ -414,6 +414,15 @@ class VicSteeringConfig(CadenceGaitPercentSteeringConfig):
     # step. q_ref then carries only slow intent; fast deviations are answered by k (and tau_ff), so the stiffness gets a
     # learning signal of its own instead of being traded against q_ref. 0 = off (unchanged behaviour).
     v4_qref_lowpass_hz: float = 0.0
+    # 2026-11-05 candidate option (user: "heel strike 탁 할때 강성 탁 오르는거 처럼"; default off, no version bump): terminal-
+    # swing pre-activation. Per leg, swing progress t_sw / T_sw (T_sw = running mean of the previous swing durations) ramps
+    # the swing log-centre and half-width of the listed joints toward their stance values over v4_preact_p, so the
+    # stiffness is already at the stance level at heel strike instead of one control step (33 ms) after the load is seen.
+    # Basis: hamstrings active from ~85 % and vasti from ~95 % of the gait cycle (terminal swing, Perry & Burnfield 2010),
+    # i.e. 50-100 ms before contact; the ramp window itself is an assumption.
+    v4_preact_joints: tuple = ()
+    v4_preact_p: tuple = (0.8, 1.0)
+    v4_swing_T0_s: float = 0.4
     gait_r_table: str = ""
     gait_r_speeds: tuple = (0.8, 1.0, 1.4)
     gait_r_window: int = 600
@@ -551,6 +560,9 @@ class VicSteering(CadenceGaitPercentSteering):
         self._v4_load = torch.zeros(n, 2, device=dev)
         self._v4_tst = torch.zeros(n, 2, device=dev)
         self._v4_T = torch.full((n, 2), float(c.v4_stance_T0_s), device=dev)
+        self._v4_tsw = torch.zeros(n, 2, device=dev)                      # v4_preact: seconds in swing per leg
+        self._v4_Tsw = torch.full((n, 2), float(c.v4_swing_T0_s), device=dev)
+        self._v4_pre_m = t([1.0 if any(j.endswith(k) for k in c.v4_preact_joints) else 0.0 for j in c.vic_joints])
         self._v4_a = torch.zeros(n, J, device=dev)              # filtered action (activation-like)
         self._v4_u = torch.zeros(n, J, device=dev)              # co-contraction level for J2M / reflex
         self._v4_log = []
@@ -1105,6 +1117,16 @@ class VicSteering(CadenceGaitPercentSteering):
             ell = late[:, self._leg] * self._v4_ankle                                   # [N, J]
             lk_tab[..., 1] = (1 - ell) * lk_tab[..., 1] + ell * self._v4_late[0]
             h_tab[..., 1] = (1 - ell) * h_tab[..., 1] + ell * self._v4_late[1]
+        if c.v4_preact_joints:
+            sw = wl[:, :, 1] + wl[:, :, 2] < 0.5                                       # [N, 2] leg in swing
+            done = ~sw & (self._v4_tsw > 0.15)
+            self._v4_Tsw = torch.where(done, 0.7 * self._v4_Tsw + 0.3 * self._v4_tsw, self._v4_Tsw)
+            self._v4_tsw = torch.where(sw & ~f2, self._v4_tsw + dt, torch.zeros_like(self._v4_tsw))
+            q0, q1 = c.v4_preact_p
+            rho = ((self._v4_tsw / self._v4_Tsw.clamp_min(0.15) - q0) / max(q1 - q0, 1e-6)).clamp(0.0, 1.0)
+            rho = rho[:, self._leg] * self._v4_pre_m                                    # [N, J]
+            lk_tab[..., 0] = (1 - rho) * lk_tab[..., 0] + rho * lk_tab[..., 1]
+            h_tab[..., 0] = (1 - rho) * h_tab[..., 0] + rho * h_tab[..., 1]
         lk_c, h = (w * lk_tab).sum(-1), (w * h_tab).sum(-1)
         if c.v4_kc_speed_gamma:
             if getattr(self, "_v4_gam", None) is None:
