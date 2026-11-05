@@ -409,6 +409,11 @@ class VicSteeringConfig(CadenceGaitPercentSteeringConfig):
     v4_kc_speed_clip: tuple = (0.6, 1.6)
     v4_kc_speed_tau_s: float = 0.3
     v4_kc_speed_damp: bool = False       # also move the damping centre by alpha_j x the stiffness shift (2026-11-04)
+    # 2026-11-05 candidate option (user: "로컬 1안 ㄱㄱ"; no version bump until approved, default off): first-order lowpass
+    # on the PD targets q_ref of the VIC (leg) joints at this cutoff [Hz], applied per control step before the simulator
+    # step. q_ref then carries only slow intent; fast deviations are answered by k (and tau_ff), so the stiffness gets a
+    # learning signal of its own instead of being traded against q_ref. 0 = off (unchanged behaviour).
+    v4_qref_lowpass_hz: float = 0.0
     gait_r_table: str = ""
     gait_r_speeds: tuple = (0.8, 1.0, 1.4)
     gait_r_window: int = 600
@@ -518,6 +523,7 @@ class VicSteering(CadenceGaitPercentSteering):
     def _init_v4(self, n, dev, ranges):
         c = self.config
         J = len(c.vic_joints)
+        self._qref_lp = torch.zeros(n, J, device=dev)   # v4_qref_lowpass_hz state (leg q_ref, 2026-11-05)
         t = lambda v: torch.tensor(v, device=dev, dtype=torch.float)
         lb_lo, lb_hi = torch.zeros(J, 3, device=dev), torch.zeros(J, 3, device=dev)
         for i, j in enumerate(c.vic_joints):
@@ -1067,6 +1073,11 @@ class VicSteering(CadenceGaitPercentSteering):
         f2 = fresh[:, None]
         if c.v4_freeze_a:
             unit = torch.zeros_like(unit)
+        if c.v4_qref_lowpass_hz > 0:     # in place: q_ref is the processed action the env passes to simulator.step
+            raw = q_ref[:, self._idx]
+            g = 1.0 - math.exp(-2.0 * math.pi * c.v4_qref_lowpass_hz * dt)
+            self._qref_lp = torch.where(f2, raw, self._qref_lp + g * (raw - self._qref_lp))
+            q_ref[:, self._idx] = self._qref_lp
         # Continuous leg-state weights.
         load = self._v4_leg_load(contact)
         g = 1.0 - math.exp(-dt / max(c.v4_load_tau_s, 1e-6))

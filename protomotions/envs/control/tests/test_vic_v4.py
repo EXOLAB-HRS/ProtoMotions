@@ -368,3 +368,22 @@ def test_kc_speed_damp_moves_damping_by_alpha():
         d = float((lb["kb"][:, i] - lb["off"][:, i]).mean())
         assert abs(d - float(self._v4_alpha[i]) * g * math.log(1.4)) < 1e-4, (j, d)
     assert vs.VicSteeringConfig().v4_kc_speed_damp is False
+
+
+def test_qref_lowpass_filters_leg_targets_in_place():
+    """v4_qref_lowpass_hz (2026-11-05 candidate): off by default; on, the leg q_ref passed to the simulator is a first-order
+    lowpass of the policy target (reset steps take the raw target), other dofs untouched."""
+    J = len(JOINTS)
+    assert vs.VicSteeringConfig().v4_qref_lowpass_hz == 0.0
+    self, sim = _stub(v4_late_anchor=False, v4_qref_lowpass_hz=3.0)
+    sim.load = torch.tensor([[1.0, 1.0]]).expand(4, 2)
+    n = 4
+    q0 = torch.zeros(n, J + 2)
+    self._pre_physics_v4(q0, torch.zeros(n, J), torch.zeros(n, J), None, torch.full((n,), 1.0), torch.full((n,), True))
+    q1 = torch.ones(n, J + 2)
+    self._pre_physics_v4(q1, torch.zeros(n, J), torch.zeros(n, J), None, torch.full((n,), 1.0), torch.full((n,), False))
+    g = 1.0 - math.exp(-2.0 * math.pi * 3.0 / 30)
+    assert torch.allclose(q1[:, :J], torch.full((n, J), g)) and torch.all(q1[:, J:] == 1.0)
+    q2 = torch.full((n, J + 2), 5.0)
+    self._pre_physics_v4(q2, torch.zeros(n, J), torch.zeros(n, J), None, torch.full((n,), 1.0), torch.full((n,), True))
+    assert torch.all(q2 == 5.0)
