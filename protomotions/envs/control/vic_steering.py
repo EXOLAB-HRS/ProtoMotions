@@ -103,6 +103,7 @@ VIC_SWAY = steering_path("vic_sway")
 VIC_PULSE_ERR = steering_path("vic_pulse_err")
 VIC_EFFERENCE = steering_path("vic_efference")
 VIC_IMP_PRIOR = steering_path("vic_imp_prior")
+VIC_MOMENT_PRIOR = steering_path("vic_moment_prior")   # 2026-11-05 candidate: human joint-moment profile reward
 
 # Human joint impedance ranges (k N m/rad, b N m s/rad) for swing / stance / standing, model 63.3 kg.
 # Hip and knee in stance and standing: relaxed-static values (no walking stance measurement).
@@ -215,6 +216,44 @@ def vic4_passive_diag(model, q_all: Tensor, idx: Tensor):
     kl = torch.where(disp < 0, model.k_negative[idx], model.k_positive[idx])
     k = k + kl * ((kl * disp).abs() < model.spring_cap)
     return k, model.damping[idx]
+
+
+def vic4_passive_torque(model, q_all: Tensor, idx: Tensor) -> Tensor:
+    """Plant passive tissue torque at the VIC joints [N, J] (exponential terms of HumanJointModel, -dE/dq, plus the linear
+    springs, capped), the same forces the plant applies; damping omitted (0 for the leg joints)."""
+    z = q_all @ model.a.T + model.offset
+    thr = math.log(model.exp_cap)
+    wgt = model.energy_scale * torch.exp(z.clamp(max=thr))
+    tau = -(wgt @ model.a[:, idx])
+    disp = q_all[:, idx] - model.rest[idx]
+    kl = torch.where(disp < 0, model.k_negative[idx], model.k_positive[idx])
+    return tau - (kl * disp).clamp(-model.spring_cap, model.spring_cap)
+
+
+_MOMENT_TABLES = {}
+
+
+def vic_moment_prior(tau_nkg: Tensor, tar_speed: Tensor, gait_pct: Tensor, gait_pct_valid: Tensor, table_file: str,
+                     signs: tuple, sd_floor: float, kernel_scale: float) -> Tensor:
+    """Human sagittal joint-moment profile reward (2026-11-05 candidate). tau_nkg [N, 2, 3]: per leg (L, R) hip / knee /
+    ankle total joint torque in N m/kg in plant signs; the table (speeds, mean / sd [S, 101, 3] in its own signs) is mapped
+    by signs. Per leg r = exp(-0.5 mean_j z_j^2), z = (tau - mean) / (kernel_scale * max(sd, sd_floor)) at the leg's gait
+    percent and the nearest table speed; r = 1 where the gait percent is not valid; mean over legs."""
+    key = (table_file, str(tau_nkg.device))
+    if key not in _MOMENT_TABLES:
+        t = torch.load(table_file, map_location=tau_nkg.device, weights_only=False)
+        sg = torch.tensor(signs, device=tau_nkg.device, dtype=torch.float)
+        _MOMENT_TABLES[key] = (t["speeds"].to(tau_nkg.device).float(), t["mean"].to(tau_nkg.device).float() * sg,
+                               t["sd"].to(tau_nkg.device).float())
+    speeds, mean, sd = _MOMENT_TABLES[key]
+    s = torch.bucketize(tar_speed.float(), (speeds[1:] + speeds[:-1]) / 2).clamp(0, len(speeds) - 1)
+    out = []
+    for leg in range(2):
+        p = (gait_pct[:, leg].clamp(0, 1) * 100).round().long()
+        z = (tau_nkg[:, leg] - mean[s, p]) / (kernel_scale * sd[s, p].clamp_min(sd_floor))
+        r = torch.exp(-0.5 * (z ** 2).mean(-1))
+        out.append(torch.where(gait_pct_valid[:, leg], r, torch.ones_like(r)))
+    return (out[0] + out[1]) / 2
 
 
 def vic4_damping(lk: Tensor, lk_c: Tensor, lb_c: Tensor, alpha: Tensor, lb_lo: Tensor, lb_hi: Tensor) -> Tensor:
@@ -420,6 +459,13 @@ class VicSteeringConfig(CadenceGaitPercentSteeringConfig):
     # stiffness is already at the stance level at heel strike instead of one control step (33 ms) after the load is seen.
     # Basis: hamstrings active from ~85 % and vasti from ~95 % of the gait cycle (terminal swing, Perry & Burnfield 2010),
     # i.e. 50-100 ms before contact; the ramp window itself is an assumption.
+    # 2026-11-05 candidate (user: "토크 맞출수 있게 보상 조정"): human joint-moment profile reward vic_moment_prior, off when
+    # v4_moment_table is "". Table = Lencioni 2019 sagittal moments by speed and gait percent (training data; the W2-2 judge
+    # is WBDS 2018). v4_moment_signs maps table signs to plant signs (+ hip extension, knee flexion, ankle plantarflexion).
+    v4_moment_table: str = ""
+    v4_moment_signs: tuple = (1.0, 1.0, 1.0)
+    v4_moment_sd_floor: float = 0.1
+    v4_moment_kernel: float = 1.5
     v4_preact_joints: tuple = ()
     v4_preact_p: tuple = (0.8, 1.0)
     v4_swing_T0_s: float = 0.4
@@ -1230,6 +1276,28 @@ class VicSteering(CadenceGaitPercentSteering):
             self._mean_k[st] = torch.where(m.any(0), (torch.log(k_eff) * m).sum(0) / cnt, self._mean_k[st])
         self._log()
 
+    def _moment_prior(self, ctx):
+        """vic_moment_prior input: total sagittal leg torque (active PD + feed-forward as applied, plus plant passive) in
+        N m/kg per leg; ones when the option is off or before the simulator is ready."""
+        c = self.config
+        n = len(self._tar_speed)
+        if not c.v4_moment_table or not self._sim_ready:
+            return torch.ones(n, device=self._tar_speed.device)
+        if getattr(self, "_mom_idx", None) is None:
+            self._mom_idx = torch.tensor([[c.vic_joints.index(f"{l}_{j}") for j in ("Hip_y", "Knee_y", "Ankle_y")]
+                                          for l in ("L", "R")], device=self._tar_speed.device)
+        sim = self.env.simulator
+        src = getattr(sim, "human_active_torques", None)
+        if src is None or src.shape[0] != n:
+            return torch.ones(n, device=self._tar_speed.device)
+        tau = src[:, self._idx].float()
+        if self._v4_model is not None:
+            dof = sim._get_simulator_dof_state().convert_to_common(sim.data_conversion)
+            tau = tau + vic4_passive_torque(self._v4_model, dof.dof_pos, self._idx)
+        tau = tau[:, self._mom_idx] / c.body_mass                                      # [N, 2, 3]
+        return vic_moment_prior(tau, self._tar_speed, ctx.steering.gait_pct, ctx.steering.gait_pct_valid,
+                                c.v4_moment_table, c.v4_moment_signs, c.v4_moment_sd_floor, c.v4_moment_kernel)
+
     def _update_impact(self):
         """Per leg, peak vertical contact force over the physics substeps of the last control step (body weights);
         cost = mean over legs of max(0, peak - grf_ref_bw), clamped at 3."""
@@ -1252,3 +1320,4 @@ class VicSteering(CadenceGaitPercentSteering):
         ctx.steering.vic_pulse_err = self._pulse_err
         ctx.steering.vic_efference = self._eff.flatten(1)
         ctx.steering.vic_imp_prior = self._imp
+        ctx.steering.vic_moment_prior = self._moment_prior(ctx)

@@ -408,3 +408,42 @@ def test_preact_raises_swing_stiffness_late_in_swing_only():
     assert torch.allclose(pre[3], base[3])                                           # 0.1 s of 0.4: before the ramp
     assert torch.all(pre[12] > 5 * base[12])                                         # 0.4 s: at the stance centre
     assert torch.allclose(pre[12], self._v4_lk[kn, 1].exp(), rtol=1e-3)
+
+
+def test_moment_prior_kernel_signs_and_validity(tmp_path):
+    """vic_moment_prior (2026-11-05 candidate): 1 at the table mean (after the sign map), lower away from it, 1 where the
+    gait percent is not valid; off by default."""
+    assert vs.VicSteeringConfig().v4_moment_table == ""
+    speeds = torch.tensor([0.8, 1.0, 1.4])
+    mean = torch.zeros(3, 101, 3); mean[:, :, 2] = 1.0                          # ankle +1 N m/kg in table signs
+    sd = torch.full((3, 101, 3), 0.2)
+    f = tmp_path / "mom.pt"; torch.save({"speeds": speeds, "mean": mean, "sd": sd}, f)
+    n = 4
+    pct = torch.full((n, 2), 0.5); valid = torch.ones(n, 2, dtype=torch.bool)
+    at_mean = torch.zeros(n, 2, 3); at_mean[..., 2] = -1.0                       # plant sign = -table sign for the ankle
+    r = vs.vic_moment_prior(at_mean, torch.full((n,), 1.0), pct, valid, str(f), (1.0, 1.0, -1.0), 0.1, 1.0)
+    assert torch.allclose(r, torch.ones(n))
+    off = at_mean.clone(); off[..., 2] = 0.0
+    r2 = vs.vic_moment_prior(off, torch.full((n,), 1.0), pct, valid, str(f), (1.0, 1.0, -1.0), 0.1, 1.0)
+    assert torch.all(r2 < 0.2)
+    r3 = vs.vic_moment_prior(off, torch.full((n,), 1.0), pct, torch.zeros(n, 2, dtype=torch.bool), str(f), (1.0, 1.0, -1.0), 0.1, 1.0)
+    assert torch.allclose(r3, torch.ones(n))
+
+
+def test_passive_torque_is_minus_energy_gradient():
+    """vic4_passive_torque equals -dE/dq of the exponential terms (finite difference)."""
+    J = len(JOINTS)
+    ndof = J + 2
+    torch.manual_seed(0)
+    a = torch.randn(3, ndof, dtype=torch.float64) * 0.5
+    model = SimpleNamespace(a=a, offset=torch.zeros(3, dtype=torch.float64), energy_scale=torch.ones(3, dtype=torch.float64), exp_cap=1e6, rest=torch.zeros(ndof, dtype=torch.float64),
+                            k_negative=torch.zeros(ndof, dtype=torch.float64), k_positive=torch.zeros(ndof, dtype=torch.float64), spring_cap=1e9)
+    q = torch.randn(2, ndof, dtype=torch.float64) * 0.3
+    idx = torch.arange(J)
+    tau = vs.vic4_passive_torque(model, q, idx)
+    E = lambda x: (model.energy_scale * torch.exp(x @ a.T)).sum(-1)
+    eps = 1e-4
+    for j in range(3):
+        dq = torch.zeros_like(q); dq[:, j] = eps
+        g = (E(q + dq) - E(q - dq)) / (2 * eps)
+        assert torch.allclose(tau[:, j], -g, atol=1e-6)
