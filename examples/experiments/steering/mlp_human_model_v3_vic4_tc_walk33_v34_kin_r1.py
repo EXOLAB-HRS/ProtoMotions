@@ -21,6 +21,7 @@ from examples.experiments.steering import mlp_human_model_v3_vic4_tc_walk33_v34_
 from examples.experiments.steering.mlp_human_model_v3_vic4_tc_walk33_v34_tqw1nd_armdisc_r1 import *  # noqa: F401,F403
 
 KINETIC_WEIGHT = 0.5
+FOOT_SENSORS = ("L_Ankle", "L_Toe", "R_Ankle", "R_Toe")   # the launcher allows exactly this robot-config difference
 REF = Path(__file__).resolve().parents[4] / "share/human_ref"
 MOMENT_TABLE = REF / "lencioni2019_sagittal_moment_by_speed_holdout5_plantbsp.pt"
 KINETIC_TABLE = REF / "lencioni2019_grf_cop_by_speed_holdout5.pt"
@@ -31,7 +32,7 @@ def configure_robot_and_simulator(robot_cfg, simulator_cfg, args):
     simulator spawns no contact sensors and vic_kinetic_prior (net foot force) would stay at its off value 1 (smoke
     2026-11-06). Sensors only read forces (filtered to the terrain); the evaluation rollouts use the same four bodies."""
     _base.configure_robot_and_simulator(robot_cfg, simulator_cfg, args)
-    robot_cfg.contact_bodies = ["L_Ankle", "L_Toe", "R_Ankle", "R_Toe"]
+    robot_cfg.contact_bodies = list(FOOT_SENSORS)
 
 
 def env_config(robot_cfg, args):
