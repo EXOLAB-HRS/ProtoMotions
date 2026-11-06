@@ -26,6 +26,14 @@ MOMENT_TABLE = REF / "lencioni2019_sagittal_moment_by_speed_holdout5_plantbsp.pt
 KINETIC_TABLE = REF / "lencioni2019_grf_cop_by_speed_holdout5.pt"
 
 
+def configure_robot_and_simulator(robot_cfg, simulator_cfg, args):
+    """Base PD / plant setup, plus foot contact sensors: the training robot config has contact_bodies None, so the
+    simulator spawns no contact sensors and vic_kinetic_prior (net foot force) would stay at its off value 1 (smoke
+    2026-11-06). Sensors only read forces (filtered to the terrain); the evaluation rollouts use the same four bodies."""
+    _base.configure_robot_and_simulator(robot_cfg, simulator_cfg, args)
+    robot_cfg.contact_bodies = ["L_Ankle", "L_Toe", "R_Ankle", "R_Toe"]
+
+
 def env_config(robot_cfg, args):
     cfg = _base.env_config(robot_cfg, args)
     cfg.control_components["steering"] = dataclasses.replace(
