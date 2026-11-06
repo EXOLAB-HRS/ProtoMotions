@@ -1,0 +1,170 @@
+#usda 1.0
+(
+    defaultPrim = "smpl_humanoid"
+    subLayers = [
+        @../../human_model_v3_1/assets/human_model_v3_1.usda@
+    ]
+    upAxis = "Z"
+)
+
+# human_model_v3.5 segment mass properties (build_bsp_v3_5.py); everything else is human_model_v3.1.
+over "smpl_humanoid"
+{
+    over "bodies"
+    {
+        over "Chest"
+        {
+            point3f physics:centerOfMass = (-0.01925, -0.00095, 0.07575)
+            float3 physics:diagonalInertia = (0.0421287526, 0.0453893648, 0.0453893648)
+            float physics:mass = 10.2230255
+            quatf physics:principalAxes = (0.560879935, -0.557177798, 0.431557315, 0.434424774)
+        }
+        over "L_Ankle"
+        {
+            point3f physics:centerOfMass = (0.0635246824, 0.0199394234, 0.00495708546)
+            float3 physics:diagonalInertia = (0.00091714831, 0.00199119737, 0.00208768858)
+            float physics:mass = 0.606819845
+            quatf physics:principalAxes = (0.274760419, -0.961161031, 0.0127621371, -0.0226564103)
+        }
+        over "L_Elbow"
+        {
+            point3f physics:centerOfMass = (-0.00054798, 0.11379718, 0.00410985)
+            float3 physics:diagonalInertia = (0.000682464109, 0.00402294322, 0.00425746874)
+            float physics:mass = 0.949709229
+            quatf physics:principalAxes = (0.0127930849, -0.705287338, -0.708691762, -0.0127316293)
+        }
+        over "L_Hand"
+        {
+            point3f physics:centerOfMass = (-0.0058, 0.0493, 0.001)
+            float3 physics:diagonalInertia = (0.000221900766, 0.000259152185, 0.000445815103)
+            float physics:mass = 0.211731984
+            quatf physics:principalAxes = (0, 0.707106781, 0.707106781, 0)
+        }
+        over "L_Hip"
+        {
+            point3f physics:centerOfMass = (-0.001734075, 0.013217505, -0.14458332)
+            float3 physics:diagonalInertia = (0.0314507311, 0.156162386, 0.158423941)
+            float physics:mass = 9.16152837
+            quatf physics:principalAxes = (0.702141562, 0.0320273814, 0.71057788, 0.0324121943)
+        }
+        over "L_Knee"
+        {
+            point3f physics:centerOfMass = (-0.019391875, -0.006035, -0.1766125)
+            float3 physics:diagonalInertia = (0.00446004391, 0.0309119495, 0.0321216969)
+            float physics:mass = 2.89344745
+            quatf physics:principalAxes = (0.0127175147, 0.744565875, 0.0113983004, 0.667330504)
+        }
+        over "L_Shoulder"
+        {
+            point3f physics:centerOfMass = (-0.01584825, 0.14960748, -0.00737664)
+            float3 physics:diagonalInertia = (0.00266278805, 0.00795802118, 0.00901385435)
+            float physics:mass = 1.66515685
+            quatf physics:principalAxes = (0.018209352, 0.668625623, 0.743195678, -0.0163822795)
+        }
+        over "L_Talus"
+        {
+            point3f physics:centerOfMass = (0, 0, 0)
+            float3 physics:diagonalInertia = (4.42428666e-06, 4.42428666e-06, 4.42428666e-06)
+            float physics:mass = 0.0674244273
+            quatf physics:principalAxes = (1, 0, 0, 0)
+        }
+        over "L_Toe"
+        {
+            point3f physics:centerOfMass = (0.0248, -0.003, 0.0055)
+            float3 physics:diagonalInertia = (0.000150200012, 0.00016000807, 0.000265453084)
+            float physics:mass = 0.167831244
+            quatf physics:principalAxes = (1, 0, 0, 0)
+        }
+        over "L_Wrist"
+        {
+            point3f physics:centerOfMass = (-0.0075, 0.042, -0.00405)
+            float3 physics:diagonalInertia = (7.2969156e-05, 0.000161532815, 0.000161532815)
+            float physics:mass = 0.158654615
+            quatf physics:principalAxes = (0.641511178, -0.031111227, 0.0371283002, 0.765582778)
+        }
+        over "Pelvis"
+        {
+            point3f physics:centerOfMass = (-0.0055, -0, -0.0121)
+            float3 physics:diagonalInertia = (0.0220062808, 0.0302593998, 0.03330737)
+            float physics:mass = 5.45527312
+            quatf physics:principalAxes = (0, 0.707106781, 0.707106781, 0)
+        }
+        over "R_Ankle"
+        {
+            point3f physics:centerOfMass = (0.0652004158, -0.0175865714, 0.0122826825)
+            float3 physics:diagonalInertia = (0.000969846844, 0.00208060532, 0.00213789577)
+            float physics:mass = 0.603679611
+            quatf physics:principalAxes = (0.922545048, -0.385236527, -0.0197689811, 0.0106131829)
+        }
+        over "R_Elbow"
+        {
+            point3f physics:centerOfMass = (-0.00255724, -0.116582745, 0.00356187)
+            float3 physics:diagonalInertia = (0.000716346477, 0.00422267071, 0.00446883975)
+            float physics:mass = 0.949709229
+            quatf physics:principalAxes = (0.0106764653, 0.714734743, 0.699228976, -0.0109132215)
+        }
+        over "R_Hand"
+        {
+            point3f physics:centerOfMass = (-0.0079, -0.0462, -0.0009)
+            float3 physics:diagonalInertia = (0.000225895769, 0.000243720025, 0.000432228297)
+            float physics:mass = 0.208511473
+            quatf physics:principalAxes = (0, 0.707106781, 0.707106781, 0)
+        }
+        over "R_Hip"
+        {
+            point3f physics:centerOfMass = (-0.003429615, -0.014758905, -0.14743491)
+            float3 physics:diagonalInertia = (0.0327703913, 0.162714898, 0.165071347)
+            float physics:mass = 9.16152837
+            quatf physics:principalAxes = (0.0356657849, 0.714351424, 0.0348498098, 0.698008227)
+        }
+        over "R_Knee"
+        {
+            point3f physics:centerOfMass = (-0.018770625, 0.00701125, -0.17679)
+            float3 physics:diagonalInertia = (0.00446734789, 0.0309625723, 0.0321743009)
+            float physics:mass = 2.89344745
+            quatf physics:principalAxes = (0.743325324, 0.0147338426, -0.668636467, -0.0132533954)
+        }
+        over "R_Shoulder"
+        {
+            point3f physics:centerOfMass = (-0.01233282, -0.14620731, -0.00766479)
+            float3 physics:diagonalInertia = (0.00253362077, 0.00757199123, 0.00857660775)
+            float physics:mass = 1.66515685
+            quatf physics:principalAxes = (0.0176578525, -0.735973861, -0.676506948, -0.0192100287)
+        }
+        over "R_Talus"
+        {
+            point3f physics:centerOfMass = (0, 0, 0)
+            float3 physics:diagonalInertia = (4.19839109e-06, 4.19839109e-06, 4.19839109e-06)
+            float physics:mass = 0.0670755123
+            quatf physics:principalAxes = (1, 0, 0, 0)
+        }
+        over "R_Toe"
+        {
+            point3f physics:centerOfMass = (0.0227, 0.0042, 0.0045)
+            float3 physics:diagonalInertia = (0.000157670155, 0.000165441248, 0.000269823909)
+            float physics:mass = 0.171320393
+            quatf physics:principalAxes = (1, 0, 0, 0)
+        }
+        over "R_Wrist"
+        {
+            point3f physics:centerOfMass = (-0.0052, -0.0423, -0.00305)
+            float3 physics:diagonalInertia = (7.81273717e-05, 0.000169502129, 0.000169502129)
+            float physics:mass = 0.161875127
+            quatf physics:principalAxes = (0.509758059, 0.548236423, 0.451470498, 0.485549107)
+        }
+        over "Spine"
+        {
+            point3f physics:centerOfMass = (0.0127, 0.00075, 0.02645)
+            float3 physics:diagonalInertia = (0.00958401896, 0.00994614079, 0.00994614079)
+            float physics:mass = 4.14590986
+            quatf physics:principalAxes = (0.00800491949, 0.848596978, 0.00498970461, 0.528955758)
+        }
+        over "Torso"
+        {
+            point3f physics:centerOfMass = (0.00055, 0.00275, 0.06755)
+            float3 physics:diagonalInertia = (0.0114006879, 0.0124038695, 0.0124038695)
+            float physics:mass = 4.6833734
+            quatf physics:principalAxes = (0.0168027504, -0.709520072, -0.0427342499, -0.703187542)
+        }
+    }
+}

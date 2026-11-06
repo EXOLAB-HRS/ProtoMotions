@@ -106,6 +106,7 @@ VIC_IMP_PRIOR = steering_path("vic_imp_prior")
 VIC_MOMENT_PRIOR = steering_path("vic_moment_prior")   # 2026-11-05 candidate: human joint-moment profile reward
 VIC_MOMENT_FEAT = steering_path("vic_moment_feat")
 VIC_KINETIC_PRIOR = steering_path("vic_kinetic_prior")  # 2026-11-06 candidate: human ground-force / CoP profile reward     # 2026-11-06 candidate: leg joint moments for the AMP discriminator
+VIC_STRATEGY_COST = steering_path("vic_strategy_cost")  # 2026-11-07 candidate: hip moment outside / ankle moment below the human band
 
 # Human joint impedance ranges (k N m/rad, b N m s/rad) for swing / stance / standing, model 63.3 kg.
 # Hip and knee in stance and standing: relaxed-static values (no walking stance measurement).
@@ -285,6 +286,31 @@ def vic_kinetic_prior(feat: Tensor, tar_speed: Tensor, gait_pct: Tensor, gait_pc
         use[:, 2] = ((feat[:, leg, 3] > 0.5) & (frac[s, p] >= lev_min_frac)).float()
         r = torch.exp(-0.5 * (z2 * use).sum(-1) / use.sum(-1))
         out.append(torch.where(gait_pct_valid[:, leg], r, torch.ones_like(r)))
+    return (out[0] + out[1]) / 2
+
+
+def vic_strategy_cost(tau_nkg: Tensor, tar_speed: Tensor, gait_pct: Tensor, gait_pct_valid: Tensor, table_file: str,
+                      signs: tuple, sd_floor: float, band_k: float, scale: float, joint_w: tuple, cap: float) -> Tensor:
+    """Ankle-strategy cost (2026-11-07 candidate). Same moment table and leg moments as vic_moment_prior, but a one-band
+    penalty instead of a saturating kernel, so a large hip moment keeps a gradient: per leg and joint, the distance (N m/kg)
+    outside the human band mean +- band_k * max(sd, sd_floor) - two-sided for hip and knee, one-sided (below the band only)
+    for the ankle, so more push-off than the human mean is not charged here - squared over scale^2 and weighted by joint_w;
+    cost per leg = min(sum, cap), 0 where the gait percent is not valid; mean over legs."""
+    key = (table_file, str(tau_nkg.device))
+    if key not in _MOMENT_TABLES:
+        vic_moment_prior(tau_nkg, tar_speed, gait_pct, gait_pct_valid, table_file, signs, sd_floor, 1.0)
+    speeds, mean, sd = _MOMENT_TABLES[key]
+    w = torch.tensor(joint_w, device=tau_nkg.device, dtype=torch.float)
+    s = torch.bucketize(tar_speed.float(), (speeds[1:] + speeds[:-1]) / 2).clamp(0, len(speeds) - 1)
+    out = []
+    for leg in range(2):
+        p = (gait_pct[:, leg].clamp(0, 1) * 100).round().long()
+        m, half = mean[s, p], band_k * sd[s, p].clamp_min(sd_floor)
+        d = tau_nkg[:, leg] - m
+        dev = torch.relu(d.abs() - half)
+        dev[:, 2] = torch.relu(-d[:, 2] - half[:, 2])
+        c = ((dev / scale) ** 2 * w).sum(-1).clamp(max=cap)
+        out.append(torch.where(gait_pct_valid[:, leg], c, torch.zeros_like(c)))
     return (out[0] + out[1]) / 2
 
 
@@ -513,6 +539,14 @@ class VicSteeringConfig(CadenceGaitPercentSteeringConfig):
     v4_kinetic_kernel: float = 1.5
     v4_kinetic_ankle_height: float = 0.065     # plant ankle joint above the sole (m), human_model_v2 MJCF
     v4_kinetic_body_height: float = 1.72       # plant standing height (m, MJCF geoms) for the lever normalisation
+    # 2026-11-07 candidate (user: "발목으로 좀 전략이 많이 가게 해줘, 보상으로 만들어야할거 같은데"; default off): vic_strategy_cost
+    # on the v4_moment_table moments; the kernel reward saturates (kin run: hip -1.0 vs human -0.35 N m/kg at 1.0 m/s held
+    # for 460 epochs), this band cost keeps pushing. Band = mean +- band_k sd (floor v4_moment_sd_floor), N m/kg.
+    v4_strategy: bool = False
+    v4_strategy_band_k: float = 1.0
+    v4_strategy_scale: float = 0.1
+    v4_strategy_joint_w: tuple = (1.0, 0.0, 1.0)
+    v4_strategy_cap: float = 4.0
     v4_preact_joints: tuple = ()
     v4_preact_p: tuple = (0.8, 1.0)
     v4_swing_T0_s: float = 0.4
@@ -718,6 +752,15 @@ class VicSteering(CadenceGaitPercentSteering):
         self._host_d = torch.empty((n, ndof), dtype=torch.float, pin_memory=True)
         self._host_idx = robot._ALL_INDICES.cpu()
         self._sim_ready = True
+        try:                                         # 2026-11-07: record the plant mass properties PhysX actually uses
+            view = robot.root_physx_view
+            m = view.get_masses()[0].cpu()
+            names = [x.rsplit("/", 1)[-1] for x in view.link_paths[0]]
+            seg = {b: round(float(m[names.index(b)]), 3) for b in ("Pelvis", "R_Hip", "R_Knee", "R_Ankle", "R_Shoulder")
+                   if b in names}
+            print("[vic] plant masses (PhysX, env 0): total %.2f kg %s" % (float(m.sum()), seg), flush=True)
+        except Exception as ex:                      # logging only
+            print(f"[vic] plant masses unavailable: {ex}", flush=True)
 
     def _write_gains(self):
         sim = self.env.simulator
@@ -1380,6 +1423,15 @@ class VicSteering(CadenceGaitPercentSteering):
         return vic_moment_prior(tau, self._tar_speed, ctx.steering.gait_pct, ctx.steering.gait_pct_valid,
                                 c.v4_moment_table, c.v4_moment_signs, c.v4_moment_sd_floor, c.v4_moment_kernel)
 
+    def _strategy_cost(self, ctx, tau):
+        """vic_strategy_cost; zeros when the option is off or before the simulator is ready."""
+        c = self.config
+        if not (c.v4_strategy and c.v4_moment_table) or tau is None:
+            return torch.zeros(len(self._tar_speed), device=self._tar_speed.device)
+        return vic_strategy_cost(tau, self._tar_speed, ctx.steering.gait_pct, ctx.steering.gait_pct_valid, c.v4_moment_table,
+                                 c.v4_moment_signs, c.v4_moment_sd_floor, c.v4_strategy_band_k, c.v4_strategy_scale,
+                                 c.v4_strategy_joint_w, c.v4_strategy_cap)
+
     def _update_impact(self):
         """Per leg, peak vertical contact force over the physics substeps of the last control step (body weights);
         cost = mean over legs of max(0, peak - grf_ref_bw), clamped at 3."""
@@ -1406,6 +1458,7 @@ class VicSteering(CadenceGaitPercentSteering):
                                       or self.config.v4_kinetic_table) else None
         ctx.steering.vic_moment_prior = self._moment_prior(ctx, tau)
         ctx.steering.vic_kinetic_prior = self._kinetic_prior(ctx, tau)
+        ctx.steering.vic_strategy_cost = self._strategy_cost(ctx, tau)
         if self.config.v4_moment_disc:
             ctx.steering.vic_moment_feat = (tau.flatten(1) if tau is not None
                                             else torch.zeros(len(self._tar_speed), 6, device=self._tar_speed.device))

@@ -505,3 +505,27 @@ def test_disc_moment_reference_labels(tmp_path):
     # latest history step = frame 74 / 149: left 48 % / 98 %, right (onsets 25, 75, 125) 98 % / 48 %; speed 1.0 -> row 1
     assert torch.allclose(out[0, :3], mean[1, 48]) and torch.allclose(out[0, 3:], mean[1, 98])
     assert torch.allclose(out[1, :3], mean[1, 98]) and torch.allclose(out[1, 3:], mean[1, 48])
+
+
+def test_strategy_cost_band(tmp_path):
+    """vic_strategy_cost (2026-11-07 candidate): 0 inside the band, grows with the hip distance outside it on both sides, charges
+    the ankle only below the band, capped, 0 where the gait percent is not valid; off by default."""
+    assert vs.VicSteeringConfig().v4_strategy is False
+    speeds = torch.tensor([0.8, 1.0, 1.4])
+    mean = torch.zeros(3, 101, 3); mean[..., 0] = -0.35; mean[..., 2] = 1.4
+    sd = torch.full((3, 101, 3), 0.1)
+    f = tmp_path / "mom.pt"; torch.save({"speeds": speeds, "mean": mean, "sd": sd}, f)
+    n = 3
+    pct = torch.full((n, 2), 0.5); valid = torch.ones(n, 2, dtype=torch.bool); v = torch.full((n,), 1.0)
+    args = (str(f), (1.0, 1.0, 1.0), 0.1, 1.0, 0.1, (1.0, 0.0, 1.0), 4.0)
+    tau = torch.tensor([-0.35, 0.0, 1.4]).expand(n, 2, 3).clone()
+    assert torch.allclose(vs.vic_strategy_cost(tau, v, pct, valid, *args), torch.zeros(n))
+    hip = tau.clone(); hip[..., 0] = -0.60                                   # 0.15 outside the band -> (1.5)^2
+    assert torch.allclose(vs.vic_strategy_cost(hip, v, pct, valid, *args), torch.full((n,), 2.25), atol=1e-5)
+    hip[..., 0] = -0.10                                                      # above the band: also charged
+    assert torch.allclose(vs.vic_strategy_cost(hip, v, pct, valid, *args), torch.full((n,), 2.25), atol=1e-5)
+    ank = tau.clone(); ank[..., 2] = 1.8                                     # more push-off than the band: free
+    assert torch.allclose(vs.vic_strategy_cost(ank, v, pct, valid, *args), torch.zeros(n))
+    ank[..., 2] = 1.0                                                        # 0.3 below the band, cost 9 -> cap 4
+    assert torch.allclose(vs.vic_strategy_cost(ank, v, pct, valid, *args), torch.full((n,), 4.0))
+    assert torch.allclose(vs.vic_strategy_cost(ank, v, pct, torch.zeros(n, 2, dtype=torch.bool), *args), torch.zeros(n))

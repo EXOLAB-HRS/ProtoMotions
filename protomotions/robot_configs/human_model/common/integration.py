@@ -44,13 +44,14 @@ def selected_model_parameters(robot_config):
     No experiment file is discovered or silently promoted into runtime defaults.
     """
     parameters = deepcopy(getattr(robot_config,'human_model_parameters',{}))
-    allowed = {'features','strength_cohort','strength_reference_size','active_strength_scale','fatigue_regions','fatigue_rest_multiplier','passive_joint_parameters','pose_strength_model','passive_exponentials'}
+    allowed = {'features','strength_cohort','strength_reference_size','active_strength_scale','fatigue_regions','fatigue_rest_multiplier','passive_joint_parameters','pose_strength_model','passive_exponentials','segment_inertia'}
     if not isinstance(parameters,dict) or set(parameters)-allowed:
         raise ValueError('human_model_parameters contains unsupported parameters')
     if 'PROTOMOTIONS_HUMAN_MODEL_FEATURES' in os.environ:
         parameters['features'] = tuple(filter(None,(s.strip() for s in os.environ['PROTOMOTIONS_HUMAN_MODEL_FEATURES'].split(','))))
     if isinstance(parameters.get('features',()),str):
         raise ValueError('human_model_parameters.features must be a sequence of feature names')
+    parameters.pop('segment_inertia', None)        # asset choice (human_model_v3.5), read by the asset selection below
     return parameters
 
 
@@ -138,6 +139,15 @@ def prepare_simulator(robot_config, simulator_config, device):
             from ..human_model_v3_1.collision import validate_collision_asset
             corrected = get_model(collision_profile).asset_path('usd')
             validate_collision_asset(usd, corrected)
+            usd = corrected
+        inertia = (getattr(robot_config, 'human_model_parameters', None) or {}).get('segment_inertia')
+        if inertia is not None:
+            # human_model_v3.5 (2026-11-07, user-approved): human segment mass properties over the v3.1 collision asset.
+            if inertia != 'human_model_v3.5' or collision_profile != 'human_model_v3.1':
+                raise ValueError(f'segment_inertia {inertia!r} needs the human_model_v3.1 collision asset')
+            from ..human_model_v3_5.validate import validate_inertia_asset
+            corrected = get_model(inertia).asset_path('usd')
+            validate_inertia_asset(usd, corrected)
             usd = corrected
         asset.asset_root = str(usd.parent)
         asset.usd_asset_file_name = usd.name
