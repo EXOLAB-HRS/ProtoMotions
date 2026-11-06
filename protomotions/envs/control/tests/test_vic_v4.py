@@ -447,3 +447,37 @@ def test_passive_torque_is_minus_energy_gradient():
         dq = torch.zeros_like(q); dq[:, j] = eps
         g = (E(q + dq) - E(q - dq)) / (2 * eps)
         assert torch.allclose(tau[:, j], -g, atol=1e-6)
+
+
+def test_disc_moment_reference_labels(tmp_path):
+    """tqamp (2026-11-06 candidate): reference gait percent rises 0 -> 1 between debounced stance onsets, contact flicker
+    is merged, frames outside strides are extrapolated, and the expert moment is the table mean when noise is 0."""
+    from types import SimpleNamespace
+    from protomotions.envs.obs import disc_moment as dm
+    dt, n = 0.02, 300
+    t = torch.arange(n) * dt
+    gts = torch.zeros(n, 26, 3)
+    gts[..., 2] = 0.3
+    for leg, (a, b), off in ((0, (4, 5), 0.0), (1, (9, 10), 0.5)):
+        stance = ((t / 1.0 + off) % 1.0) < 0.6                 # 1 s stride, 60 % stance
+        gts[stance, a, 2] = 0.05
+    gts[51, 4, 2] = 0.3                                        # one-frame flicker inside left stance
+    gts[52, 4, 2] = 0.05
+    gvs = torch.zeros(n, 26, 3)
+    gvs[:, 0, 0] = 1.0
+    lib = SimpleNamespace(gts=gts, gvs=gvs, length_starts=torch.tensor([0]), motion_num_frames=torch.tensor([n]),
+                          motion_dt=torch.tensor([dt]))
+    pct, speed = dm.reference_gait_labels(lib, [[4, 5], [9, 10]], (0.078, 0.053))
+    assert torch.allclose(pct[50:100, 0], torch.arange(50) / 50.0, atol=1e-5)     # 1 s stride = 50 frames
+    assert torch.allclose(pct[0:50, 0], torch.arange(50) / 50.0, atol=1e-5)       # before the first onset (extrapolated)
+    assert abs(float(speed.mean()) - 1.0) < 1e-5
+    f = tmp_path / "m.pt"
+    torch.save({"speeds": torch.tensor([0.5, 1.0, 1.5]), "mean": torch.arange(3 * 101 * 3).float().view(3, 101, 3),
+                "sd": torch.ones(3, 101, 3)}, f)
+    ids, times = torch.zeros(2, dtype=torch.long), torch.tensor([75 * dt, 150 * dt])
+    out = dm.compute_disc_moment_from_motion_lib(lib, ids, times, dt, str(f), (1.0, -1.0, 1.0), [[4, 5], [9, 10]],
+                                                 (0.078, 0.053), noise=0.0)
+    mean = torch.arange(3 * 101 * 3).float().view(3, 101, 3) * torch.tensor([1.0, -1.0, 1.0])
+    # latest history step = frame 74 / 149: left 48 % / 98 %, right (onsets 25, 75, 125) 98 % / 48 %; speed 1.0 -> row 1
+    assert torch.allclose(out[0, :3], mean[1, 48]) and torch.allclose(out[0, 3:], mean[1, 98])
+    assert torch.allclose(out[1, :3], mean[1, 98]) and torch.allclose(out[1, 3:], mean[1, 48])

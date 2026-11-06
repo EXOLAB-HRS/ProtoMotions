@@ -104,6 +104,7 @@ VIC_PULSE_ERR = steering_path("vic_pulse_err")
 VIC_EFFERENCE = steering_path("vic_efference")
 VIC_IMP_PRIOR = steering_path("vic_imp_prior")
 VIC_MOMENT_PRIOR = steering_path("vic_moment_prior")   # 2026-11-05 candidate: human joint-moment profile reward
+VIC_MOMENT_FEAT = steering_path("vic_moment_feat")     # 2026-11-06 candidate: leg joint moments for the AMP discriminator
 
 # Human joint impedance ranges (k N m/rad, b N m s/rad) for swing / stance / standing, model 63.3 kg.
 # Hip and knee in stance and standing: relaxed-static values (no walking stance measurement).
@@ -466,6 +467,10 @@ class VicSteeringConfig(CadenceGaitPercentSteeringConfig):
     v4_moment_signs: tuple = (1.0, 1.0, 1.0)
     v4_moment_sd_floor: float = 0.1
     v4_moment_kernel: float = 1.5
+    # 2026-11-06 candidate (user: "방법1 로 학습 바로 돌리자"; default off, no version bump): publish the same leg moments
+    # (N m/kg, [N, 6] = L hip / knee / ankle, R hip / knee / ankle, plant signs) as ctx.steering.vic_moment_feat so the AMP
+    # discriminator can see torque next to the body motion (protomotions/envs/obs/disc_moment.py).
+    v4_moment_disc: bool = False
     v4_preact_joints: tuple = ()
     v4_preact_p: tuple = (0.8, 1.0)
     v4_swing_T0_s: float = 0.4
@@ -1276,25 +1281,31 @@ class VicSteering(CadenceGaitPercentSteering):
             self._mean_k[st] = torch.where(m.any(0), (torch.log(k_eff) * m).sum(0) / cnt, self._mean_k[st])
         self._log()
 
-    def _moment_prior(self, ctx):
-        """vic_moment_prior input: total sagittal leg torque (active PD + feed-forward as applied, plus plant passive) in
-        N m/kg per leg; ones when the option is off or before the simulator is ready."""
+    def _leg_moments(self):
+        """Total sagittal leg torque (active PD + feed-forward as applied, plus plant passive) in N m/kg, [N, 2, 3]
+        (L, R x hip / knee / ankle); None before the simulator is ready."""
         c = self.config
         n = len(self._tar_speed)
-        if not c.v4_moment_table or not self._sim_ready:
-            return torch.ones(n, device=self._tar_speed.device)
+        if not self._sim_ready:
+            return None
         if getattr(self, "_mom_idx", None) is None:
             self._mom_idx = torch.tensor([[c.vic_joints.index(f"{l}_{j}") for j in ("Hip_y", "Knee_y", "Ankle_y")]
                                           for l in ("L", "R")], device=self._tar_speed.device)
         sim = self.env.simulator
         src = getattr(sim, "human_active_torques", None)
         if src is None or src.shape[0] != n:
-            return torch.ones(n, device=self._tar_speed.device)
+            return None
         tau = src[:, self._idx].float()
         if self._v4_model is not None:
             dof = sim._get_simulator_dof_state().convert_to_common(sim.data_conversion)
             tau = tau + vic4_passive_torque(self._v4_model, dof.dof_pos, self._idx)
-        tau = tau[:, self._mom_idx] / c.body_mass                                      # [N, 2, 3]
+        return tau[:, self._mom_idx] / c.body_mass                                      # [N, 2, 3]
+
+    def _moment_prior(self, ctx, tau):
+        """vic_moment_prior from the leg moments; ones when the option is off or before the simulator is ready."""
+        c = self.config
+        if not c.v4_moment_table or tau is None:
+            return torch.ones(len(self._tar_speed), device=self._tar_speed.device)
         return vic_moment_prior(tau, self._tar_speed, ctx.steering.gait_pct, ctx.steering.gait_pct_valid,
                                 c.v4_moment_table, c.v4_moment_signs, c.v4_moment_sd_floor, c.v4_moment_kernel)
 
@@ -1320,4 +1331,8 @@ class VicSteering(CadenceGaitPercentSteering):
         ctx.steering.vic_pulse_err = self._pulse_err
         ctx.steering.vic_efference = self._eff.flatten(1)
         ctx.steering.vic_imp_prior = self._imp
-        ctx.steering.vic_moment_prior = self._moment_prior(ctx)
+        tau = self._leg_moments() if (self.config.v4_moment_table or self.config.v4_moment_disc) else None
+        ctx.steering.vic_moment_prior = self._moment_prior(ctx, tau)
+        if self.config.v4_moment_disc:
+            ctx.steering.vic_moment_feat = (tau.flatten(1) if tau is not None
+                                            else torch.zeros(len(self._tar_speed), 6, device=self._tar_speed.device))
