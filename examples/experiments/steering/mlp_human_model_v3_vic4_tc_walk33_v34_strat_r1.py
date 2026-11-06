@@ -8,6 +8,8 @@
 - + vic_strategy_cost (weight STRATEGY_WEIGHT): band cost on hip (two-sided) and ankle (below the band only) moments; the
   kernel moment reward saturated (kin last: hip -0.99, push-off 1.07 N m/kg at 1.0 m/s).
 - steady_speed_tracking weight 0.15 -> STEADY_WEIGHT with its overspeed tail on: kin overspeeds +0.06-0.16 m/s (W1 fail).
+- v4_kinetic_friction: the fore-aft ground force adds the PhysX friction force (the contact sensor net force is the normal
+  force only, so fx was 0 in the kin run; rollout check: braking -0.08, propulsion +0.08-0.10 BW, human -0.11 / +0.16).
 """
 import dataclasses
 from pathlib import Path
@@ -32,7 +34,7 @@ def env_config(robot_cfg, args):
     cfg = _base.env_config(robot_cfg, args)
     cfg.control_components["steering"] = dataclasses.replace(
         cfg.control_components["steering"], v4_moment_table=str(MOMENT_TABLE), v4_moment_signs=(1.0, 1.0, 1.0),
-        v4_strategy=True, v4_strategy_scale=STRATEGY_SCALE, v4_strategy_cap=STRATEGY_CAP)
+        v4_strategy=True, v4_strategy_scale=STRATEGY_SCALE, v4_strategy_cap=STRATEGY_CAP, v4_kinetic_friction=True)
     cfg.reward_components["vic_strategy_cost"] = MdpComponent(
         compute_func=vic_cost, dynamic_vars={"value": VIC_STRATEGY_COST}, static_params={"weight": STRATEGY_WEIGHT})
     sp = cfg.reward_components["steady_speed_tracking"].static_params

@@ -314,6 +314,22 @@ def vic_strategy_cost(tau_nkg: Tensor, tar_speed: Tensor, gait_pct: Tensor, gait
     return (out[0] + out[1]) / 2
 
 
+def contact_friction_w(sensor, dt: float) -> Tensor:
+    """Friction force on each sensor body from the filtered prims (terrain = filter 0), world frame, [N, 3], summed over the
+    contact points of the last physics substep (2026-11-07). The contact sensor's net_forces_w holds the NORMAL force only,
+    so the fore-aft ground force needs this; PhysX RigidContactView.get_friction_data (impulse / dt)."""
+    f, _, cnt, start = sensor.contact_physx_view.get_friction_data(dt)
+    cnt, start = cnt[:, 0].long(), start[:, 0].long()
+    n, total = cnt.shape[0], int(cnt.sum())
+    out = torch.zeros(n, 3, device=f.device, dtype=torch.float)
+    if total == 0:
+        return out
+    owner = torch.repeat_interleave(torch.arange(n, device=f.device), cnt)
+    first = torch.cumsum(cnt, 0) - cnt                                     # position of each sensor's run in owner order
+    pos = torch.repeat_interleave(start - first, cnt) + torch.arange(total, device=f.device)
+    return out.index_add_(0, owner, f[pos].float())
+
+
 def vic4_damping(lk: Tensor, lk_c: Tensor, lb_c: Tensor, alpha: Tensor, lb_lo: Tensor, lb_hi: Tensor) -> Tensor:
     """D1 damping law in log space: ln b = ln b_c + alpha (ln k - ln k_c), clamped to [ln b_lo - ln 2, ln b_hi + ln 2]."""
     return (lb_c + alpha * (lk - lk_c)).clamp(lb_lo - math.log(2.0), lb_hi + math.log(2.0))
@@ -539,6 +555,7 @@ class VicSteeringConfig(CadenceGaitPercentSteeringConfig):
     v4_kinetic_kernel: float = 1.5
     v4_kinetic_ankle_height: float = 0.065     # plant ankle joint above the sole (m), human_model_v2 MJCF
     v4_kinetic_body_height: float = 1.72       # plant standing height (m, MJCF geoms) for the lever normalisation
+    v4_kinetic_friction: bool = False          # 2026-11-07: add the PhysX friction force (net_forces_w is normal only)
     # 2026-11-07 candidate (user: "발목으로 좀 전략이 많이 가게 해줘, 보상으로 만들어야할거 같은데"; default off): vic_strategy_cost
     # on the v4_moment_table moments; the kernel reward saturates (kin run: hip -1.0 vs human -0.35 N m/kg at 1.0 m/s held
     # for 460 epochs), this band cost keeps pushing. Band = mean +- band_k sd (floor v4_moment_sd_floor), N m/kg.
@@ -1395,12 +1412,26 @@ class VicSteering(CadenceGaitPercentSteering):
             return None
         try:
             f = torch.stack([sum(sm[b].data.net_forces_w_history[:, :, 0, :].mean(1) for b in bodies)
-                             for bodies in c.grf_bodies], 1)                                  # [N, 2, 3] world
+                             for bodies in c.grf_bodies], 1)                                  # [N, 2, 3] world, normal force
         except (KeyError, AttributeError, IndexError):
             return None
+        if c.v4_kinetic_friction and not getattr(self, "_fric_off", False):
+            # 2026-11-07: net_forces_w is the normal force only (fore-aft was 0 in the kin run); add the friction force.
+            try:
+                dt = 1.0 / self.env.simulator.config.sim.fps
+                f = f + torch.stack([sum(contact_friction_w(sm[b], dt) for b in bodies) for bodies in c.grf_bodies], 1)
+            except Exception as ex:
+                self._fric_off = True
+                print(f"[vic] foot friction unavailable, fore-aft ground force stays 0: {ex}", flush=True)
         _, fw, _ = pelvis_frame(self.env.simulator.get_root_state().root_rot)
         fz = f[..., 2].clamp(min=0.0)
         fx = (f[..., :2] * fw[:, None, :2]).sum(-1)
+        if c.v4_kinetic_friction and not getattr(self, "_fric_logged", False) and (fz > 0.5 * self._bw).any():
+            self._fric_logged = True
+            st = fz > 0.5 * self._bw
+            print("[vic] fore-aft ground force on loaded feet (BW): mean %.3f, min %.3f, max %.3f, |fx| > 0.01 BW %.2f"
+                  % tuple(float(x) for x in ((fx[st] / self._bw).mean(), (fx[st] / self._bw).min(), (fx[st] / self._bw).max(),
+                                             ((fx[st] / self._bw).abs() > 0.01).float().mean())), flush=True)
         tau_pf = tau[:, :, 2] * c.body_mass                                                   # N m, + plantarflexion
         valid = fz > 0.2 * self._bw
         lev = torch.where(valid, (tau_pf - c.v4_kinetic_ankle_height * fx) / fz.clamp(min=1.0), torch.zeros_like(fz))

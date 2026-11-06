@@ -529,3 +529,17 @@ def test_strategy_cost_band(tmp_path):
     ank[..., 2] = 1.0                                                        # 0.3 below the band, cost 9 -> cap 4
     assert torch.allclose(vs.vic_strategy_cost(ank, v, pct, valid, *args), torch.full((n,), 4.0))
     assert torch.allclose(vs.vic_strategy_cost(ank, v, pct, torch.zeros(n, 2, dtype=torch.bool), *args), torch.zeros(n))
+
+
+def test_contact_friction_sums_each_sensor_run():
+    """contact_friction_w (2026-11-07): per sensor, the sum of its contact points' friction forces (terrain filter column)."""
+    class View:
+        def get_friction_data(self, dt):
+            f = torch.tensor([[1.0, 0, 0], [2.0, 0, 0], [0, 5.0, 0], [9.0, 9.0, 9.0], [0, 0, 1.0]])
+            cnt = torch.tensor([[2], [0], [1], [1]])
+            start = torch.tensor([[0], [2], [2], [4]])               # index 3 is a stale slot nobody owns
+            return f, None, cnt, start
+    class Sensor:
+        contact_physx_view = View()
+    out = vs.contact_friction_w(Sensor(), 1 / 240)
+    assert torch.allclose(out, torch.tensor([[3.0, 0, 0], [0, 0, 0], [0, 5.0, 0], [0, 0, 1.0]]))
