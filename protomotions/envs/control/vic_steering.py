@@ -564,6 +564,10 @@ class VicSteeringConfig(CadenceGaitPercentSteeringConfig):
     v4_strategy_scale: float = 0.1
     v4_strategy_joint_w: tuple = (1.0, 0.0, 1.0)
     v4_strategy_cap: float = 4.0
+    # 2026-11-07 (plant human_model_v3.6): tau_max used to scale the policy's tau_res and the effort / co-contraction terms,
+    # per vic joint. Empty = the joint effort limit (as before). v3.6 raises the effort limits to young-adult maximal
+    # strength; the recipe pins this to the v3.5 limits so the same action gives the same torque and cost.
+    v4_tau_norm: tuple = ()
     v4_preact_joints: tuple = ()
     v4_preact_p: tuple = (0.8, 1.0)
     v4_swing_T0_s: float = 0.4
@@ -589,6 +593,9 @@ class VicSteering(CadenceGaitPercentSteering):
         k_old = torch.tensor([info[j].stiffness for j in c.vic_joints], device=dev, dtype=torch.float)
         b_old = torch.tensor([info[j].damping for j in c.vic_joints], device=dev, dtype=torch.float)
         tau_max = torch.tensor([info[j].effort_limit for j in c.vic_joints], device=dev, dtype=torch.float)
+        if c.v4_tau_norm:
+            assert len(c.v4_tau_norm) == J, "v4_tau_norm needs one value per vic joint"
+            tau_max = torch.tensor(c.v4_tau_norm, device=dev, dtype=torch.float)
         self._k_old, self._b_old, self._tau_max = k_old, b_old, tau_max
         lk_h = torch.zeros(J, 3, device=dev)
         lb_h = torch.zeros(J, 3, device=dev)
