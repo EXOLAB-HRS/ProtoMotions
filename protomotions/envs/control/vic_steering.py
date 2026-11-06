@@ -91,7 +91,7 @@ import torch
 from torch import Tensor
 
 from protomotions.envs.control.cadence_gait_prior import (
-    CadenceGaitPercentSteering, CadenceGaitPercentSteeringConfig, steering_path)
+    CadenceGaitPercentSteering, CadenceGaitPercentSteeringConfig, pelvis_frame, steering_path)
 
 VIC_BAND_COST = steering_path("vic_band_cost")
 VIC_COCONTRACTION = steering_path("vic_cocontraction")
@@ -104,7 +104,8 @@ VIC_PULSE_ERR = steering_path("vic_pulse_err")
 VIC_EFFERENCE = steering_path("vic_efference")
 VIC_IMP_PRIOR = steering_path("vic_imp_prior")
 VIC_MOMENT_PRIOR = steering_path("vic_moment_prior")   # 2026-11-05 candidate: human joint-moment profile reward
-VIC_MOMENT_FEAT = steering_path("vic_moment_feat")     # 2026-11-06 candidate: leg joint moments for the AMP discriminator
+VIC_MOMENT_FEAT = steering_path("vic_moment_feat")
+VIC_KINETIC_PRIOR = steering_path("vic_kinetic_prior")  # 2026-11-06 candidate: human ground-force / CoP profile reward     # 2026-11-06 candidate: leg joint moments for the AMP discriminator
 
 # Human joint impedance ranges (k N m/rad, b N m s/rad) for swing / stance / standing, model 63.3 kg.
 # Hip and knee in stance and standing: relaxed-static values (no walking stance measurement).
@@ -253,6 +254,36 @@ def vic_moment_prior(tau_nkg: Tensor, tar_speed: Tensor, gait_pct: Tensor, gait_
         p = (gait_pct[:, leg].clamp(0, 1) * 100).round().long()
         z = (tau_nkg[:, leg] - mean[s, p]) / (kernel_scale * sd[s, p].clamp_min(sd_floor))
         r = torch.exp(-0.5 * (z ** 2).mean(-1))
+        out.append(torch.where(gait_pct_valid[:, leg], r, torch.ones_like(r)))
+    return (out[0] + out[1]) / 2
+
+
+_KINETIC_TABLES = {}
+
+
+def vic_kinetic_prior(feat: Tensor, tar_speed: Tensor, gait_pct: Tensor, gait_pct_valid: Tensor, table_file: str,
+                      sd_floor: tuple, kernel_scale: float, lev_min_frac: float = 0.5) -> Tensor:
+    """Human ground-force / centre-of-pressure profile reward (2026-11-06 candidate, KAIL-style kinetics term).
+    feat [N, 2, 4] per leg (L, R): vertical force / body weight, fore-aft force / body weight (+ forward along the heading),
+    CoP-ankle lever / body height, lever valid (vertical force > 0.2 body weight). Table (scripts/build_lencioni_kinetic_table.py):
+    mean / sd [S, 101, 3] for the same three channels, lev_frac [S, 101]. Per leg r = exp(-0.5 mean z^2) over fz, fx and, where
+    both the plant lever is valid and >= lev_min_frac of the human strides have one, lev; z = (x - mean) / (kernel_scale *
+    max(sd, floor)) at the leg's gait percent and the nearest table speed; r = 1 where the gait percent is not valid."""
+    key = (table_file, str(feat.device))
+    if key not in _KINETIC_TABLES:
+        t = torch.load(table_file, map_location=feat.device, weights_only=False)
+        _KINETIC_TABLES[key] = (t["speeds"].to(feat.device).float(), torch.nan_to_num(t["mean"].to(feat.device).float()),
+                                torch.nan_to_num(t["sd"].to(feat.device).float()), t["lev_frac"].to(feat.device).float())
+    speeds, mean, sd, frac = _KINETIC_TABLES[key]
+    floor = torch.tensor(sd_floor, device=feat.device, dtype=torch.float)
+    s = torch.bucketize(tar_speed.float(), (speeds[1:] + speeds[:-1]) / 2).clamp(0, len(speeds) - 1)
+    out = []
+    for leg in range(2):
+        p = (gait_pct[:, leg].clamp(0, 1) * 100).round().long()
+        z2 = ((feat[:, leg, :3] - mean[s, p]) / (kernel_scale * torch.maximum(sd[s, p], floor))) ** 2
+        use = torch.ones_like(z2)
+        use[:, 2] = ((feat[:, leg, 3] > 0.5) & (frac[s, p] >= lev_min_frac)).float()
+        r = torch.exp(-0.5 * (z2 * use).sum(-1) / use.sum(-1))
         out.append(torch.where(gait_pct_valid[:, leg], r, torch.ones_like(r)))
     return (out[0] + out[1]) / 2
 
@@ -471,6 +502,17 @@ class VicSteeringConfig(CadenceGaitPercentSteeringConfig):
     # (N m/kg, [N, 6] = L hip / knee / ankle, R hip / knee / ankle, plant signs) as ctx.steering.vic_moment_feat so the AMP
     # discriminator can see torque next to the body motion (protomotions/envs/obs/disc_moment.py).
     v4_moment_disc: bool = False
+    # 2026-11-06 candidate (user: "판별기 = 관절 궤적, 보상 = 지면 반력·CoP + 토크" -> "1,2 는 일단 바로 시작하자"; default off,
+    # no version bump): human ground-force / CoP profile reward vic_kinetic_prior, off when v4_kinetic_table is "". Table =
+    # Lencioni 2019 force plates (training data, scripts/build_lencioni_kinetic_table.py). Plant side per leg: net contact
+    # force of grf_bodies (vertical and fore-aft along the pelvis heading, / body weight) and the CoP lever from the foot's
+    # quasi-static balance about the ankle, d = (tau_ankle_pf - h_ankle F_fore-aft) / F_vertical (the simulator gives net body
+    # forces, not contact points), / body height. sd floors: 0.05 / 0.02 body weight, 0.005 body height.
+    v4_kinetic_table: str = ""
+    v4_kinetic_sd_floor: tuple = (0.05, 0.02, 0.005)
+    v4_kinetic_kernel: float = 1.5
+    v4_kinetic_ankle_height: float = 0.065     # plant ankle joint above the sole (m), human_model_v2 MJCF
+    v4_kinetic_body_height: float = 1.72       # plant standing height (m, MJCF geoms) for the lever normalisation
     v4_preact_joints: tuple = ()
     v4_preact_p: tuple = (0.8, 1.0)
     v4_swing_T0_s: float = 0.4
@@ -1301,6 +1343,35 @@ class VicSteering(CadenceGaitPercentSteering):
             tau = tau + vic4_passive_torque(self._v4_model, dof.dof_pos, self._idx)
         return tau[:, self._mom_idx] / c.body_mass                                      # [N, 2, 3]
 
+    def _kinetic_feat(self, tau):
+        """Per leg [N, 2, 4]: vertical force / BW, fore-aft force / BW (+ along the pelvis heading), CoP lever / body height,
+        lever valid; None when the contact sensors or the torques are not ready."""
+        c = self.config
+        sm = getattr(self.env.simulator, "_contact_sensor_map", None)
+        if not sm or tau is None:
+            return None
+        try:
+            f = torch.stack([sum(sm[b].data.net_forces_w_history[:, :, 0, :].mean(1) for b in bodies)
+                             for bodies in c.grf_bodies], 1)                                  # [N, 2, 3] world
+        except (KeyError, AttributeError, IndexError):
+            return None
+        _, fw, _ = pelvis_frame(self.env.simulator.get_root_state().root_rot)
+        fz = f[..., 2].clamp(min=0.0)
+        fx = (f[..., :2] * fw[:, None, :2]).sum(-1)
+        tau_pf = tau[:, :, 2] * c.body_mass                                                   # N m, + plantarflexion
+        valid = fz > 0.2 * self._bw
+        lev = torch.where(valid, (tau_pf - c.v4_kinetic_ankle_height * fx) / fz.clamp(min=1.0), torch.zeros_like(fz))
+        return torch.stack([fz / self._bw, fx / self._bw, lev / c.v4_kinetic_body_height, valid.float()], -1)
+
+    def _kinetic_prior(self, ctx, tau):
+        """vic_kinetic_prior; ones when the option is off or before the simulator is ready."""
+        c = self.config
+        feat = self._kinetic_feat(tau) if c.v4_kinetic_table else None
+        if feat is None:
+            return torch.ones(len(self._tar_speed), device=self._tar_speed.device)
+        return vic_kinetic_prior(feat, self._tar_speed, ctx.steering.gait_pct, ctx.steering.gait_pct_valid,
+                                 c.v4_kinetic_table, c.v4_kinetic_sd_floor, c.v4_kinetic_kernel)
+
     def _moment_prior(self, ctx, tau):
         """vic_moment_prior from the leg moments; ones when the option is off or before the simulator is ready."""
         c = self.config
@@ -1331,8 +1402,10 @@ class VicSteering(CadenceGaitPercentSteering):
         ctx.steering.vic_pulse_err = self._pulse_err
         ctx.steering.vic_efference = self._eff.flatten(1)
         ctx.steering.vic_imp_prior = self._imp
-        tau = self._leg_moments() if (self.config.v4_moment_table or self.config.v4_moment_disc) else None
+        tau = self._leg_moments() if (self.config.v4_moment_table or self.config.v4_moment_disc
+                                      or self.config.v4_kinetic_table) else None
         ctx.steering.vic_moment_prior = self._moment_prior(ctx, tau)
+        ctx.steering.vic_kinetic_prior = self._kinetic_prior(ctx, tau)
         if self.config.v4_moment_disc:
             ctx.steering.vic_moment_feat = (tau.flatten(1) if tau is not None
                                             else torch.zeros(len(self._tar_speed), 6, device=self._tar_speed.device))

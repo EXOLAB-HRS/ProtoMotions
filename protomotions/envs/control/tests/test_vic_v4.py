@@ -430,6 +430,30 @@ def test_moment_prior_kernel_signs_and_validity(tmp_path):
     assert torch.allclose(r3, torch.ones(n))
 
 
+def test_kinetic_prior_kernel_and_lever_mask(tmp_path):
+    """vic_kinetic_prior (2026-11-06 candidate): 1 at the table mean, lower away from it; the lever channel only counts where
+    the plant lever is valid and enough human strides have one; 1 where the gait percent is not valid; off by default."""
+    assert vs.VicSteeringConfig().v4_kinetic_table == ""
+    speeds = torch.tensor([0.8, 1.0, 1.4])
+    mean = torch.zeros(3, 101, 3); mean[..., 0] = 1.0; mean[..., 1] = 0.1; mean[..., 2] = 0.07
+    sd = torch.full((3, 101, 3), 0.05)
+    frac = torch.ones(3, 101); frac[:, 60:] = 0.0
+    f = tmp_path / "kin.pt"; torch.save({"speeds": speeds, "mean": mean, "sd": sd, "lev_frac": frac}, f)
+    n = 4
+    pct = torch.full((n, 2), 0.5); valid = torch.ones(n, 2, dtype=torch.bool); v = torch.full((n,), 1.0)
+    at = torch.tensor([1.0, 0.1, 0.07, 1.0]).expand(n, 2, 4).clone()
+    assert torch.allclose(vs.vic_kinetic_prior(at, v, pct, valid, str(f), (0.05, 0.02, 0.005), 1.0), torch.ones(n))
+    short = at.clone(); short[..., 2] = 0.0                                     # lever 0 instead of 0.07 body heights
+    assert torch.all(vs.vic_kinetic_prior(short, v, pct, valid, str(f), (0.05, 0.02, 0.005), 1.0) < 0.8)   # z 1.4 of 3
+    short[..., 3] = 0.0                                                         # plant lever not valid -> not counted
+    assert torch.allclose(vs.vic_kinetic_prior(short, v, pct, valid, str(f), (0.05, 0.02, 0.005), 1.0), torch.ones(n))
+    late = at.clone(); late[..., 2] = 0.0
+    assert torch.allclose(vs.vic_kinetic_prior(late, v, torch.full((n, 2), 0.8), valid, str(f), (0.05, 0.02, 0.005), 1.0),
+                          torch.ones(n))                                        # no human lever at 80 %
+    assert torch.allclose(vs.vic_kinetic_prior(short, v, pct, torch.zeros(n, 2, dtype=torch.bool), str(f),
+                                               (0.05, 0.02, 0.005), 1.0), torch.ones(n))
+
+
 def test_passive_torque_is_minus_energy_gradient():
     """vic4_passive_torque equals -dE/dq of the exponential terms (finite difference)."""
     J = len(JOINTS)
