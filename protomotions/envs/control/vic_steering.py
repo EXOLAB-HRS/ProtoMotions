@@ -107,6 +107,7 @@ VIC_MOMENT_PRIOR = steering_path("vic_moment_prior")   # 2026-11-05 candidate: h
 VIC_MOMENT_FEAT = steering_path("vic_moment_feat")
 VIC_KINETIC_PRIOR = steering_path("vic_kinetic_prior")  # 2026-11-06 candidate: human ground-force / CoP profile reward     # 2026-11-06 candidate: leg joint moments for the AMP discriminator
 VIC_STRATEGY_COST = steering_path("vic_strategy_cost")  # 2026-11-07 candidate: hip moment outside / ankle moment below the human band
+VIC_UPPER_PRIOR = steering_path("vic_upper_prior")      # 2026-11-07 candidate: human arm-swing profile reward
 
 # Human joint impedance ranges (k N m/rad, b N m s/rad) for swing / stance / standing, model 63.3 kg.
 # Hip and knee in stance and standing: relaxed-static values (no walking stance measurement).
@@ -311,6 +312,43 @@ def vic_strategy_cost(tau_nkg: Tensor, tar_speed: Tensor, gait_pct: Tensor, gait
         dev[:, 2] = torch.relu(-d[:, 2] - half[:, 2])
         c = ((dev / scale) ** 2 * w).sum(-1).clamp(max=cap)
         out.append(torch.where(gait_pct_valid[:, leg], c, torch.zeros_like(c)))
+    return (out[0] + out[1]) / 2
+
+
+_UPPER_TABLES = {}
+
+
+def arm_angles(body_pos: Tensor, idx: Tensor, fw: Tensor) -> Tensor:
+    """Per arm (L, R) [N, 2, 2]: upper-arm sagittal angle (shoulder -> elbow, + forward along the heading fw, from hanging
+    straight down) and elbow angle (upper arm vs forearm, 0 = straight), rad, the W2-3 / Lencioni marker definitions.
+    idx [2, 3] = shoulder / elbow / wrist body indices per arm."""
+    p = body_pos[:, idx]                                                   # [N, 2, 3, 3]
+    u, fa = p[:, :, 1] - p[:, :, 0], p[:, :, 2] - p[:, :, 1]
+    sag = torch.atan2((u * fw[:, None]).sum(-1), -u[..., 2])
+    cos = (u * fa).sum(-1) / (u.norm(dim=-1) * fa.norm(dim=-1)).clamp_min(1e-6)
+    return torch.stack([sag, torch.acos(cos.clamp(-1.0, 1.0))], -1)
+
+
+def vic_upper_prior(ang: Tensor, tar_speed: Tensor, gait_pct: Tensor, gait_pct_valid: Tensor, table_file: str,
+                    sd_floor: float, kernel_scale: float) -> Tensor:
+    """Human arm-swing profile reward (2026-11-07 candidate). ang [N, 2, 2] from arm_angles. Table
+    (scripts/build_lencioni_arm_table.py): speeds, mean / sd [S, 101, 4] = arm sagittal ipsi / contra, elbow ipsi / contra,
+    rad, indexed by the gait percent of one stride foot (ipsi = arm on that side). Per leg: the four channels of both arms
+    at that leg's gait percent and the nearest table speed, r = exp(-0.5 mean z^2), z = (x - mean) / (kernel_scale *
+    max(sd, sd_floor)); r = 1 where the gait percent is not valid; mean over legs."""
+    key = (table_file, str(ang.device))
+    if key not in _UPPER_TABLES:
+        t = torch.load(table_file, map_location=ang.device, weights_only=False)
+        _UPPER_TABLES[key] = (t["speeds"].to(ang.device).float(), t["mean"].to(ang.device).float(), t["sd"].to(ang.device).float())
+    speeds, mean, sd = _UPPER_TABLES[key]
+    s = torch.bucketize(tar_speed.float(), (speeds[1:] + speeds[:-1]) / 2).clamp(0, len(speeds) - 1)
+    out = []
+    for leg in range(2):
+        p = (gait_pct[:, leg].clamp(0, 1) * 100).round().long()
+        x = torch.stack([ang[:, leg, 0], ang[:, 1 - leg, 0], ang[:, leg, 1], ang[:, 1 - leg, 1]], -1)
+        z = (x - mean[s, p]) / (kernel_scale * sd[s, p].clamp_min(sd_floor))
+        r = torch.exp(-0.5 * (z ** 2).mean(-1))
+        out.append(torch.where(gait_pct_valid[:, leg], r, torch.ones_like(r)))
     return (out[0] + out[1]) / 2
 
 
@@ -568,6 +606,12 @@ class VicSteeringConfig(CadenceGaitPercentSteeringConfig):
     # per vic joint. Empty = the joint effort limit (as before). v3.6 raises the effort limits to young-adult maximal
     # strength; the recipe pins this to the v3.5 limits so the same action gives the same torque and cost.
     v4_tau_norm: tuple = ()
+    # 2026-11-07 candidate (user: "팔이랑 머리는 왜 저렇게 이상하게 움직이지? ... 다음 학습부터는 이것도 잘 맞추게"; default off):
+    # human arm-swing profile reward vic_upper_prior (Lencioni 2019 train5 table, rad), off when v4_upper_table is "".
+    v4_upper_table: str = ""
+    v4_upper_bodies: tuple = (("L_Shoulder", "L_Elbow", "L_Wrist"), ("R_Shoulder", "R_Elbow", "R_Wrist"))
+    v4_upper_sd_floor: float = 0.05
+    v4_upper_kernel: float = 1.5
     v4_preact_joints: tuple = ()
     v4_preact_p: tuple = (0.8, 1.0)
     v4_swing_T0_s: float = 0.4
@@ -1470,6 +1514,23 @@ class VicSteering(CadenceGaitPercentSteering):
                                  c.v4_moment_signs, c.v4_moment_sd_floor, c.v4_strategy_band_k, c.v4_strategy_scale,
                                  c.v4_strategy_joint_w, c.v4_strategy_cap)
 
+    def _upper_prior(self, ctx):
+        """vic_upper_prior; ones when the option is off."""
+        c = self.config
+        n = len(self._tar_speed)
+        if not c.v4_upper_table:
+            return torch.ones(n, device=self._tar_speed.device)
+        if getattr(self, "_upper_idx", None) is None:
+            names = list(self.env.robot_config.kinematic_info.body_names)
+            self._upper_idx = torch.tensor([[names.index(b) for b in arm] for arm in c.v4_upper_bodies],
+                                           device=self._tar_speed.device)
+        sim = self.env.simulator
+        _, fw, _ = pelvis_frame(sim.get_root_state().root_rot)
+        ang = arm_angles(sim.get_robot_state().rigid_body_pos, self._upper_idx, fw)
+        self.upper_angles = ang
+        return vic_upper_prior(ang, self._tar_speed, ctx.steering.gait_pct, ctx.steering.gait_pct_valid, c.v4_upper_table,
+                               c.v4_upper_sd_floor, c.v4_upper_kernel)
+
     def _update_impact(self):
         """Per leg, peak vertical contact force over the physics substeps of the last control step (body weights);
         cost = mean over legs of max(0, peak - grf_ref_bw), clamped at 3."""
@@ -1497,6 +1558,7 @@ class VicSteering(CadenceGaitPercentSteering):
         ctx.steering.vic_moment_prior = self._moment_prior(ctx, tau)
         ctx.steering.vic_kinetic_prior = self._kinetic_prior(ctx, tau)
         ctx.steering.vic_strategy_cost = self._strategy_cost(ctx, tau)
+        ctx.steering.vic_upper_prior = self._upper_prior(ctx)
         if self.config.v4_moment_disc:
             ctx.steering.vic_moment_feat = (tau.flatten(1) if tau is not None
                                             else torch.zeros(len(self._tar_speed), 6, device=self._tar_speed.device))
