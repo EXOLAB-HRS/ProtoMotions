@@ -33,6 +33,36 @@ from protomotions.agents.ppo.config import PPOActorConfig, PPOModelConfig
 from protomotions.agents.base_agent.model import BaseModel
 
 
+def _hc_residual(actor, tensordict, mu):
+    """Residual teacher (2026-11-12, human-controller arm fix on teacher 344, off unless HC_RESID_BASE is set).
+    mu_out = mu_base + w * (mu - mu_base): mu_base is a frozen copy of the actor mean loaded from HC_RESID_BASE (the
+    parent checkpoint), mu the trainable actor (initialised from the same parent, so the residual starts at 0).
+    w = 1 on HC_RESID_IDX (comma list of action indices, e.g. the arm joints), HC_RESID_W elsewhere (default 0: those
+    outputs stay exactly the parent's). The frozen copy is kept out of the module tree (not in state_dict / optimiser)."""
+    import os
+    path = os.environ.get("HC_RESID_BASE")
+    if not path:
+        return mu
+    st = actor.__dict__.get("_hc_resid")
+    if st is None:
+        import copy
+        sd = torch.load(path, map_location="cpu", weights_only=False)["model"]
+        base = copy.deepcopy(actor.mu)
+        base.load_state_dict({k[len("_actor.mu."):]: v for k, v in sd.items() if k.startswith("_actor.mu.")})
+        base = base.to(mu.device).eval()
+        for p_ in base.parameters():
+            p_.requires_grad_(False)
+        w = torch.full((mu.shape[-1],), float(os.environ.get("HC_RESID_W", "0")), device=mu.device)
+        idx = [int(i) for i in os.environ.get("HC_RESID_IDX", "").split(",") if i.strip()]
+        w[idx] = 1.0
+        w[[int(i) for i in os.environ.get("HC_RESID_ZERO_IDX", "").split(",") if i.strip()]] = 0.0   # 2026-11-13: locked outputs
+        st = actor.__dict__["_hc_resid"] = dict(base=base, w=w)
+        print(f"[hc_resid] base {path} trainable idx {idx} other w {float(os.environ.get('HC_RESID_W', '0'))}", flush=True)
+    with torch.no_grad():
+        mb = st["base"](tensordict.clone(False))[actor.config.mu_key]
+    return mb + st["w"] * (mu - mb)
+
+
 class PPOActor(TensorDictModuleBase):
     """PPO policy network (actor).
 
@@ -78,6 +108,8 @@ class PPOActor(TensorDictModuleBase):
         # Compute distribution parameters
         tensordict = self.mu(tensordict)
         mu = tensordict[self.config.mu_key]
+        mu = _hc_residual(self, tensordict, mu)
+        tensordict[self.config.mu_key] = mu
         std = torch.exp(self.logstd)
 
         # Sample action from distribution

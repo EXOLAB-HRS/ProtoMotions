@@ -112,6 +112,31 @@ if TYPE_CHECKING:
     from protomotions.components.motion_lib import MotionLib
 
 
+def _hc_train_arm_shift(env, q):
+    """Human-controller arm shift during training (2026-11-13, hc_root_armres only; off unless HC_TRAIN_ARM_SHIFT_END is set).
+    Moves the L/R_Shoulder_x PD targets toward the body by (dL, dR) deg, the same convention as the rollout's HC_ARM_FIX=shift:dL,dR.
+    Curriculum: the shift grows linearly from HC_TRAIN_ARM_SHIFT_START to HC_TRAIN_ARM_SHIFT_END over HC_TRAIN_ARM_SHIFT_RAMP env steps
+    (counted per env.step call), and inside each episode it is ramped in over the first 2 s after a reset."""
+    import os, math
+    end = os.environ.get("HC_TRAIN_ARM_SHIFT_END")
+    if not end:
+        return q
+    st = env.__dict__.get("_hc_shift")
+    if st is None:
+        names = list(env.robot_config.kinematic_info.dof_names)
+        st = env.__dict__["_hc_shift"] = dict(iL=names.index("L_Shoulder_x"), iR=names.index("R_Shoulder_x"), n=0,
+            a=[math.radians(float(v)) for v in os.environ.get("HC_TRAIN_ARM_SHIFT_START", "0,0").split(",")],
+            b=[math.radians(float(v)) for v in end.split(",")], ramp=int(os.environ.get("HC_TRAIN_ARM_SHIFT_RAMP", "1")))
+        print(f"[hc_arm_shift] start {os.environ.get('HC_TRAIN_ARM_SHIFT_START')} end {end} ramp {st['ramp']} env steps", flush=True)
+    f = min(1.0, st["n"] / max(1, st["ramp"])); st["n"] += 1
+    dL = st["a"][0] + f * (st["b"][0] - st["a"][0]); dR = st["a"][1] + f * (st["b"][1] - st["a"][1])
+    g = (env.progress_buf.float() * float(env.dt) / 2.0).clamp(max=1.0)
+    q = q.clone()
+    q[:, st["iL"]] -= g * dL
+    q[:, st["iR"]] += g * dR
+    return q
+
+
 class BaseEnv:
     """Base class for all reinforcement learning environments.
 
@@ -695,6 +720,7 @@ class BaseEnv:
         # Process action
         action_dict = self._process_action(action, self.context)
         processed_action = action_dict["processed_action"]
+        processed_action = _hc_train_arm_shift(self, processed_action)
         self._current_processed_action[:] = processed_action
         if extra is not None:
             # Feed-forward distillation (2026-11-02): the agent may leave the frozen teacher's PD-target actions here.
