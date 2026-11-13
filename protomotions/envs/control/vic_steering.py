@@ -108,6 +108,7 @@ VIC_MOMENT_FEAT = steering_path("vic_moment_feat")
 VIC_KINETIC_PRIOR = steering_path("vic_kinetic_prior")  # 2026-11-06 candidate: human ground-force / CoP profile reward     # 2026-11-06 candidate: leg joint moments for the AMP discriminator
 VIC_STRATEGY_COST = steering_path("vic_strategy_cost")  # 2026-11-07 candidate: hip moment outside / ankle moment below the human band
 VIC_UPPER_PRIOR = steering_path("vic_upper_prior")      # 2026-11-07 candidate: human arm-swing profile reward
+VIC_ARM_ABD_PRIOR = steering_path("vic_arm_abd_prior")  # 2026-11-11 candidate: human upper-arm abduction (frontal) reward
 
 # Human joint impedance ranges (k N m/rad, b N m s/rad) for swing / stance / standing, model 63.3 kg.
 # Hip and knee in stance and standing: relaxed-static values (no walking stance measurement).
@@ -327,6 +328,22 @@ def arm_angles(body_pos: Tensor, idx: Tensor, fw: Tensor) -> Tensor:
     sag = torch.atan2((u * fw[:, None]).sum(-1), -u[..., 2])
     cos = (u * fa).sum(-1) / (u.norm(dim=-1) * fa.norm(dim=-1)).clamp_min(1e-6)
     return torch.stack([sag, torch.acos(cos.clamp(-1.0, 1.0))], -1)
+
+
+def arm_abduction(body_pos: Tensor, idx: Tensor, left: Tensor) -> Tensor:
+    """Per arm (L, R) [N, 2]: upper-arm abduction, rad = angle of shoulder -> elbow away from the body in the frontal plane,
+    from hanging straight down (+ = outward; L arm outward = +left, R arm outward = -left of the pelvis heading). Same
+    definition as the Lencioni 2019 marker check (2026-11-11: adults, 854 walking trials, mean 16.4 +- 3.8 deg, flat over
+    speed 15-17 deg); teacher 344 last held 38-45 deg (no reward or judge looked at the frontal plane)."""
+    u = body_pos[:, idx[:, 1]] - body_pos[:, idx[:, 0]]                    # [N, 2, 3]
+    lat = (u * left[:, None]).sum(-1) * torch.tensor([1.0, -1.0], device=u.device)
+    return torch.atan2(lat, -u[..., 2])
+
+
+def vic_arm_abd_prior(abd: Tensor, mean: float, sd: float, kernel_scale: float) -> Tensor:
+    """exp(-0.5 mean_arms z^2), z = (abduction - mean) / (kernel_scale * sd); all rad."""
+    z = (abd - mean) / (kernel_scale * sd)
+    return torch.exp(-0.5 * (z ** 2).mean(-1))
 
 
 def vic_upper_prior(ang: Tensor, tar_speed: Tensor, gait_pct: Tensor, gait_pct_valid: Tensor, table_file: str,
@@ -612,6 +629,9 @@ class VicSteeringConfig(CadenceGaitPercentSteeringConfig):
     v4_upper_bodies: tuple = (("L_Shoulder", "L_Elbow", "L_Wrist"), ("R_Shoulder", "R_Elbow", "R_Wrist"))
     v4_upper_sd_floor: float = 0.05
     v4_upper_kernel: float = 1.5
+    # 2026-11-11 candidate (user: "팔이상한거는 고쳐서 워크샵 들고가는게 나을거 같은데"; default off): upper-arm abduction reward
+    # vic_arm_abd_prior, (mean, sd, kernel) in rad / rad / -, off when empty. Lencioni 2019 adults 16.4 +- 3.8 deg.
+    v4_arm_abd: tuple = ()
     v4_preact_joints: tuple = ()
     v4_preact_p: tuple = (0.8, 1.0)
     v4_swing_T0_s: float = 0.4
@@ -1531,6 +1551,23 @@ class VicSteering(CadenceGaitPercentSteering):
         return vic_upper_prior(ang, self._tar_speed, ctx.steering.gait_pct, ctx.steering.gait_pct_valid, c.v4_upper_table,
                                c.v4_upper_sd_floor, c.v4_upper_kernel)
 
+    def _arm_abd_prior(self, ctx):
+        """vic_arm_abd_prior; ones when the option is off."""
+        c = self.config
+        n = len(self._tar_speed)
+        if not c.v4_arm_abd:
+            return torch.ones(n, device=self._tar_speed.device)
+        if getattr(self, "_upper_idx", None) is None:
+            names = list(self.env.robot_config.kinematic_info.body_names)
+            self._upper_idx = torch.tensor([[names.index(b) for b in arm] for arm in c.v4_upper_bodies],
+                                           device=self._tar_speed.device)
+        sim = self.env.simulator
+        _, _, left = pelvis_frame(sim.get_root_state().root_rot)
+        abd = arm_abduction(sim.get_robot_state().rigid_body_pos, self._upper_idx, left)
+        self.arm_abd = abd
+        mean, sd, k = c.v4_arm_abd
+        return vic_arm_abd_prior(abd, mean, sd, k)
+
     def _update_impact(self):
         """Per leg, peak vertical contact force over the physics substeps of the last control step (body weights);
         cost = mean over legs of max(0, peak - grf_ref_bw), clamped at 3."""
@@ -1559,6 +1596,7 @@ class VicSteering(CadenceGaitPercentSteering):
         ctx.steering.vic_kinetic_prior = self._kinetic_prior(ctx, tau)
         ctx.steering.vic_strategy_cost = self._strategy_cost(ctx, tau)
         ctx.steering.vic_upper_prior = self._upper_prior(ctx)
+        ctx.steering.vic_arm_abd_prior = self._arm_abd_prior(ctx)
         if self.config.v4_moment_disc:
             ctx.steering.vic_moment_feat = (tau.flatten(1) if tau is not None
                                             else torch.zeros(len(self._tar_speed), 6, device=self._tar_speed.device))
