@@ -68,7 +68,7 @@ class TendonChannel:
 def tendon_torque(D: Tensor, k, toe) -> Tensor:
     """T(D) >= 0 (N m) for stretch D (rad); k, toe broadcastable."""
     Dp = D.clamp_min(0)
-    toe_t = torch.as_tensor(toe, dtype=D.dtype, device=D.device).clamp_min(1e-12)
+    toe_t = max(float(toe), 1e-12)   # python scalar (CUDA-graph capture safe)
     quad = k * Dp * Dp / (2 * toe_t)
     lin = k * (Dp - toe_t / 2)
     return torch.where(Dp < toe_t, quad, lin)
@@ -77,7 +77,7 @@ def tendon_torque(D: Tensor, k, toe) -> Tensor:
 def tendon_energy(D: Tensor, k, toe) -> Tensor:
     """Elastic energy (J) stored at stretch D: integral of tendon_torque."""
     Dp = D.clamp_min(0)
-    toe_t = torch.as_tensor(toe, dtype=D.dtype, device=D.device).clamp_min(1e-12)
+    toe_t = max(float(toe), 1e-12)   # python scalar (CUDA-graph capture safe)
     cubic = k * Dp ** 3 / (6 * toe_t)
     lin = k * toe_t ** 2 / 6 + k * ((Dp * Dp - toe_t * toe_t) / 2 - toe_t * (Dp - toe_t) / 2)
     return torch.where(Dp < toe_t, cubic, lin)
@@ -86,14 +86,14 @@ def tendon_energy(D: Tensor, k, toe) -> Tensor:
 def tendon_stretch(torque: Tensor, k, toe) -> Tensor:
     """Inverse of tendon_torque for torque >= 0."""
     F = torque.clamp_min(0)
-    toe_t = torch.as_tensor(toe, dtype=F.dtype, device=F.device).clamp_min(1e-12)
+    toe_t = max(float(toe), 1e-12)   # python scalar (CUDA-graph capture safe)
     f_toe = k * toe_t / 2
     return torch.where(F < f_toe, torch.sqrt(2 * F * toe_t / k), F / k + toe_t / 2)
 
 
 def _solve(c: Tensor, a: Tensor, k, toe) -> Tensor:
     """Root D >= 0 of c - a D = T(D) (a >= 0); D = 0 when c <= 0. Closed form per branch."""
-    toe_t = torch.as_tensor(toe, dtype=c.dtype, device=c.device).clamp_min(1e-12)
+    toe_t = max(float(toe), 1e-12)   # python scalar: a host->device tensor copy is not allowed inside CUDA-graph capture
     cp = c.clamp_min(0)
     lin = (cp + k * toe_t / 2) / (a + k)
     disc = torch.sqrt(a * a + 2 * k * cp / toe_t)
