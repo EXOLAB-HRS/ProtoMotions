@@ -230,6 +230,7 @@ class HumanJointModel:
                 (self.positive if direction else self.negative)[joint] = torques.max()
                 self.backend_limit[joint] = torch.maximum(self.backend_limit[joint], torques.max())
         self._packed_strength = None
+        self.see = None   # human_model_v4.0 ankle series elastic element, set by integration.prepare_simulator
 
     def _pack_strength_rows(self):
         """Stack the per-row strength tables once so strength_caps runs as a few batched ops.
@@ -427,6 +428,8 @@ class HumanJointModel:
 
     def reset(self, env_ids=None):
         """Clear candidate activation at episode boundaries, including partial reset."""
+        if getattr(self, "see", None) is not None:
+            self.see.reset(env_ids)
         if self._activation is not None:
             if env_ids is None:
                 self._activation.zero_()
@@ -602,11 +605,12 @@ class HumanJointModel:
         state = simulator._get_simulator_dof_state().convert_to_common(simulator.data_conversion)
         q, qd = state.dof_pos, state.dof_vel
         requested = simulator._common_p_gains * (command - q) - simulator._common_d_gains * qd
-        negative, positive, outside = self.strength_caps(q, qd)
+        negative, positive, outside = self.strength_caps(q, qd if self.see is None else self.see.cap_velocity(qd))
         cap = torch.where(requested >= 0, positive, negative).clamp_min(0)
         elastic, damping = self.elastic_torque(q), self.damping_torque(qd)
         passive = elastic + damping
         active = torch.maximum(torch.minimum(requested, positive), -negative)  # estimate, for logging
+        ff = None
         if getattr(simulator, "vic_ff_prior", None) is not None:
             prior = _vic_prior_substep(simulator.vic_ff_prior, getattr(simulator, "vic_prior_kgap", None),
                                        getattr(simulator, "vic_prior_bgap", None), command, q, qd)
@@ -615,6 +619,12 @@ class HumanJointModel:
                                                requested, negative, positive,
                                                getattr(simulator, "vic_ff_reflex", None))
             passive = passive + ff
+        if self.see is not None:
+            cap, active, passive = self._see_substep(
+                q, qd, command, simulator._common_p_gains, simulator._common_d_gains, ff,
+                getattr(simulator, "vic_prior_kgap", None), getattr(simulator, "vic_prior_bgap", None),
+                negative, positive, cap, active, passive, elastic + damping, 1.0 / simulator.config.sim.fps)
+            simulator.human_see_ce_power, simulator.human_see_mask = self.see.ce_power_full, self.see.mask
         simulator.human_requested_torques = requested
         simulator.human_active_torques = active
         simulator.human_passive_torques = passive
@@ -628,6 +638,26 @@ class HumanJointModel:
             callback(simulator, state)
         to_sim = simulator.data_conversion.dof_convert_to_sim
         self._write_implicit(simulator, cap[..., to_sim], command[..., to_sim], passive[..., to_sim])
+
+    def _see_substep(self, q, qd, command, kp, kd, ff, kgap, bgap, negative, positive, cap, active, passive, tissue, dt):
+        """human_model_v4.0: route the ankle (SEE joints) active torque through the series elastic element.
+
+        The policy's PD target / gains and feed-forward act on the hidden CE angle of each channel (common/
+        series_elastic.py); the PhysX drive of the SEE joints gets a zero force limit, and the tendon torque is added
+        to the explicit effort with the passive tissue torque. A beta-prior gap (kgap / bgap) moves to the CE state.
+        Returns (drive cap, active joint torque, explicit effort) with the SEE columns replaced.
+        """
+        i = self.see.idx
+        ff_ce = torch.zeros_like(q) if ff is None else ff
+        kp_ce, kd_ce = kp, kd
+        if kgap is not None:
+            kp_ce, kd_ce = kp + kgap, kd + bgap
+            ff_ce = ff_ce - (kgap * (command - q) - bgap * qd)
+        tau = self.see.substep(q, qd, command, kp_ce, kd_ce, ff_ce, negative, positive, dt)
+        cap = cap.index_fill(1, i, 0.0)
+        active = active.index_copy(1, i, tau)
+        passive = passive.index_copy(1, i, tissue[:, i] + tau)
+        return cap, active, passive
 
     def _write_implicit(self, simulator, cap_sim, command_sim, passive_sim):
         """Drive limit, target and feed-forward effort for one substep.
@@ -685,16 +715,21 @@ class HumanJointModel:
         q = g["q_sim"][:, g["to_common"]]
         qd = g["qd_sim"][:, g["to_common"]]
         requested = g["p_gains"] * (g["command"] - q) - g["d_gains"] * qd
-        negative, positive, outside = self.strength_caps(q, qd)
+        negative, positive, outside = self.strength_caps(q, qd if self.see is None else self.see.cap_velocity(qd))
         cap = torch.where(requested >= 0, positive, negative).clamp_min(0)
         elastic, damping = self.elastic_torque(q), self.damping_torque(qd)
         passive = elastic + damping
         active = torch.maximum(torch.minimum(requested, positive), -negative)
+        ff = None
         if g.get("ff_prior") is not None:
             prior = _vic_prior_substep(g["ff_prior"], g.get("prior_kgap"), g.get("prior_bgap"), g["command"], q, qd)
             ff, cap, active = _vic_feedforward(prior, g["ff_res_t"], g["ff_res"], g["ff_c"],
                                                requested, negative, positive, g.get("ff_reflex"))
             passive = passive + ff
+        if self.see is not None:
+            cap, active, passive = self._see_substep(
+                q, qd, g["command"], g["p_gains"], g["d_gains"], ff, g.get("prior_kgap"), g.get("prior_bgap"),
+                negative, positive, cap, active, passive, elastic + damping, g["dt"])
         return dict(requested=requested, total=active + passive, active=active, passive=passive,
                     elastic=elastic, damping=damping, negative=negative, positive=positive, outside=outside,
                     cap_sim=cap[..., g["to_sim"]], command_sim=g["command"][..., g["to_sim"]],
@@ -735,12 +770,15 @@ class HumanJointModel:
                     self._graph_io.update(prior_kgap=kgap, prior_bgap=simulator.vic_prior_bgap)
             if self._packed_strength is None:
                 self._pack_strength_rows()
+            see_state = self.see.state_dict() if self.see is not None else None
             stream = torch.cuda.Stream()
             stream.wait_stream(torch.cuda.current_stream())
             with torch.cuda.stream(stream):
                 for _ in range(3):
                     body()
             torch.cuda.current_stream().wait_stream(stream)
+            if see_state is not None:     # warm-up must not advance the tendon / CE state
+                self.see.load_state_dict(see_state)
             self._graph = torch.cuda.CUDAGraph()
             with torch.cuda.graph(self._graph):
                 self._graph_out = body()
@@ -762,6 +800,8 @@ class HumanJointModel:
         simulator.human_applied_torques = out["total"]
         simulator.human_negative_caps, simulator.human_positive_caps = out["negative"], out["positive"]
         simulator.human_strength_outside_domain = out["outside"]
+        if self.see is not None:
+            simulator.human_see_ce_power, simulator.human_see_mask = self.see.ce_power_full, self.see.mask
         if implicit:
             self._write_implicit(simulator, out["cap_sim"], out["command_sim"], out["torque_sim"])
         else:
@@ -788,6 +828,8 @@ class HumanJointModel:
             if self._graph_eligible(simulator, mode) and self._apply_graphed(simulator, command, implicit=True):
                 return
             return self._apply_implicit(simulator, command, mode)
+        if self.see is not None:
+            raise RuntimeError("series_elastic (human_model_v4.0) needs HC_HUMAN_IMPLICIT_PD=1")
         if self._graph_eligible(simulator, mode) and self._apply_graphed(simulator, command):
             return
         state = simulator._get_simulator_dof_state().convert_to_common(simulator.data_conversion)

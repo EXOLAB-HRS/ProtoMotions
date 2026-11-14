@@ -494,6 +494,11 @@ class VicSteeringConfig(CadenceGaitPercentSteeringConfig):
     v3_load_tau_up_s: float = 0.05       # activation-like filter of |tau| for the load term
     v3_load_tau_down_s: float = 0.15
     v3_load_source: str = "sim"          # "sim": simulator.human_active_torques; "estimate": own PD + ff estimate
+    # human_model_v4.0 (ankle series elastic element, candidate 2026-11-14): True = the metabolic proxy uses the
+    # contractile-element power of the SEE joints (simulator.human_see_ce_power: CE torque x CE velocity, last substep)
+    # instead of the PD-estimate torque x joint velocity, so tendon recoil is not charged as muscle work. Off by
+    # default; needs the v4.0 plant (no effect without simulator.human_see_ce_power).
+    v4_metab_ce: bool = False
     v3_srs_omega: float = 0.0            # rad/s; > 0 attenuates the load term during fast motion
     # Load term gate (2026-10-29, candidate): "stance" feeds |tau| to the load filter only while the leg is in stance or
     # standing (swing input 0, so the term rises with the 50 ms filter after foot contact and decays over 150 ms after
@@ -1027,7 +1032,7 @@ class VicSteering(CadenceGaitPercentSteering):
         self._cocon = (torch.relu(delta / self._dmax.clamp_min(1e-6)) if c.coact_unit_cost else torch.relu(delta)).mean(-1)
         tau = kp * err - kd * qd + self._bv() * prior + sim.vic_ff_res[:, self._idx]
         self._effort = ((tau / self._tau_max) ** 2).clamp(max=4.0).mean(-1)
-        p = (tau * qd)[:, self._sag]
+        p = self._joint_power(tau, qd)[:, self._sag]
         self._metab = (p.clamp(min=0).sum(-1) / 0.25 + (-p).clamp(min=0).sum(-1) / 1.20) / self._bw
         for st in range(3):
             m = state == st
@@ -1155,7 +1160,7 @@ class VicSteering(CadenceGaitPercentSteering):
             self._cocon = (r_all.clamp(max=2.0) ** 2 - r_net ** 2).clamp(min=0.0, max=4.0).mean(-1)
         self._v3_tau_est = torch.maximum(torch.minimum(tau, self._tau_max), -self._tau_max).detach()
         self._effort = ((tau / self._tau_max) ** 2).clamp(max=4.0).mean(-1)
-        p = (tau * qd)[:, self._sag]
+        p = self._joint_power(tau, qd)[:, self._sag]
         self._metab = (p.clamp(min=0).sum(-1) / 0.25 + (-p).clamp(min=0).sum(-1) / 1.20) / self._bw
         for st in range(3):
             m = state == st
@@ -1437,7 +1442,7 @@ class VicSteering(CadenceGaitPercentSteering):
         self._cocon = self._v4_u.mean(-1)
         tau = kp * err - kd * qd + self._bv() * prior + sim.vic_ff_res[:, self._idx]
         self._effort = ((tau / self._tau_max) ** 2).clamp(max=4.0).mean(-1)
-        pw = (tau * qd)[:, self._sag]
+        pw = self._joint_power(tau, qd)[:, self._sag]
         self._metab = (pw.clamp(min=0).sum(-1) / 0.25 + (-pw).clamp(min=0).sum(-1) / 1.20) / self._bw
         state = w.argmax(-1)                                     # for logs only (dominant weight)
         if self._gain_log_path:
@@ -1453,6 +1458,16 @@ class VicSteering(CadenceGaitPercentSteering):
             cnt = m.float().sum(0).clamp_min(1)
             self._mean_k[st] = torch.where(m.any(0), (torch.log(k_eff) * m).sum(0) / cnt, self._mean_k[st])
         self._log()
+
+    def _joint_power(self, tau, qd):
+        """Power per VIC joint for the metabolic proxy: tau * qd, or the SEE contractile-element power (v4_metab_ce)."""
+        p = tau * qd
+        if self.config.v4_metab_ce:
+            sim = self.env.simulator
+            ce, mask = getattr(sim, "human_see_ce_power", None), getattr(sim, "human_see_mask", None)
+            if ce is not None and ce.shape[0] == p.shape[0]:
+                p = torch.where(mask[self._idx], ce[:, self._idx].to(p.dtype), p)
+        return p
 
     def _leg_moments(self):
         """Total sagittal leg torque (active PD + feed-forward as applied, plus plant passive) in N m/kg, [N, 2, 3]

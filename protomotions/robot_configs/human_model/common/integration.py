@@ -44,7 +44,7 @@ def selected_model_parameters(robot_config):
     No experiment file is discovered or silently promoted into runtime defaults.
     """
     parameters = deepcopy(getattr(robot_config,'human_model_parameters',{}))
-    allowed = {'features','strength_cohort','strength_reference_size','active_strength_scale','fatigue_regions','fatigue_rest_multiplier','passive_joint_parameters','pose_strength_model','passive_exponentials','segment_inertia'}
+    allowed = {'features','strength_cohort','strength_reference_size','active_strength_scale','fatigue_regions','fatigue_rest_multiplier','passive_joint_parameters','pose_strength_model','passive_exponentials','segment_inertia','series_elastic'}
     if not isinstance(parameters,dict) or set(parameters)-allowed:
         raise ValueError('human_model_parameters contains unsupported parameters')
     if 'PROTOMOTIONS_HUMAN_MODEL_FEATURES' in os.environ:
@@ -52,6 +52,7 @@ def selected_model_parameters(robot_config):
     if isinstance(parameters.get('features',()),str):
         raise ValueError('human_model_parameters.features must be a sequence of feature names')
     parameters.pop('segment_inertia', None)        # asset choice (human_model_v3.5), read by the asset selection below
+    parameters.pop('series_elastic', None)        # ankle SEE (human_model_v4.0), built by prepare_simulator below
     return parameters
 
 
@@ -112,6 +113,15 @@ def prepare_simulator(robot_config, simulator_config, device):
         model._fatigue = torch.zeros((simulator_config.num_envs,len(model.names),2,3),
                                      device=device,dtype=model.lower.dtype)
         model._fatigue[...,0] = 1
+    see = (getattr(robot_config, 'human_model_parameters', None) or {}).get('series_elastic')
+    if see:
+        # human_model_v4.0 (candidate, 2026-11-14): ankle series elastic element (common/series_elastic.py).
+        from .series_elastic import build as build_see, check_explicit_stability
+        if os.environ.get("HC_HUMAN_IMPLICIT_PD", "0") != "1" or ".isaaclab." not in target:
+            raise ValueError("series_elastic (human_model_v4.0) runs on the IsaacLab implicit-PD path only "
+                             "(HC_HUMAN_IMPLICIT_PD=1)")
+        model.see = build_see(see, model.names, simulator_config.num_envs, device, model.lower.dtype)
+        check_explicit_stability(model.see, robot_config.control.control_info, simulator_config.sim.fps)
     limits = {n: float(model.backend_limit[i]) for i, n in enumerate(model.names)}
     for n, limit in limits.items():
         backend.control.control_info[n].effort_limit = limit
