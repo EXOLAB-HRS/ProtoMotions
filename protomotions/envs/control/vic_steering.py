@@ -499,6 +499,11 @@ class VicSteeringConfig(CadenceGaitPercentSteeringConfig):
     # instead of the PD-estimate torque x joint velocity, so tendon recoil is not charged as muscle work. Off by
     # default; needs the v4.0 plant (no effect without simulator.human_see_ce_power).
     v4_metab_ce: bool = False
+    # human_model_v4.0 (candidate 2026-11-15): True = k_eff of the SEE joints (ankles) is the joint stiffness of the CE PD
+    # in series with the tendon, k_p k_t / (k_p + k_t) + k_pass, k_t = local tendon slope dT/dD at the current stretch
+    # (toe region k D / D_toe, then linear k), instead of k_p + k_pass. Used by the impedance prior, the band cost, the
+    # mean-k log and the gain log's k_eff (W3). Does not change the gains written to the plant. Needs the v4.0 plant.
+    v4_imp_see_series: bool = False
     v3_srs_omega: float = 0.0            # rad/s; > 0 attenuates the load term during fast motion
     # Load term gate (2026-10-29, candidate): "stance" feeds |tau| to the load filter only while the leg is in stance or
     # standing (swing input 0, so the term rises with the 50 ms filter after foot contact and decays over 150 ms after
@@ -1429,7 +1434,7 @@ class VicSteering(CadenceGaitPercentSteering):
         tau_abs = src[:, self._idx].detach().abs() if src is not None and src.shape[0] == len(fresh) \
             else torch.zeros_like(q)
         tau_co, self._v4_u = vic4_coactivation(kp, self._v4_c, tau_abs, self._tau_max)
-        k_eff, b_eff = kp + k_pass, kd + b_pass
+        k_eff, b_eff = (self._see_series_k(kp) if c.v4_imp_see_series else kp) + k_pass, kd + b_pass
         out = vic4_dead_zone(torch.log(k_eff), lk_c, h)
         self._band = (out / math.log(2.0)).clamp(max=4.0).mean(-1)
         if c.v4_imp_skip_swing_knee:
@@ -1458,6 +1463,27 @@ class VicSteering(CadenceGaitPercentSteering):
             cnt = m.float().sum(0).clamp_min(1)
             self._mean_k[st] = torch.where(m.any(0), (torch.log(k_eff) * m).sum(0) / cnt, self._mean_k[st])
         self._log()
+
+    def _see_series_k(self, kp):
+        """v4_imp_see_series: CE PD stiffness of the SEE joints in series with the tendon's local slope; kp elsewhere."""
+        see = getattr(getattr(self.env.simulator, "_human_joint_model", None), "see", None)
+        if see is None:
+            return kp
+        if getattr(self, "_see_cols", None) is None:
+            idx = self._idx.tolist()
+            pairs = [(c, idx.index(j)) for c, j in enumerate(see.idx.tolist()) if j in idx]
+            self._see_cols = (torch.tensor([p[0] for p in pairs], device=kp.device),
+                              torch.tensor([p[1] for p in pairs], device=kp.device))
+        src, dst = self._see_cols
+        kt = torch.zeros_like(kp[:, dst])
+        for name, ch in see.channels.items():
+            D = see.D[name][:, src].to(kp.dtype)
+            toe = max(float(ch.toe_rad), 1e-12)
+            kt = torch.maximum(kt, torch.where(D < toe, ch.k_nm_per_rad * D / toe, torch.full_like(D, ch.k_nm_per_rad)))
+        out = kp.clone()
+        k = kp[:, dst]
+        out[:, dst] = k * kt / (k + kt).clamp_min(1e-6)
+        return out
 
     def _joint_power(self, tau, qd):
         """Power per VIC joint for the metabolic proxy: tau * qd, or the SEE contractile-element power (v4_metab_ce)."""

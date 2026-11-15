@@ -630,7 +630,9 @@ class HumanJointModel:
         simulator.human_passive_torques = passive
         simulator.human_elastic_torques = elastic
         simulator.human_damping_torques = damping
-        simulator.human_applied_torques = active + passive
+        # v4.0: the SEE columns of active and passive both hold the tendon torque (passive = explicit effort); count it once
+        simulator.human_applied_torques = active + passive if self.see is None else \
+            passive + active.index_fill(1, self.see.idx, 0.0)
         simulator.human_negative_caps, simulator.human_positive_caps = negative, positive
         simulator.human_strength_outside_domain = outside
         callback = getattr(simulator, "human_model_trace_callback", None)
@@ -730,7 +732,8 @@ class HumanJointModel:
             cap, active, passive = self._see_substep(
                 q, qd, g["command"], g["p_gains"], g["d_gains"], ff, g.get("prior_kgap"), g.get("prior_bgap"),
                 negative, positive, cap, active, passive, elastic + damping, g["dt"])
-        return dict(requested=requested, total=active + passive, active=active, passive=passive,
+        total = active + passive if self.see is None else passive + active.index_fill(1, self.see.idx, 0.0)
+        return dict(requested=requested, total=total, active=active, passive=passive,
                     elastic=elastic, damping=damping, negative=negative, positive=positive, outside=outside,
                     cap_sim=cap[..., g["to_sim"]], command_sim=g["command"][..., g["to_sim"]],
                     torque_sim=passive[..., g["to_sim"]],
