@@ -71,6 +71,10 @@ MODEL = {
 }
 
 TAU_T_S = 0.003
+# Knee tendon damping (2026-11-24): with tau_T 3 ms the WBDS walking replay lost 37-48 % (hamstrings) of the stored energy per
+# stride in tendon damping (in vivo hysteresis 5-10 %, as for the Achilles above): the knee moment reverses fast, so the
+# stretch rate is high (1 ms still 16-20 %). 0.5 ms brings the hamstrings to ~8-10 %; the ankle keeps 3 ms (7-8 %).
+TAU_T_KNEE_S = 0.0005
 ACHILLES = dict(k_tendon_n_per_m=180e3, moment_arm_m=0.05, slack_length_m=0.24, toe_strain=0.02)
 TIBIALIS_ANTERIOR = dict(k_tendon_n_per_m=129e3, moment_arm_m=0.04, slack_length_m=0.164, toe_strain=0.0)
 
@@ -97,11 +101,11 @@ def _channel(sign, p, tau_t_s):
                                tau_t_s * p["k_tendon_n_per_m"] * p["moment_arm_m"] ** 2)
 
 
-def series_elastic_full(achilles=None, tibialis=None, quadriceps=None, hamstrings=None, tau_t_s=TAU_T_S):
+def series_elastic_full(achilles=None, tibialis=None, quadriceps=None, hamstrings=None, tau_t_s=TAU_T_S, tau_t_knee_s=TAU_T_KNEE_S):
     """Ankle + knee SEE groups (v4.0 default from 2026-11-24)."""
     ankle = series_elastic(achilles, tibialis, tau_t_s)
     qu, ha = dict(QUADRICEPS, **(quadriceps or {})), dict(HAMSTRINGS, **(hamstrings or {}))
-    knee = {"joints": ["L_Knee_y", "R_Knee_y"], "channels": {"FLEX": _channel(+1, ha, tau_t_s), "EXT": _channel(-1, qu, tau_t_s)}}
+    knee = {"joints": ["L_Knee_y", "R_Knee_y"], "channels": {"FLEX": _channel(+1, ha, tau_t_knee_s), "EXT": _channel(-1, qu, tau_t_knee_s)}}
     return {"model": MODEL["model_id"], "groups": [{"joints": ankle["joints"], "channels": ankle["channels"]}, knee],
             "cap_at_ce_velocity": True}
 
