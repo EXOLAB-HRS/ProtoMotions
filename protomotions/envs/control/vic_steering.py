@@ -499,7 +499,7 @@ class VicSteeringConfig(CadenceGaitPercentSteeringConfig):
     # instead of the PD-estimate torque x joint velocity, so tendon recoil is not charged as muscle work. Off by
     # default; needs the v4.0 plant (no effect without simulator.human_see_ce_power).
     v4_metab_ce: bool = False
-    # human_model_v4.0 (candidate 2026-11-15): True = k_eff of the SEE joints (ankles) is the joint stiffness of the CE PD
+    # human_model_v4.0 (candidate 2026-11-15; ankle + knee groups from 2026-11-24): True = k_eff of the SEE joints is the joint stiffness of the CE PD
     # in series with the tendon, k_p k_t / (k_p + k_t) + k_pass, k_t = local tendon slope dT/dD at the current stretch
     # (toe region k D / D_toe, then linear k), instead of k_p + k_pass. Used by the impedance prior, the band cost, the
     # mean-k log and the gain log's k_eff (W3). Does not change the gains written to the plant. Needs the v4.0 plant.
@@ -1476,10 +1476,21 @@ class VicSteering(CadenceGaitPercentSteering):
                               torch.tensor([p[1] for p in pairs], device=kp.device))
         src, dst = self._see_cols
         kt = torch.zeros_like(kp[:, dst])
-        for name, ch in see.channels.items():
-            D = see.D[name][:, src].to(kp.dtype)
-            toe = max(float(ch.toe_rad), 1e-12)
-            kt = torch.maximum(kt, torch.where(D < toe, ch.k_nm_per_rad * D / toe, torch.full_like(D, ch.k_nm_per_rad)))
+        # 2026-11-24: SeriesElasticJoints (ankle + knee groups) -> per group, columns in the order of see.idx
+        groups = getattr(see, "groups", None) or [see]
+        cols, start = [], 0
+        for g in groups:
+            cols.append((g, start)); start += len(g.joints)
+        for g, off in cols:
+            sel = (src >= off) & (src < off + len(g.joints))
+            if not bool(sel.any()):
+                continue
+            local = (src[sel] - off)
+            for name, ch in g.channels.items():
+                D = g.D[name][:, local].to(kp.dtype)
+                toe = max(float(ch.toe_rad), 1e-12)
+                k_ch = torch.where(D < toe, ch.k_nm_per_rad * D / toe, torch.full_like(D, ch.k_nm_per_rad))
+                kt[:, sel] = torch.maximum(kt[:, sel], k_ch)
         out = kp.clone()
         k = kp[:, dst]
         out[:, dst] = k * kt / (k + kt).clamp_min(1e-6)

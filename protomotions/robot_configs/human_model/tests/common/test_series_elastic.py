@@ -212,10 +212,13 @@ def test_v40_config_is_v36_plus_see():
     a, b = dataclasses.asdict(r40), dataclasses.asdict(r36)
     see = a["human_model_parameters"].pop("series_elastic")
     assert _same(a, b)
-    assert see["joints"] == ["L_Ankle_y", "R_Ankle_y"]
-    assert see["channels"]["PF"]["k_nm_per_rad"] == pytest.approx(450.0)
-    assert see["channels"]["PF"]["toe_rad"] == pytest.approx(0.096)
-    assert see["channels"]["DF"]["k_nm_per_rad"] == pytest.approx(206.4)
+    ankle, knee = see["groups"]                      # default from 2026-11-24: ankle + knee
+    assert ankle["joints"] == ["L_Ankle_y", "R_Ankle_y"] and knee["joints"] == ["L_Knee_y", "R_Knee_y"]
+    assert ankle["channels"]["PF"]["k_nm_per_rad"] == pytest.approx(450.0)
+    assert ankle["channels"]["PF"]["toe_rad"] == pytest.approx(0.096)
+    assert ankle["channels"]["DF"]["k_nm_per_rad"] == pytest.approx(206.4)
+    assert knee["channels"]["EXT"]["sign"] == -1.0 and knee["channels"]["EXT"]["k_nm_per_rad"] == pytest.approx(810.0)
+    assert knee["channels"]["FLEX"]["sign"] == 1.0 and knee["channels"]["FLEX"]["k_nm_per_rad"] == pytest.approx(322.2)
     m = get_model("human_model_v4.0")
     assert m.model_id == "human_model_v4.0" and m.asset_path("usd").is_file()
 
@@ -278,3 +281,48 @@ def test_implicit_hook_only_changes_see_columns(monkeypatch):
     assert torch.allclose(r40["effort"][:, see_cols], tissue + tau, atol=1e-5)
     assert torch.allclose(sim40.human_active_torques[:, see_cols], tau)
     assert sim40.human_see_ce_power.shape == (n, len(names))
+
+
+def test_v40_ankle_only_env(monkeypatch):
+    from protomotions.robot_configs.human_model.human_model_v4_0.model_config import selected_series_elastic
+    monkeypatch.setenv("HC_V40_SEE", "ankle")
+    assert selected_series_elastic()["joints"] == ["L_Ankle_y", "R_Ankle_y"]
+    monkeypatch.setenv("HC_V40_SEE", "bad")
+    with pytest.raises(ValueError):
+        selected_series_elastic()
+
+
+def test_groups_match_single_groups_and_knee_signs():
+    """SeriesElasticJoints(ankle + knee) == the two groups run alone; knee EXT (sign -1) carries extensor torque."""
+    from protomotions.robot_configs.human_model.common.series_elastic import build, SeriesElasticJoints
+    from protomotions.robot_configs.human_model.human_model_v4_0.model_config import series_elastic_full
+    names = ["L_Knee_y", "L_Ankle_y", "X"]
+    cfg = series_elastic_full()
+    cfg["groups"][0]["joints"], cfg["groups"][1]["joints"] = ["L_Ankle_y"], ["L_Knee_y"]
+    n = 64
+    g = torch.Generator().manual_seed(3)
+    see = build(cfg, names, n, "cpu", torch.float64)
+    assert isinstance(see, SeriesElasticJoints) and see.joints == ["L_Ankle_y", "L_Knee_y"]
+    singles = [build(dict(gr, cap_at_ce_velocity=True), names, n, "cpu", torch.float64) for gr in cfg["groups"]]
+    big = torch.full((n, 3), 300.0, dtype=torch.float64)
+    for step in range(30):
+        q = 0.3 * torch.randn(n, 3, generator=g, dtype=torch.float64)
+        qd = torch.randn(n, 3, generator=g, dtype=torch.float64)
+        tgt = 0.3 * torch.randn(n, 3, generator=g, dtype=torch.float64)
+        kp = 200 * torch.rand(n, 3, generator=g, dtype=torch.float64)
+        kd = 5 * torch.rand(n, 3, generator=g, dtype=torch.float64)
+        ff = 20 * torch.randn(n, 3, generator=g, dtype=torch.float64)
+        tau = see.substep(q, qd, tgt, kp, kd, ff, big, big, 1 / 240)
+        ref = torch.cat([s.substep(q, qd, tgt, kp, kd, ff, big, big, 1 / 240) for s in singles], -1)
+        assert torch.allclose(tau, ref)
+        assert torch.allclose(see.ce_power_full[:, [1, 0]], torch.cat([s.ce_power_full[:, s.idx] for s in singles], -1))
+    # pure extensor request on the knee (ff < 0, no PD) -> only the EXT channel pulls, joint torque < 0
+    see.reset()
+    z = torch.zeros(n, 3, dtype=torch.float64)
+    ff = z.clone(); ff[:, 0] = -40.0
+    for _ in range(200):
+        tau = see.substep(z, z, z, z, z, ff, big, big, 1 / 240)
+    knee = see.groups[1]
+    assert (knee.force["FLEX"] == 0).all() and torch.allclose(tau[:, 1], torch.full((n,), -40.0, dtype=torch.float64), atol=1e-6)
+    state = see.state_dict(); see.substep(z, z, z, z, z, ff, big, big, 1 / 240); see.load_state_dict(state)
+    assert torch.equal(see.state_dict()["g1_D_EXT"], state["g1_D_EXT"])

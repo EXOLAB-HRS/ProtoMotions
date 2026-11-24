@@ -122,20 +122,26 @@ def channel_step(c: Tensor, a1: Tensor, cap: Tensor, D_prev: Tensor, dt: float, 
 
 
 class SeriesElasticAnkle:
-    """Stateful SEE for a set of joints; buffers are updated in place (CUDA-graph safe).
+    """Stateful SEE for a set of joints sharing two channels; buffers are updated in place (CUDA-graph safe).
 
-    joints: DOF names (plant order index resolved against dof_names). channels: {"PF": TendonChannel, "DF": ...}.
+    joints: DOF names (plant order index resolved against dof_names). channels: two named channels, one with sign +1
+    (positive-torque muscle group, e.g. "PF" Achilles, "FLEX" hamstrings) and one with sign -1 ("DF", "EXT"). The name
+    is historical (ankle first, 2026-11-14); knee groups use the same class through SeriesElasticJoints.
     """
 
     def __init__(self, config: Dict, dof_names: Sequence[str], num_envs: int, device, dtype=torch.float32):
         self.config = config
         self.joints = list(config["joints"])
         self.idx = torch.tensor([list(dof_names).index(j) for j in self.joints], device=device, dtype=torch.long)
-        self.channels = {name: TendonChannel(**config["channels"][name]) for name in ("PF", "DF")}
+        self.channels = {name: TendonChannel(**ch) for name, ch in config["channels"].items()}
         for ch in self.channels.values():
             ch.validate()
-        if self.channels["PF"].sign != 1.0 or self.channels["DF"].sign != -1.0:
-            raise ValueError("PF channel sign must be +1 and DF channel sign -1 (plant: + plantarflexion)")
+        signs = sorted(ch.sign for ch in self.channels.values())
+        if signs != [-1.0, 1.0]:
+            raise ValueError("a SEE group needs exactly two channels, one with sign +1 and one with sign -1")
+        # pos: channel pulling the joint toward + (ankle PF, knee flexors); neg: toward - (ankle DF, knee extensors).
+        self.pos_name = next(n for n, ch in self.channels.items() if ch.sign == 1.0)
+        self.neg_name = next(n for n, ch in self.channels.items() if ch.sign == -1.0)
         self.cap_at_ce_velocity = bool(config.get("cap_at_ce_velocity", True))
         n, j = num_envs, len(self.joints)
         z = lambda: torch.zeros((n, j), device=device, dtype=dtype)
@@ -173,8 +179,9 @@ class SeriesElasticAnkle:
         if not self.cap_at_ce_velocity:
             return qd
         qj = qd[:, self.idx]
-        pf_on, df_on = self.force["PF"] > 0, self.force["DF"] > 0
-        ce = torch.where(pf_on, self.phid["PF"], torch.where(df_on, self.phid["DF"], qj))
+        P, Nn = self.pos_name, self.neg_name
+        pf_on, df_on = self.force[P] > 0, self.force[Nn] > 0
+        ce = torch.where(pf_on, self.phid[P], torch.where(df_on, self.phid[Nn], qj))
         ce = torch.where(self.fresh, qj, ce)
         out = qd.clone()
         out[:, self.idx] = ce
@@ -191,7 +198,7 @@ class SeriesElasticAnkle:
         i = self.idx
         qj, qdj, tgt = q[:, i], qd[:, i], target[:, i]
         kpj, kdj, ffj = kp[:, i], kd[:, i], ff[:, i]
-        caps = {"PF": positive[:, i], "DF": negative[:, i]}
+        caps = {self.pos_name: positive[:, i], self.neg_name: negative[:, i]}
         a1 = kpj + kdj / dt
         tau = torch.zeros_like(qj)
         for name, ch in self.channels.items():
@@ -224,9 +231,62 @@ class SeriesElasticAnkle:
         return out
 
 
+class SeriesElasticJoints:
+    """Several SEE groups (each a SeriesElasticAnkle-type group with its own two channels), e.g. ankle + knee.
+
+    human_model_v4.0 rev 2026-11-24 (user: "아킬레스건과 다른 관절들도 이런 tendon이 주요한 관절 있으면 이를 고려해서").
+    config = {"groups": [{"joints": [...], "channels": {...}}, ...], "cap_at_ce_velocity": bool}. Exposes the same
+    interface as a single group (idx, mask, reset, state_dict, cap_velocity, substep, ce_power_full, tendon_energy).
+    """
+
+    def __init__(self, config: Dict, dof_names: Sequence[str], num_envs: int, device, dtype=torch.float32):
+        self.config = config
+        cap = bool(config.get("cap_at_ce_velocity", True))
+        self.groups = [SeriesElasticAnkle(dict(g, cap_at_ce_velocity=cap), dof_names, num_envs, device, dtype)
+                       for g in config["groups"]]
+        self.joints = [j for g in self.groups for j in g.joints]
+        if len(set(self.joints)) != len(self.joints):
+            raise ValueError("a joint may belong to one SEE group only")
+        self.idx = torch.cat([g.idx for g in self.groups])
+        self.mask = torch.zeros(len(dof_names), device=device, dtype=torch.bool)
+        self.mask[self.idx] = True
+        self.ce_power_full = torch.zeros((num_envs, len(dof_names)), device=device, dtype=dtype)
+        self.tendon_energy = torch.zeros((num_envs, len(self.joints)), device=device, dtype=dtype)
+        self.cap_at_ce_velocity = cap
+
+    def reset(self, env_ids=None):
+        for g in self.groups:
+            g.reset(env_ids)
+
+    def state_dict(self):
+        return {f"g{n}_{k}": v for n, g in enumerate(self.groups) for k, v in g.state_dict().items()}
+
+    def load_state_dict(self, s):
+        for n, g in enumerate(self.groups):
+            g.load_state_dict({k[len(f"g{n}_"):]: v for k, v in s.items() if k.startswith(f"g{n}_")})
+
+    def cap_velocity(self, qd: Tensor) -> Tensor:
+        for g in self.groups:
+            qd = g.cap_velocity(qd)
+        return qd
+
+    def substep(self, q, qd, target, kp, kd, ff, negative, positive, dt):
+        taus = [g.substep(q, qd, target, kp, kd, ff, negative, positive, dt) for g in self.groups]
+        self.ce_power_full.zero_()
+        for g in self.groups:
+            self.ce_power_full[:, g.idx] = g.ce_power_full[:, g.idx]
+        self.tendon_energy.copy_(torch.cat([g.tendon_energy for g in self.groups], -1))
+        return torch.cat(taus, -1)
+
+    def diagnostics(self):
+        return {f"{'/'.join(g.joints)}:{c}": v for g in self.groups for c, v in g.diagnostics().items()}
+
+
 def build(config: Optional[Dict], dof_names, num_envs, device, dtype=torch.float32):
     if not config:
         return None
+    if "groups" in config:
+        return SeriesElasticJoints(config, dof_names, num_envs, device, dtype)
     return SeriesElasticAnkle(config, dof_names, num_envs, device, dtype)
 
 
@@ -244,6 +304,10 @@ def check_explicit_stability(see: SeriesElasticAnkle, control_info, fps: float, 
     I is a lower bound of the joint-space inertia: the joint armature (0.02 kg m^2 on the human ankle; the foot adds
     ~0.01 about the ankle axis). Raises if a channel is too stiff for the physics rate.
     """
+    if hasattr(see, "groups"):
+        for g in see.groups:
+            check_explicit_stability(g, control_info, fps, safety)
+        return
     for j in see.joints:
         arm = getattr(control_info[j], "armature", None)
         if arm is None or not arm > 0:
