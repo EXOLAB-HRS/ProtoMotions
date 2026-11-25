@@ -17,13 +17,15 @@ from examples.experiments.steering.mlp_human_model_v3_vic4_tc_walk33_v36_strat_s
 
 SWAY_WEIGHT = float(os.environ.get("HC_SWAY_WEIGHT", "0.3"))
 SWAY_TOL_DEG = float(os.environ.get("HC_SWAY_TOL_DEG", "2.0"))
+SWAY_MODE = os.environ.get("HC_SWAY_MODE", "lean")          # 2026-11-25: "head_vel" = head lateral velocity (lateral_sway.py)
+SWAY_VEL_TOL = float(os.environ.get("HC_SWAY_VEL_TOL", "0.15"))
 
 
 def env_config(robot_cfg, args):
     cfg = _all.env_config(robot_cfg, args)
     old = cfg.control_components["steering"]
     kept = {f.name: getattr(old, f.name) for f in dataclasses.fields(old) if f.name != "_target_"}
-    kept.update(sway_tol_deg=SWAY_TOL_DEG, sway_sigma_deg=2.0)
+    kept.update(sway_tol_deg=SWAY_TOL_DEG, sway_sigma_deg=2.0, sway_mode=SWAY_MODE, sway_vel_tol=SWAY_VEL_TOL)
     cfg.control_components["steering"] = VicSymSwaySteeringConfig(**kept)
     cfg.reward_components["lateral_sway"] = MdpComponent(
         compute_func=lateral_sway_reward, dynamic_vars={"value": LATERAL_SWAY}, static_params={"weight": SWAY_WEIGHT})

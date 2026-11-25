@@ -12,6 +12,13 @@ pelvis lean; human-like (ratio ~1) is within about +-1-2 deg.
     lateral_sway = exp(-0.5 * (relu(|lean| - sway_tol_deg) / sway_sigma_deg)^2)        (1 inside the dead zone)
 
 VicSymSwaySteering = VicSymSteering (gait symmetry, armsym1 recipe) + this term; reward weight from the recipe.
+
+sway_mode "head_vel" (2026-11-25): the lean term (default "lean") let the policy satisfy it by moving the pelvis under the
+head (run G: head 13.0 -> 12.3 cm, pelvis 5.0 -> 6.9 cm, W2 fell). "head_vel" scores the head's own lateral velocity in the
+world, projected on the pelvis-heading left axis, with a dead zone:
+    lateral_sway = exp(-0.5 * (relu(|v_head_lat| - sway_vel_tol) / sway_vel_sigma)^2)
+Tolerance 0.15 m/s (ASSUMPTION, no human table in the repository): a head moving like a human pelvis (4-5 cm peak-to-peak at
+the ~0.9 Hz stride frequency) peaks near pi * 0.9 * 0.05 = 0.14 m/s; the workshop teacher's 13 cm gives ~0.37 m/s.
 """
 from dataclasses import dataclass
 
@@ -50,6 +57,9 @@ class VicSymSwaySteeringConfig(VicSymSteeringConfig):
     sway_sigma_deg: float = 2.0
     sway_pelvis_body: str = "Pelvis"
     sway_head_body: str = "Head"
+    sway_mode: str = "lean"              # "lean" (head-over-pelvis angle) | "head_vel" (head lateral velocity, world)
+    sway_vel_tol: float = 0.15           # m/s, head_vel mode
+    sway_vel_sigma: float = 0.10         # m/s, head_vel mode
 
 
 class VicSymSwaySteering(VicSymSteering):
@@ -66,6 +76,13 @@ class VicSymSwaySteering(VicSymSteering):
         c = self.config
         sim = self.env.simulator
         _, _, left = pelvis_frame(sim.get_root_state().root_rot)
-        self.head_lean = head_lateral_lean(sim.get_robot_state().rigid_body_pos, *self._sway_idx, left)
-        self._sway = lateral_sway_value(self.head_lean, c.sway_tol_deg, c.sway_sigma_deg)
+        st = sim.get_robot_state()
+        self.head_lean = head_lateral_lean(st.rigid_body_pos, *self._sway_idx, left)
+        if c.sway_mode == "head_vel":
+            v = (st.rigid_body_vel[:, self._sway_idx[1]] * left).sum(-1)
+            self.head_lat_vel = v
+            e = torch.relu(v.abs() - c.sway_vel_tol) / c.sway_vel_sigma
+            self._sway = torch.exp(-0.5 * e * e)
+        else:
+            self._sway = lateral_sway_value(self.head_lean, c.sway_tol_deg, c.sway_sigma_deg)
         ctx.steering.lateral_sway = self._sway
