@@ -26,6 +26,9 @@ from examples.experiments.steering.mlp_human_model_v3_vic4_tc_walk33_v36_strat_s
 POF_BAND_K = float(os.environ.get("HC_POF_BAND_K", "0.5"))
 METAB_WEIGHT = float(os.environ.get("HC_METAB_WEIGHT", "0.1"))
 UNDER_TAIL_W = float(os.environ.get("HC_UNDER_TAIL_W", "0.3"))
+# 2026-11-25 (server): joint-angle human prior weight; unset keeps the inherited weight (0.25). v4.0 students follow the
+# teacher's W2 v5 (I e122 0.750/0.815 -> student 0.792/0.889 vs armsym1 0.833/0.852 -> 0.896/0.926), so the teacher's W2 is raised.
+GAIT_PRIOR_W = os.environ.get("HC_GAIT_PRIOR_W")
 
 
 def env_config(robot_cfg, args):
@@ -35,4 +38,6 @@ def env_config(robot_cfg, args):
     cfg.reward_components["vic_metab"] = MdpComponent(
         compute_func=vic_cost, dynamic_vars={"value": VIC_METAB}, static_params={"weight": METAB_WEIGHT})
     cfg.reward_components["steady_speed_tracking"].static_params["underspeed_tail_weight"] = UNDER_TAIL_W
+    if GAIT_PRIOR_W is not None:
+        cfg.reward_components["human_gait_prior"].static_params["weight"] = float(GAIT_PRIOR_W)
     return cfg
