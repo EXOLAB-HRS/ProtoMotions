@@ -29,6 +29,10 @@ UNDER_TAIL_W = float(os.environ.get("HC_UNDER_TAIL_W", "0.3"))
 # 2026-11-25 (server): joint-angle human prior weight; unset keeps the inherited weight (0.25). v4.0 students follow the
 # teacher's W2 v5 (I e122 0.750/0.815 -> student 0.792/0.889 vs armsym1 0.833/0.852 -> 0.896/0.926), so the teacher's W2 is raised.
 GAIT_PRIOR_W = os.environ.get("HC_GAIT_PRIOR_W")
+# 2026-11-26 (server): cadence_tracking weight / relative scale; unset keeps the inherited 0.2 / 0.25. Every teacher of the
+# family walks with a low cadence in HMV-Walk (1.0 m/s: 1.49-1.55 steps/s vs human 1.80, z -2.1 to -2.7, armsym1 -2.45).
+CADENCE_W = os.environ.get("HC_CADENCE_W")
+CADENCE_SCALE = os.environ.get("HC_CADENCE_SCALE")
 
 
 def env_config(robot_cfg, args):
@@ -40,4 +44,8 @@ def env_config(robot_cfg, args):
     cfg.reward_components["steady_speed_tracking"].static_params["underspeed_tail_weight"] = UNDER_TAIL_W
     if GAIT_PRIOR_W is not None:
         cfg.reward_components["human_gait_prior"].static_params["weight"] = float(GAIT_PRIOR_W)
+    if CADENCE_W is not None:
+        cfg.reward_components["cadence_tracking"].static_params["weight"] = float(CADENCE_W)
+    if CADENCE_SCALE is not None:
+        cfg.reward_components["cadence_tracking"].static_params["relative_scale"] = float(CADENCE_SCALE)
     return cfg
